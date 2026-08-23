@@ -16,11 +16,17 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
+  type BulkTransferLimiter,
+  createBulkTransferLimiter,
+} from "../src/server/agent-harness/default/bulk-transfer-limiter";
+import {
   type DefaultDemoPipelineInput,
   type DefaultDemoPipelineResult,
   runDefaultDemoPipeline,
 } from "../src/server/agent-harness/default/default-demo-pipeline";
 import { destroyAllDaytonaWorkspaces } from "../src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
+import type { MatrixRunEmailNotifier } from "../src/server/shared/integrations/email/matrix-run-email-notifier.interface";
+import { ResendMatrixRunEmailNotifier } from "../src/server/shared/integrations/email/resend-matrix-run-email-notifier";
 
 export type MatrixEntryConfig = {
   demoLengthSeconds?: number;
@@ -104,6 +110,33 @@ function matrixRunId(entryName: string, batchStamp: string): string {
   return `matrix-${batchStamp}-${slug}`;
 }
 
+const launchStaggerMinimumMs = 30_000;
+const launchStaggerJitterMs = 30_000;
+
+/**
+ * Cumulative launch offset per entry: the first runnable entry starts
+ * immediately, each later one 30-60s after the previous. Skipped entries
+ * consume no slot.
+ */
+function computeLaunchOffsets(
+  entries: ResolvedMatrixEntry[],
+  random: () => number,
+): number[] {
+  let offsetMs = 0;
+  let firstRunnable = true;
+  return entries.map((entry) => {
+    if (entry.status !== "runnable") {
+      return 0;
+    }
+    if (firstRunnable) {
+      firstRunnable = false;
+      return 0;
+    }
+    offsetMs += launchStaggerMinimumMs + random() * launchStaggerJitterMs;
+    return offsetMs;
+  });
+}
+
 /**
  * Runs every runnable entry concurrently, each in its own sandbox via
  * `runPipeline`, and keeps report rows in entry order regardless of which run
@@ -114,19 +147,49 @@ function matrixRunId(entryName: string, batchStamp: string): string {
 export async function runPipelineMatrix(
   entries: ResolvedMatrixEntry[],
   options: {
+    /**
+     * Spreads runnable launches 30-60s apart. A whole matrix created in the
+     * same second is its own control-plane herd (2026-08-09): the batch
+     * queues behind its own state changes and synchronizes onto every
+     * conflict window. Off by default so single-entry callers and tests
+     * keep instant launches; `main` enables it.
+     */
+    launchStagger?: {
+      random?: () => number;
+      sleep?: (delayMs: number) => Promise<void>;
+    };
     log: (message: string) => void;
     runPipeline?: (
       input: DefaultDemoPipelineInput,
       runId: string,
+      batch: { bulkTransferLimiter: BulkTransferLimiter },
     ) => Promise<DefaultDemoPipelineResult>;
   },
 ): Promise<MatrixEntryResult[]> {
+  // One limiter per batch: every entry's clone and archive upload share the
+  // developer uplink, and unserialized they starve each other mid-stream
+  // (calcom and ghostfolio's clones died behind twenty's 294MB upload,
+  // 2026-08-13T23-23).
+  const batch = { bulkTransferLimiter: createBulkTransferLimiter() };
   const runPipeline =
     options.runPipeline ??
-    ((input, runId) => runDefaultDemoPipeline(input, { runId }));
+    ((input: DefaultDemoPipelineInput, runId: string) =>
+      runDefaultDemoPipeline(input, {
+        bulkTransferLimiter: batch.bulkTransferLimiter,
+        runId,
+      }));
   const batchStamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const stagger = options.launchStagger;
+  const launchOffsetsMs =
+    stagger === undefined
+      ? undefined
+      : computeLaunchOffsets(entries, stagger.random ?? Math.random);
+  const sleep =
+    stagger?.sleep ??
+    ((delayMs: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
   return Promise.all(
-    entries.map(async (entry): Promise<MatrixEntryResult> => {
+    entries.map(async (entry, entryIndex): Promise<MatrixEntryResult> => {
       if (entry.status === "skipped") {
         options.log(`skipping ${entry.name}: ${entry.reason}`);
         return {
@@ -135,12 +198,20 @@ export async function runPipelineMatrix(
           status: "skipped",
         };
       }
+      const launchOffsetMs = launchOffsetsMs?.[entryIndex] ?? 0;
+      if (launchOffsetMs > 0) {
+        options.log(
+          `holding ${entry.name} launch for ${Math.round(launchOffsetMs / 1000)}s to spread control-plane load`,
+        );
+        await sleep(launchOffsetMs);
+      }
       options.log(`running ${entry.name} (${entry.input.repoUrl})`);
       const startedAt = Date.now();
       try {
         const result = await runPipeline(
           entry.input,
           matrixRunId(entry.name, batchStamp),
+          batch,
         );
         options.log(`passed ${entry.name}`);
         return {
@@ -164,15 +235,43 @@ export async function runPipelineMatrix(
   );
 }
 
+/** A report row stays scannable; anything longer belongs in the JSONL. */
+const failureDetailHeadChars = 240;
+
 /**
  * A failure's first line ends with a bare colon when the informative payload
  * (a subprocess's output) starts on a later line — keep that payload in the
- * one-line report detail instead of truncating to an empty suffix.
+ * one-line report detail instead of truncating to an empty suffix. A first
+ * line that inlines a whole command excerpt is bounded, and the message's
+ * last `[makeademo:…]` marker line rides along: markers are the recorded
+ * facts (exit codes, timeouts, peaks) that diagnosis actually needs
+ * (ghost's report row was mid-word compiler garbage while the exit=124
+ * trailer sat at the end, 2026-08-09). Without a marker, git's last
+ * `fatal:`/`error:` line rides along instead: a clone failure's first line
+ * is "Cloning into …" while the trailing fatal: line names the real cause
+ * (calcom and ghostfolio's mid-transfer exit-128s, 2026-08-13T23-23).
  */
 function readFailureDetail(message: string): string {
   const firstLine = message.split("\n", 1)[0] ?? message;
-  if (!/:\s*$/.test(firstLine)) {
-    return firstLine;
+  const head =
+    firstLine.length > failureDetailHeadChars
+      ? `${firstLine.slice(0, failureDetailHeadChars)}…`
+      : firstLine;
+  const lines = message.split("\n");
+  const marker = lines
+    .filter((line) => line.trim().startsWith("[makeademo:"))
+    .at(-1)
+    ?.trim();
+  const fatalLine = lines
+    .filter((line) => /^(?:fatal|error):/.test(line.trim()))
+    .at(-1)
+    ?.trim();
+  const rideAlong = marker ?? fatalLine;
+  if (rideAlong !== undefined && !head.includes(rideAlong)) {
+    return `${head} … ${rideAlong}`;
+  }
+  if (!/:\s*$/.test(head)) {
+    return head;
   }
   const continuation = message
     .split("\n")
@@ -180,8 +279,8 @@ function readFailureDetail(message: string): string {
     .map((line) => line.trim())
     .find((line) => line.length > 0);
   return continuation === undefined
-    ? firstLine
-    : `${firstLine.trimEnd()} ${continuation}`;
+    ? head
+    : `${head.trimEnd()} ${continuation}`;
 }
 
 /**
@@ -217,6 +316,98 @@ async function guardAgainstHostSleep(log: (message: string) => void) {
     }
   } catch {
     // Power-state introspection is diagnostic only; never block the run.
+  }
+}
+
+export type MatrixNotification =
+  | { status: "disabled" }
+  | { reason: string; status: "misconfigured" }
+  | { apiKey: string; fromEmail: string; status: "enabled"; to: string };
+
+/**
+ * Resolves whether a finished matrix batch should be emailed. Opt in with
+ * `TEXTME=1|true` and a `TEXTME_EMAIL` recipient; the send reuses the same
+ * `RESEND_API_KEY`/`RESEND_FROM_EMAIL` as the final-video email. Returns
+ * `misconfigured` (never throws) when the flag is on but a required value is
+ * missing, so a batch still reports its result instead of crashing at the end.
+ */
+export function resolveMatrixNotification(
+  env: Record<string, string | undefined>,
+): MatrixNotification {
+  const flag = env.TEXTME?.trim().toLowerCase();
+  if (flag !== "1" && flag !== "true") {
+    return { status: "disabled" };
+  }
+  const to = env.TEXTME_EMAIL?.trim();
+  const apiKey = env.RESEND_API_KEY?.trim();
+  const fromEmail = env.RESEND_FROM_EMAIL?.trim();
+  if (to && apiKey && fromEmail) {
+    return { apiKey, fromEmail, status: "enabled", to };
+  }
+  const missing = [
+    to ? undefined : "TEXTME_EMAIL",
+    apiKey ? undefined : "RESEND_API_KEY",
+    fromEmail ? undefined : "RESEND_FROM_EMAIL",
+  ].filter((name): name is string => name !== undefined);
+  return {
+    reason: `TEXTME is on but ${missing.join(", ")} ${
+      missing.length === 1 ? "is" : "are"
+    } not set`,
+    status: "misconfigured",
+  };
+}
+
+function countMatrixStatuses(results: MatrixEntryResult[]) {
+  return {
+    failed: results.filter((result) => result.status === "failed").length,
+    passed: results.filter((result) => result.status === "passed").length,
+    skipped: results.filter((result) => result.status === "skipped").length,
+  };
+}
+
+/**
+ * Emails the finished matrix report when `TEXTME` opts in. A notification
+ * failure is logged and swallowed: it must never fail an otherwise-successful
+ * batch or mask its exit code, since the run's real work is already done by the
+ * time this fires. Tests inject `notifier`; production builds the Resend one
+ * from the reused credentials.
+ */
+export async function notifyMatrixRunComplete(input: {
+  batchStamp: string;
+  env: Record<string, string | undefined>;
+  log: (message: string) => void;
+  notifier?: MatrixRunEmailNotifier;
+  reportMarkdown: string;
+  results: MatrixEntryResult[];
+}): Promise<void> {
+  const notification = resolveMatrixNotification(input.env);
+  if (notification.status === "disabled") {
+    return;
+  }
+  if (notification.status === "misconfigured") {
+    input.log(`skipping run notification: ${notification.reason}`);
+    return;
+  }
+  const notifier =
+    input.notifier ??
+    new ResendMatrixRunEmailNotifier({
+      apiKey: notification.apiKey,
+      fromEmail: notification.fromEmail,
+    });
+  const counts = countMatrixStatuses(input.results);
+  try {
+    await notifier.sendMatrixRunReportEmail({
+      batchStamp: input.batchStamp,
+      failed: counts.failed,
+      passed: counts.passed,
+      reportMarkdown: input.reportMarkdown,
+      skipped: counts.skipped,
+      to: notification.to,
+    });
+    input.log(`emailed run report to ${notification.to}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    input.log(`run notification failed (matrix result unaffected): ${message}`);
   }
 }
 
@@ -267,15 +458,23 @@ async function main(): Promise<void> {
     process.stdout.write(`[matrix] ${message}\n`);
   await guardAgainstHostSleep(log);
   const entries = resolveMatrixEntries(configured, process.env);
-  const results = await runPipelineMatrix(entries, { log });
+  const results = await runPipelineMatrix(entries, { launchStagger: {}, log });
 
   const report = renderMatrixReport(results);
+  const reportStamp = new Date().toISOString().replace(/[:.]/g, "-");
   const reportPath = join(
     ".makeademo-terminal-runs",
-    `matrix-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+    `matrix-report-${reportStamp}.json`,
   );
   await writeFile(reportPath, `${JSON.stringify(results, null, 2)}\n`);
   process.stdout.write(`\n${report}\nReport written to ${reportPath}\n`);
+  await notifyMatrixRunComplete({
+    batchStamp: reportStamp,
+    env: process.env,
+    log,
+    reportMarkdown: report,
+    results,
+  });
   if (results.some((result) => result.status === "failed")) {
     process.exitCode = 1;
   }

@@ -15,6 +15,7 @@ type CapturePathValidationResult = {
     url?: string;
   }>;
   browserUrl?: string;
+  failedAction?: { actionId?: string; sceneId: string };
   failureClassification?: string;
   failureReason?: string;
   logs: string[];
@@ -72,6 +73,9 @@ export async function validateDynamicCapturePath(
     ),
     browserObservations: result.logs.slice(0, 5),
     consoleErrors: [],
+    ...(result.failedAction === undefined
+      ? {}
+      : { failedAction: result.failedAction }),
     failureClassification,
     logsSummary,
     networkAttempts: [],
@@ -90,7 +94,12 @@ export async function validateDynamicCapturePath(
         ? []
         : failureClassification === "locator failure"
           ? [
-              "Re-run App Exploration to replace stale locator evidence with a browser-verified candidate.",
+              // The hint names the exact failed action when the runtime
+              // protocol identified one (N125); the generic re-exploration
+              // wording remains only for protocol-less locator failures.
+              result.failedAction?.actionId === undefined
+                ? "Re-run App Exploration to replace stale locator evidence with a browser-verified candidate."
+                : `Browser action ${result.failedAction.actionId} failed on its browser-verified locator in Scene ${result.failedAction.sceneId}; locator regrounding re-verifies that candidate in its replay context.`,
             ]
           : ["Route this failure through RepairRouter."],
     urlChecked: result.browserUrl ?? input.preparationManifest.baseUrl,

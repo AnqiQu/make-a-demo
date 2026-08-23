@@ -1,0 +1,84 @@
+{
+  "sourceRun": "matrix-2026-08-15T05-38-26-724Z-ghostfolio",
+  "rounds": [
+    {
+      "round": 1,
+      "failureReport": {
+        "stage": "preparation-preflight",
+        "failureClassification": "runtime-configuration error",
+        "logsSummary": "Runtime-configuration error: startCommandUsed runs dist/apps/api/main but no declared build produces it — declare the build that emits dist/apps/api/main, or start the dev server instead.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "4dcd1c311ff524314dc7b82ee8e7decf64766f88507aa101cb22b91bc08a372a",
+      "candidateManifest": {
+        "appDir": ".",
+        "installCommandUsed": "npm ci --no-audit",
+        "buildCommandUsed": "npm run nx -- run api:build",
+        "startCommandUsed": "npm run start",
+        "ports": [3000]
+      },
+      "resolvedManifest": {
+        "appDir": ".",
+        "installCommandUsed": "npm ci --no-audit",
+        "buildCommandUsed": null,
+        "startCommandUsed": "npm run start",
+        "ports": [3000]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/apps/api/project.json",
+          "/workspace/repo/apps/client/project.json",
+          "/workspace/repo/libs/ui/src/lib/environment/environment.interface.ts",
+          "/workspace/repo/package.json",
+          "/workspace/repo/prisma/seed.mts"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 1,
+        "fingerprintAttempts": 1,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    },
+    {
+      "round": 2,
+      "failureReport": {
+        "stage": "preparation-preflight",
+        "failureClassification": "runtime-configuration error",
+        "logsSummary": "Runtime-configuration error: startCommandUsed runs dist/apps/api/main but no declared build produces it — declare the build that emits dist/apps/api/main, or start the dev server instead.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "dfce2b464ef348699b1506440e0baf10e3f0e4060492768a06763bd6eed88009",
+      "candidateManifest": {
+        "appDir": ".",
+        "installCommandUsed": "npm ci --no-audit",
+        "buildCommandUsed": "npm run build:production",
+        "startCommandUsed": "npm run start",
+        "ports": [3000]
+      },
+      "resolvedManifest": {
+        "appDir": ".",
+        "installCommandUsed": "npm ci --no-audit",
+        "buildCommandUsed": null,
+        "startCommandUsed": "npm run start",
+        "ports": [3000]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/apps/client/project.json",
+          "/workspace/repo/libs/ui/src/lib/environment/environment.interface.ts",
+          "/workspace/repo/package.json",
+          "/workspace/repo/prisma/seed.mts"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 2,
+        "fingerprintAttempts": 2,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    }
+  ]
+}

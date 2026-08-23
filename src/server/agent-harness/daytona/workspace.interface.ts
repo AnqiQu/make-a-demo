@@ -3,19 +3,26 @@ import type { DependencyInstallCommandResult } from "../tools/dependency-install
 export type AgentHarnessWorkspaceCommandResult = DependencyInstallCommandResult;
 
 /**
- * Signals that a workspace command exceeded its caller-provided deadline.
- * Adapters must use this error only for command deadlines so orchestration can
- * safely convert it into bounded agent feedback and retry behavior.
+ * Signals that a workspace command's outcome was never observed: it exceeded
+ * its caller-provided deadline, went silent past its inactivity window, or
+ * its transport ended without carrying the command's exit status. Adapters
+ * must use this error only for those unknown-outcome shapes so orchestration
+ * can safely convert it into bounded agent feedback and retry behavior.
  */
 export class AgentHarnessCommandTimeoutError extends Error {
-  readonly kind: "deadline" | "inactivity";
+  readonly kind: "deadline" | "inactivity" | "transport";
   readonly timeoutMs: number;
 
-  constructor(timeoutMs: number, kind: "deadline" | "inactivity" = "deadline") {
+  constructor(
+    timeoutMs: number,
+    kind: "deadline" | "inactivity" | "transport" = "deadline",
+  ) {
     super(
       kind === "inactivity"
         ? `Daytona command produced no output for ${timeoutMs}ms.`
-        : `Daytona command did not finish within ${timeoutMs}ms.`,
+        : kind === "transport"
+          ? "Daytona PTY session ended without the command's exit trailer; the command's outcome is unknown."
+          : `Daytona command did not finish within ${timeoutMs}ms.`,
     );
     this.name = "AgentHarnessCommandTimeoutError";
     this.kind = kind;
@@ -61,6 +68,45 @@ export class AgentHarnessAgentLaunchError extends Error {
   }
 }
 
+/**
+ * Signals that a Daytona control-plane operation (sandbox create/delete/
+ * start, network update, filesystem transfer) stayed failed after the
+ * envelope's bounded classify-and-retry. The failure belongs to the
+ * infrastructure seam — it carries retry-the-job semantics and must never
+ * be converted into agent repair feedback or a Preparation Fallback Prompt
+ * (midday's maker-facing 409 prompt is the forbidden shape, 2026-08-09).
+ */
+export class AgentHarnessControlPlaneError extends Error {
+  readonly attempts: number;
+  readonly classification: "conflict" | "transient";
+  readonly operation: string;
+  readonly sandboxId?: string;
+
+  constructor(input: {
+    attempts: number;
+    cause: unknown;
+    classification: "conflict" | "transient";
+    operation: string;
+    sandboxId?: string;
+  }) {
+    const causeMessage =
+      input.cause instanceof Error
+        ? `${input.cause.name}: ${input.cause.message}`
+        : String(input.cause);
+    super(
+      `Daytona control-plane operation ${input.operation} failed after ${input.attempts} attempt(s) (${input.classification}): ${causeMessage}`,
+      { cause: input.cause },
+    );
+    this.name = "AgentHarnessControlPlaneError";
+    this.attempts = input.attempts;
+    this.classification = input.classification;
+    this.operation = input.operation;
+    if (input.sandboxId !== undefined) {
+      this.sandboxId = input.sandboxId;
+    }
+  }
+}
+
 /** Signals that a Daytona sandbox stayed unavailable after one bounded restart. */
 export class AgentHarnessSandboxUnavailableError extends Error {
   readonly sandboxId: string;
@@ -83,12 +129,14 @@ export function isAgentHarnessInfrastructureError(
   | AgentHarnessAgentLaunchError
   | AgentHarnessArtifactTransferError
   | AgentHarnessCommandTimeoutError
+  | AgentHarnessControlPlaneError
   | AgentHarnessJobDeadlineError
   | AgentHarnessSandboxUnavailableError {
   return (
     error instanceof AgentHarnessAgentLaunchError ||
     error instanceof AgentHarnessArtifactTransferError ||
     error instanceof AgentHarnessCommandTimeoutError ||
+    error instanceof AgentHarnessControlPlaneError ||
     error instanceof AgentHarnessJobDeadlineError ||
     error instanceof AgentHarnessSandboxUnavailableError
   );
@@ -131,6 +179,14 @@ export type AgentHarnessWorkspaceDownloadFile = {
   sourcePath: string;
 };
 
+/**
+ * The command duration the seam guarantees when `timeoutMs` is omitted.
+ * Providers must apply exactly this bound so callers and decorators can
+ * reason about an omitted timeout without knowing the provider (N156: the
+ * deadline cap substitutes this value before clamping to the job budget).
+ */
+export const defaultWorkspaceCommandTimeoutMs = 10 * 60_000;
+
 export type AgentHarnessWorkspaceExecuteOptions = {
   env?: Record<string, string>;
   /** Maximum silence between streamed output chunks; omitted for no idle limit. */
@@ -143,6 +199,24 @@ export type AgentHarnessWorkspaceExecuteOptions = {
    */
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
+  /**
+   * How the adapter may respond to a transient control-plane failure whose
+   * outcome is unknown (the request may or may not have reached the sandbox).
+   * `"transient"` re-issues the command on an escalating ladder — at-least-once
+   * semantics, legal only for idempotent commands. `"none"` never re-issues;
+   * the failure surfaces as a classified infrastructure error.
+   *
+   * Defaults differ by sandbox: `execute` (agent sandbox) defaults to
+   * `"transient"` because its commands are harness-authored bookkeeping that
+   * must stay idempotent — callers running at-most-once commands (patch
+   * application) must pass `"none"`. `executeSubmittedCode` defaults to
+   * `"none"` because submitted-code commands can drive the app under test
+   * (exploration crawls, capture scripts) and a masked success must never be
+   * double-executed — provably idempotent reads opt into `"transient"`.
+   * Command deadlines are never re-issued under either setting: a timeout is
+   * the command's outcome, not transport loss.
+   */
+  retry?: "none" | "transient";
   timeoutMs?: number;
 };
 
@@ -243,6 +317,24 @@ export type AgentHarnessWorkspaceHandle = {
   workspace: AgentHarnessWorkspace;
 };
 
+/** Resource class chosen before submitted code starts running. */
+export type SubmittedCodeSandboxClass = "heavyweight" | "standard";
+
+/**
+ * Creation policy for a paired agent/submitted-code workspace. Providers
+ * realize the selected class by choosing WHICH snapshot backs the
+ * submitted-code sandbox (a snapshot-created sandbox inherits the snapshot's
+ * resource spec; resource overrides are rejected — N147), never by weakening
+ * its network isolation or lifecycle cleanup guarantees. A provider without a
+ * heavyweight variant configured must still create the workspace on its
+ * standard class rather than fail.
+ */
+export type AgentHarnessWorkspaceCreateInput = {
+  submittedCodeSandboxClass: SubmittedCodeSandboxClass;
+};
+
 export interface AgentHarnessWorkspaceProvider {
-  create(): Promise<AgentHarnessWorkspaceHandle>;
+  create(
+    input?: AgentHarnessWorkspaceCreateInput,
+  ): Promise<AgentHarnessWorkspaceHandle>;
 }

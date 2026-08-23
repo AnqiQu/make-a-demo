@@ -62,6 +62,7 @@ export async function uploadSubmittedCodeExternalResourceCache(input: {
   const encodedChecksums = Buffer.from(`${checksums}\n`).toString("base64");
   const verification = await input.workspace.executeSubmittedCode(
     `cd ${shellQuote(externalResourceReplayRoot)} && printf %s ${shellQuote(encodedChecksums)} | base64 -d | sha256sum -c -`,
+    { retry: "transient" },
   );
   if (verification.exitCode !== 0) {
     throw new Error(

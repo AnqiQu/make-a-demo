@@ -25,8 +25,11 @@ export const makeADemoArtifactPaths = {
   demoScriptContract: `${makeADemoDirectory}/demo-script-contract.json`,
   externalResourceHydrationReport: `${makeADemoDirectory}/external-resource-hydration-report.json`,
   externalResourceManifest: `${makeADemoDirectory}/external-resource-manifest.json`,
+  featureVerificationGuide: `${makeADemoDirectory}/feature-verification-guide.md`,
+  fidelityAdjudication: `${makeADemoDirectory}/fidelity-adjudication.json`,
   flowSpec: `${makeADemoDirectory}/flow-spec.json`,
   flowSpecContract: `${makeADemoDirectory}/flow-spec-contract.json`,
+  footageCaptureValidation: `${makeADemoDirectory}/footage-capture-validation-report.json`,
   pipelineRunManifest: `${makeADemoDirectory}/pipeline-run-manifest.json`,
   preparationFallback: `${makeADemoDirectory}/preparation-fallback.json`,
   preparationFidelity: `${makeADemoDirectory}/preparation-fidelity-validation-report.json`,
@@ -36,7 +39,10 @@ export const makeADemoArtifactPaths = {
   preparationPreflight: `${makeADemoDirectory}/preparation-preflight-validation-report.json`,
   preparationWorkspaceDiff: `${makeADemoDirectory}/preparation-workspace-diff.json`,
   repoProfile: `${makeADemoDirectory}/repo-profile.json`,
+  repairAdvice: `${makeADemoDirectory}/repair-advice.json`,
+  repairRoundLedger: `${makeADemoDirectory}/repair-round-ledger.json`,
   runPlan: `${makeADemoDirectory}/run-plan.json`,
+  runTriageAdvice: `${makeADemoDirectory}/run-triage-advice.json`,
   runtimeTargetSelection: `${makeADemoDirectory}/runtime-target-selection.json`,
   runtimeTargetSelectionContract: `${makeADemoDirectory}/runtime-target-selection-contract.json`,
   scriptCandidate: `${makeADemoDirectory}/script-candidate.json`,
@@ -64,6 +70,12 @@ export function stageWriteableArtifactPaths(
       ];
     case "flow-planning":
       return [makeADemoArtifactPaths.flowSpec];
+    case "preparation-fidelity-adjudication":
+      return [makeADemoArtifactPaths.fidelityAdjudication];
+    case "repair-strategy":
+      return [makeADemoArtifactPaths.repairAdvice];
+    case "run-triage":
+      return [makeADemoArtifactPaths.runTriageAdvice];
     case "runtime-target-selection":
       return [makeADemoArtifactPaths.runtimeTargetSelection];
     case "script-repair":

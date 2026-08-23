@@ -1,3 +1,7 @@
+import type {
+  BrowserAction,
+  BrowserLocator,
+} from "../../pipeline/06-footage-capture/browser-action-plan";
 import { createBrowserRuntimeNetworkPolicySource } from "../../shared/external-resources/browser-runtime-network-policy";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { shellQuote } from "../../shared/shell/shell-quote";
@@ -10,7 +14,9 @@ import { redactSecretText } from "../default/json-artifact-diagnostic";
 import {
   type ActionCatalog,
   type AppMap,
+  type FeatureVerdict,
   type NetworkAttempt,
+  type PreparationManifest,
   type PreparedDemoFeature,
   type ValidationReport,
   type VerifiedLocatorCandidate,
@@ -18,12 +24,17 @@ import {
   readAppMap,
   readValidationReport,
 } from "../schemas/artifacts";
-import { findRoutePlaceholder } from "../tools/route-placeholders";
+import {
+  findMissingValueSegment,
+  findRoutePlaceholder,
+} from "../tools/route-placeholders";
 import {
   type SandboxCapacityEvidence,
   readSandboxCapacityEvidence,
   sandboxCapacityProbeCommand,
 } from "../tools/sandbox-capacity";
+import { isAuthDegradedClick, isAuthWallRoute } from "./auth-wall";
+import { readStderrErrorSignal } from "./stderr-error-signal";
 
 /**
  * The typed outcome of browser exploration. `repairable-failure` deliberately
@@ -43,6 +54,24 @@ export type SubmittedAppExplorationResult =
       observation?: BrowserExplorationProtocol;
       validationReport: ValidationReport;
     };
+
+/**
+ * The typed identity of a Demo Script action that failed capture-path
+ * validation on its browser-verified locator (N125). When exploration runs
+ * as locator regrounding it receives this bundle and must re-verify the
+ * candidate in its replay context: execute `scenePrefix` — the failing
+ * scene's actions ahead of the failed one — from clean state, then check
+ * the stored locator there. A fresh-route verification cannot see the
+ * app-state divergence that failed the capture.
+ */
+export type CaptureLocatorFailure = {
+  actionId: string;
+  locator?: BrowserLocator;
+  locatorCandidateId?: string;
+  sceneId: string;
+  scenePrefix: BrowserAction[];
+  screenshotPath?: string;
+};
 
 type ObservedLocatorEvidence = Omit<VerifiedLocatorCandidate, "id">;
 type ObservedLink = {
@@ -83,8 +112,15 @@ type ObservedRoute = {
    * browser evidence that distinguishes it from a broken transport. The
    * header texts are carried so harvested strings made only of header words
    * can be recognized as table structure rather than rendered data.
+   * `skeletonRows` counts body rows that mounted with no cell text at all —
+   * the signature of a loading state whose query never resolves (midday,
+   * 2026-08-09), a third cause distinct from an empty result set.
    */
-  emptyDataTables?: Array<{ columnHeaders: number; headerTexts?: string[] }>;
+  emptyDataTables?: Array<{
+    columnHeaders: number;
+    headerTexts?: string[];
+    skeletonRows?: number;
+  }>;
   forms: string[];
   featureIds?: string[];
   /**
@@ -118,6 +154,14 @@ type ObservedRoute = {
    * ("Could not load shared documents" — outline, 2026-08-08).
    */
   alerts?: string[];
+  /**
+   * HTTP status of the route's main-document response when it was an error
+   * (>= 400). A 4xx/5xx document is a runtime fault no matter how plausible
+   * the rendered shell looks, so this outranks every wording-based
+   * diagnosis. Absent for healthy responses and for hash navigations, which
+   * ride the last full document load.
+   */
+  documentStatus?: number;
   path: string;
   primaryNavigation: string[];
   requestedPath?: string;
@@ -126,6 +170,16 @@ type ObservedRoute = {
   snapshot: string;
   text: string[];
   textLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
+  /**
+   * Bounded body innerText captured only when the selector harvest found no
+   * headings and no text. A crashed SPA route paints its exception as bare
+   * unstructured body text — this sample lets an error-shaped body carry
+   * its own diagnosis instead of reading as missing content. When innerText
+   * is also empty, falls back to the aria snapshot's text runs, which pierce
+   * open shadow roots (Vite's error overlay renders there), unfiltered by
+   * cross-route dedupe so every broken route carries its own sample.
+   */
+  textSample?: string;
   title: string;
 };
 type ObservedInteraction = {
@@ -138,7 +192,19 @@ type ObservedInteraction = {
   };
   locatorEvidence?: ObservedLocatorEvidence | null;
   name: string;
+  /** Local same-origin destination observed after a click changed the URL. */
+  navigationDestination?: string;
+  /** Off-origin URL observed after a click left the app (N158). */
+  externalDestination?: string;
   outcome: string;
+  /**
+   * The control state change this interaction caused (N105): a
+   * self-renaming toggle or a control leaving its disabled state. Recorded
+   * whenever the before/after control harvest shows one, independent of
+   * which visible delta named the outcome — transition evidence is
+   * wording-free proof of behavior.
+   */
+  stateTransition?: { control: string; from: string; to: string };
   /**
    * Text that became visible only after this interaction, verified as a
    * unique visible locator in the revealed state. Tool-shaped UIs render
@@ -155,13 +221,43 @@ type UnreachableRoute = {
   featureIds?: string[];
   url: string;
 };
+/**
+ * One declared proof's execution verdict (N107), recorded from a fresh
+ * navigation of the feature's first entry route after the crawl. Where a
+ * result exists it subsumes wording-based grounding for that feature:
+ * `passed` grounds it, `!passed` fails it as declared-proof-failed. An
+ * absent result (deadline, unreachable entry route) is missing evidence,
+ * not failed evidence — the wording chain still applies.
+ */
+type DeclaredProofResult = {
+  detail: string;
+  featureId: string;
+  locatorEvidence?: ObservedLocatorEvidence | null;
+  passed: boolean;
+};
+type ReplayVerification = {
+  actionId: string;
+  detail: string;
+  locatorCandidateId?: string;
+  reproduced: boolean;
+  sceneId: string;
+};
 type BrowserExplorationProtocol = {
   blockedNetworkAttempts: Array<
     Pick<NetworkAttempt, "host"> & Partial<NetworkAttempt>
   >;
   consoleErrors: string[];
+  declaredProofs?: DeclaredProofResult[];
+  /**
+   * Same-origin script responses that answered a server error (5xx, minus
+   * the 504 stale-module case the crawler reloads through). An app whose
+   * own module server cannot deliver its entry chunks is a serve failure,
+   * not an empty app — the page content below it is the error output.
+   */
+  failedScriptResponses?: Array<{ status: number; url: string }>;
   fatalError?: string;
   pageErrors: string[];
+  replayVerification?: ReplayVerification;
   routes: ObservedRoute[];
   unreachableRoutes?: UnreachableRoute[];
 };
@@ -185,6 +281,27 @@ export function normalizeCrawlUrl(rawUrl: string): string {
   return url.toString().replace(/[?#]+$/, "");
 }
 
+/**
+ * Projects a manifest entryPath into the route space browser observations
+ * live in (`url.pathname + url.search + url.hash`). The authoring contract
+ * legally admits entryPaths starting with `/`, `#`, or `?`, but every
+ * observed AppMap route carries a pathname, so a bare `#additional-page`
+ * could never match its own observed route (N124) — declared-proof actions
+ * and verdict fallbacks would cite a route the catalog never saw.
+ * Cross-origin and unparseable entryPaths pass through untouched so the
+ * crawl planners' origin checks keep rejecting them on the raw value.
+ */
+function entryPathToRoute(entryPath: string, baseUrl: string): string {
+  try {
+    const base = new URL(baseUrl);
+    const url = new URL(entryPath, base);
+    if (url.origin !== base.origin) return entryPath;
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return entryPath;
+  }
+}
+
 const explorerDirectory = "/workspace/.makeademo/exploration";
 // The script itself lives outside /workspace: bun resolves imports by walking
 // up from the script's directory before consulting NODE_PATH, so a submitted
@@ -200,19 +317,49 @@ const explorationCommandTimeoutMs = 7 * 60_000;
  * Explores the real prepared app with Playwright inside the secret-free
  * submitted-code sandbox. Implementations consuming this result can trust that
  * routes and locators came from browser observations rather than agent memory.
+ *
+ * `scope: "feature-entries"` restricts the crawl to the manifest's declared
+ * entry routes plus the base URL — no discovered link or navigation is
+ * followed — while keeping every other gate behavior (harvest, interactions,
+ * declared proofs, verdict ledger) identical. `scope: "feature-proofs"`
+ * skips that crawl and executes only declared proofs from fresh navigations;
+ * callers must use it only after independently proving the entry route serves.
  */
 export async function exploreSubmittedApp(input: {
   baseUrl: string;
+  /**
+   * Present when this exploration runs as locator regrounding (N125): the
+   * capture-failed candidate to re-verify by scene-prefix replay.
+   */
+  captureFailure?: CaptureLocatorFailure;
+  /**
+   * The manifest's dataStrategy declarations (N122). Exploration uses them
+   * only to interpret failures: a declared client-stub rung turns generic
+   * crash diagnostics into a stub schema-gap repair hint (N126).
+   */
+  dataStrategy?: PreparationManifest["dataStrategy"];
   externalResourceManifest?: ExternalResourceManifest;
   featureInventory?: PreparedDemoFeature[];
   preparationManifestId: string;
   requestedFeatures?: string[];
+  scope?: "feature-entries" | "feature-proofs" | "full";
   workspace: AgentHarnessWorkspace;
 }): Promise<SubmittedAppExplorationResult> {
+  // Normalized once at ingestion: every downstream consumer — crawl
+  // targets, declared-proof actions, verdict fallbacks, repair messages —
+  // then shares one route identity space with the observed AppMap.
+  const featureInventory = (input.featureInventory ?? []).map((feature) => ({
+    ...feature,
+    entryPaths: feature.entryPaths.map((entryPath) =>
+      entryPathToRoute(entryPath, input.baseUrl),
+    ),
+  }));
   const script = createExplorerScript(
     input.baseUrl,
-    input.featureInventory ?? [],
+    featureInventory,
     input.externalResourceManifest,
+    input.scope ?? "full",
+    input.captureFailure,
   );
   const encodedScript = Buffer.from(script).toString("base64");
   const capacityFailure = async (
@@ -253,7 +400,18 @@ export async function exploreSubmittedApp(input: {
     recoveredObservation = await readExplorationProtocolFile(input.workspace);
     if (recoveredObservation === undefined) {
       const appStatus = await readAppStatus(input.workspace);
-      if (appStatus?.running !== false) throw error;
+      // Unreadable status is genuinely ambiguous (the sandbox itself may be
+      // gone) — preserve the infrastructure timeout. A live app that never
+      // yielded a protocol is a wedged route, which an agent can repair
+      // (outline's 420s hang killed the whole run unclassified, 2026-08-09).
+      if (appStatus === undefined) throw error;
+      if (appStatus.running !== false) {
+        return createHungExplorationFailure({
+          appStatus,
+          baseUrl: input.baseUrl,
+          timeoutError: error,
+        });
+      }
       return (
         (await capacityFailure(appStatus)) ??
         createExitedAppExplorationFailure({
@@ -292,10 +450,29 @@ export async function exploreSubmittedApp(input: {
       })
     );
   }
+  // N125(3): a candidate still missing after its scene prefix replayed is
+  // app-state divergence, and it outranks whatever the fresh crawl found —
+  // re-certifying the candidate from a fresh route load is exactly the
+  // mistake that failed the capture.
+  if (
+    input.captureFailure !== undefined &&
+    observation.replayVerification !== undefined &&
+    !observation.replayVerification.reproduced
+  ) {
+    return createUnreproducibleEvidenceFailure({
+      baseUrl: input.baseUrl,
+      captureFailure: input.captureFailure,
+      observation,
+      replayVerification: observation.replayVerification,
+    });
+  }
 
   const artifacts = createExplorationArtifacts({
     baseUrl: input.baseUrl,
-    featureInventory: input.featureInventory ?? [],
+    ...(input.dataStrategy === undefined
+      ? {}
+      : { dataStrategy: input.dataStrategy }),
+    featureInventory,
     observation,
     preparationManifestId: input.preparationManifestId,
     requestedFeatures: input.requestedFeatures ?? [],
@@ -304,22 +481,151 @@ export async function exploreSubmittedApp(input: {
   // Browser-side evidence cannot see server-side render failures: an SSR
   // throw leaves pageErrors and consoleErrors empty while routes stream no
   // content. The managed app's stderr is evidence, never a gate — dev
-  // servers also log benign errors.
+  // servers also log benign errors, and watch-mode toolchains narrate
+  // success on stderr, so the runtime-error hint fires only when an
+  // error-class line survives the warning and zero-errors filters (N106).
   const diagnostics = createAppStatusDiagnostics(
     await readAppStatus(input.workspace),
   );
   if (diagnostics.stderrExcerpts.length === 0) return artifacts;
+  const errorSignal = readStderrErrorSignal(
+    diagnostics.stderrExcerpts.join("\n"),
+  );
+  // N136 (directus, 2026-08-13): a declared client-stub whose demo gate
+  // never reaches browser code leaves every original transport live — the
+  // routes render hollow, the probe reads unobservable features, and repair
+  // aims at the data layer while the fault is the gate. A repeated
+  // refused-connection storm in the app's own stderr while a client-stub is
+  // declared proves live transports, so the failure is renamed to the stub
+  // engagement itself.
+  const refusedBackendEvidence = readRefusedLoopbackBackends(
+    diagnostics.stderrExcerpts.join("\n"),
+  );
+  const stubEngagementFailure =
+    (input.dataStrategy ?? []).some(
+      (declaration) => declaration.rung === "client-stub",
+    ) &&
+    refusedBackendEvidence !== undefined &&
+    featureObservabilityClassifications.has(
+      artifacts.validationReport.failureClassification ?? "",
+    );
+  if (stubEngagementFailure && refusedBackendEvidence !== undefined) {
+    const renderedStubContent = observation.routes.some((route) =>
+      routeRenderedHeadingsOrControls(route),
+    );
+    const refusedRequests = formatRefusedBackendEvidence(
+      refusedBackendEvidence,
+    );
+    if (renderedStubContent) {
+      return {
+        ...artifacts,
+        validationReport: {
+          ...artifacts.validationReport,
+          failureClassification: "client stub partially engaged",
+          logsSummary: `Client stub partially engaged: the explored routes rendered headings or controls, proving fixtures reached the browser, but uncovered client seams still issued real backend calls that were refused (${refusedRequests}). Extend the stub across those request paths and verify every original transport is intercepted. Original failure: ${artifacts.validationReport.logsSummary}`,
+          stderrExcerpts: diagnostics.stderrExcerpts,
+          suggestedRepairHints: [
+            "The declared client-stub is active in the browser but does not cover every client transport; extend fixture interception at the uncovered auth/data seams.",
+            `Cover the refused requests and confirm they stop reaching the real backend: ${refusedRequests}.`,
+            ...artifacts.validationReport.suggestedRepairHints,
+          ],
+        },
+      };
+    }
+    return {
+      ...artifacts,
+      validationReport: {
+        ...artifacts.validationReport,
+        failureClassification: "client stub not engaged",
+        logsSummary: `Client stub not engaged: dataStrategy declares client-stub fixtures, but the running app repeatedly issued real backend calls that were refused (${refusedRequests}). The demo gate is not active in the browser bundle, so the stub is dead code and every original transport is live. Deliver the gate through a channel the bundler exposes to client code (for Vite: a VITE_-prefixed variable in import.meta.env or an explicit define in the config) and verify the fixtures actually render. Original failure: ${artifacts.validationReport.logsSummary}`,
+        stderrExcerpts: diagnostics.stderrExcerpts,
+        suggestedRepairHints: [
+          "The declared client-stub is not intercepting requests: fix the demo gate delivery, not the feature selection. A browser-side seam cannot read plain process environment variables — bundlers only expose allowlisted values to client code.",
+          `Repair the gate so it is provably true in the browser, then confirm no request reaches the refused backend(s): ${refusedRequests}.`,
+          ...artifacts.validationReport.suggestedRepairHints,
+        ],
+      },
+    };
+  }
   return {
     ...artifacts,
     validationReport: {
       ...artifacts.validationReport,
       stderrExcerpts: diagnostics.stderrExcerpts,
       suggestedRepairHints: [
-        "Server-side runtime errors were observed while routes rendered; inspect the stderr evidence before changing feature selection.",
+        ...(errorSignal === undefined
+          ? []
+          : [
+              "Server-side runtime errors were observed while routes rendered; inspect the stderr evidence before changing feature selection.",
+            ]),
         ...artifacts.validationReport.suggestedRepairHints,
       ],
     },
   };
+}
+
+// The wrong-layer readings a dead stub produces: hollow routes ground no
+// features and read as empty state. Serve-layer classifications (app server
+// error, missing dependency) stay untouched — they already name a cause
+// below the stub.
+const featureObservabilityClassifications = new Set([
+  "empty/unmeaningful app state",
+  "prepared feature not observable",
+  "requested feature not observable",
+]);
+
+/**
+ * Extracts the distinct loopback backends the app's own process repeatedly
+ * failed to reach and any adjacent proxy request paths from managed-app
+ * stderr.
+ * Returns undefined below two refusals: a single refused connection can be a
+ * benign startup probe, and the stub-not-engaged conversion must only fire
+ * on the repeated storm that proves live transports.
+ */
+function readRefusedLoopbackBackends(
+  stderr: string,
+): { paths: string[]; targets: string[] } | undefined {
+  const refusals = [
+    ...stderr.matchAll(
+      /ECONNREFUSED\s+((?:127\.0\.0\.1|\[?::1\]?|localhost):\d+)/g,
+    ),
+  ];
+  if (refusals.length < 2) return undefined;
+  const targets = [...new Set(refusals.map((match) => match[1] ?? ""))].filter(
+    (target) => target.length > 0,
+  );
+  const paths = [
+    ...new Set(
+      [...stderr.matchAll(/http proxy error:\s+(\S+)/gi)].map(
+        (match) => match[1] ?? "",
+      ),
+    ),
+  ].filter((path) => path.length > 0);
+  return { paths, targets };
+}
+
+function formatRefusedBackendEvidence(input: {
+  paths: string[];
+  targets: string[];
+}): string {
+  return [
+    `targets: ${input.targets.join(", ")}`,
+    ...(input.paths.length === 0
+      ? []
+      : [`request paths: ${input.paths.join(", ")}`]),
+  ].join("; ");
+}
+
+function routeRenderedHeadingsOrControls(
+  route: BrowserExplorationProtocol["routes"][number],
+): boolean {
+  return [
+    route.headings,
+    route.buttons,
+    route.inputs,
+    route.links,
+    route.primaryNavigation,
+  ].some((values) => values.length > 0);
 }
 
 async function readWorkspaceCapacityEvidence(
@@ -350,6 +656,7 @@ function explorationFailure(input: {
   networkAttempts?: NetworkAttempt[];
   observation?: BrowserExplorationProtocol;
   pageErrors?: string[];
+  screenshots?: string[];
   summary: string;
 }): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
   return {
@@ -367,7 +674,7 @@ function explorationFailure(input: {
       networkAttempts: input.networkAttempts ?? [],
       pageErrors: input.pageErrors ?? [],
       retryCount: 0,
-      screenshots: [],
+      screenshots: input.screenshots ?? [],
       stage: "app-exploration",
       status: "failed",
       stderrExcerpts: input.diagnostics.stderrExcerpts,
@@ -376,6 +683,37 @@ function explorationFailure(input: {
       urlChecked: input.baseUrl,
     }),
   };
+}
+
+/**
+ * N125(3): the capture-failed candidate stayed missing even after its scene
+ * prefix replayed, so the exploration-time evidence does not exist in the
+ * state capture replays it in. That is an app-state divergence — a prepared
+ * runtime or data defect — dispatched to preparation repair with the
+ * exploration-vs-replay evidence pair; the script channel cannot fix an app
+ * that no longer shows the element and would burn its whole budget trying.
+ */
+function createUnreproducibleEvidenceFailure(input: {
+  baseUrl: string;
+  captureFailure: CaptureLocatorFailure;
+  observation: BrowserExplorationProtocol;
+  replayVerification: ReplayVerification;
+}): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
+  const locatorJson = JSON.stringify(input.captureFailure.locator);
+  const candidateId = input.captureFailure.locatorCandidateId;
+  return explorationFailure({
+    baseUrl: input.baseUrl,
+    classification: "evidence unreproducible at replay",
+    diagnostics: { stderrExcerpts: [], stdoutExcerpts: [] },
+    hints: [
+      `Repair the prepared runtime or its data fixtures so the element behind ${locatorJson} exists after Scene ${input.captureFailure.sceneId}'s earlier actions replay, or reselect the feature's evidence onto state that survives replay.`,
+    ],
+    observation: input.observation,
+    ...(input.captureFailure.screenshotPath === undefined
+      ? {}
+      : { screenshots: [input.captureFailure.screenshotPath] }),
+    summary: `Browser action ${input.captureFailure.actionId}'s locator ${locatorJson}${candidateId === undefined ? "" : ` (candidate ${candidateId})`} was browser-verified during exploration but could not be reproduced in its replay context: ${input.replayVerification.detail}. The prepared app does not show this element in the state the demo replays it in — an app-state divergence for preparation repair, not a script drafting problem.`,
+  });
 }
 
 function createSandboxCapacityFailure(input: {
@@ -416,8 +754,26 @@ function createExitedAppExplorationFailure(input: {
   });
 }
 
+function createHungExplorationFailure(input: {
+  appStatus: AgentHarnessSubmittedCodeAppStatus;
+  baseUrl: string;
+  timeoutError: AgentHarnessCommandTimeoutError;
+}): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
+  const diagnostics = createAppStatusDiagnostics(input.appStatus);
+  return explorationFailure({
+    baseUrl: input.baseUrl,
+    classification: "render timeout",
+    diagnostics,
+    hints: [
+      "The app serves requests but at least one explored route or interaction never settles. Repair the prepared app's hanging data or navigation path — a request that waits forever on missing backend state is the usual cause — then rerun browser exploration.",
+    ],
+    summary: `App Exploration timed out after ${Math.round(input.timeoutError.timeoutMs / 1000)}s with the prepared app still running: the browser protocol never completed, so a route or interaction is hanging rather than failing.${diagnostics.output ? ` App output: ${diagnostics.output}` : ""}`,
+  });
+}
+
 function createExplorationArtifacts(input: {
   baseUrl: string;
+  dataStrategy?: PreparationManifest["dataStrategy"];
   featureInventory: PreparedDemoFeature[];
   observation: BrowserExplorationProtocol;
   preparationManifestId: string;
@@ -443,6 +799,9 @@ function createExplorationArtifacts(input: {
   );
   const distinctContentByRoute = readRouteDistinctContent(observedRoutes);
   const errorState = readErrorStateRoutes({
+    authWallRoutePaths: new Set(
+      observedRoutes.filter(isAuthWallRoute).map((route) => route.path),
+    ),
     distinctContentByRoute,
     pageErrors: input.observation.pageErrors,
     ...(probeRoute === undefined ? {} : { probeRoute }),
@@ -458,7 +817,10 @@ function createExplorationArtifacts(input: {
   );
   const routes: Array<Record<string, unknown>> = [];
   const loginOrAuthWalls: string[] = [];
-  const emptyDataTablesByRoute = new Map<string, number>();
+  const emptyDataTablesByRoute = new Map<
+    string,
+    { columnHeaders: number; skeletonRows: number }
+  >();
   const populatedTableRoutes = new Set<string>();
   for (const route of observedRoutes) {
     routes.push({
@@ -480,14 +842,14 @@ function createExplorationArtifacts(input: {
       text: route.text,
       title: route.title,
     });
-    if (isAuthWall(route)) {
+    if (isAuthWallRoute(route)) {
       loginOrAuthWalls.push(route.path);
     }
     if ((route.emptyDataTables?.length ?? 0) > 0) {
-      emptyDataTablesByRoute.set(
-        route.path,
-        route.emptyDataTables?.[0]?.columnHeaders ?? 0,
-      );
+      emptyDataTablesByRoute.set(route.path, {
+        columnHeaders: route.emptyDataTables?.[0]?.columnHeaders ?? 0,
+        skeletonRows: route.emptyDataTables?.[0]?.skeletonRows ?? 0,
+      });
     }
     if ((route.populatedDataTables ?? 0) > 0) {
       populatedTableRoutes.add(route.path);
@@ -504,29 +866,51 @@ function createExplorationArtifacts(input: {
     networkAttempts,
     pageErrors: unique(input.observation.pageErrors),
   });
+  const declaredProofResults = new Map(
+    (input.observation.declaredProofs ?? []).map((proof) => [
+      proof.featureId,
+      proof,
+    ]),
+  );
   const actionCatalog = readActionCatalog({
-    actions: createActions(
-      observedRoutes,
-      input.featureInventory,
-      explicitAuthenticationFeatureIds,
-      distinctContentByRoute,
-      errorState.suppressedRoutePaths,
-    ),
+    actions: [
+      ...createActions(
+        observedRoutes,
+        input.featureInventory,
+        explicitAuthenticationFeatureIds,
+        distinctContentByRoute,
+        errorState.suppressedRoutePaths,
+      ),
+      ...createDeclaredProofActions(
+        input.featureInventory,
+        declaredProofResults,
+      ),
+    ],
     appMapId,
     id: actionCatalogId,
   });
+  const failedScriptResponses = readFailedAppScriptResponses(
+    input.baseUrl,
+    input.observation.failedScriptResponses,
+  );
   const validationReport = createExplorationValidationReport({
     actionCatalog,
     appMap,
+    ...(input.dataStrategy === undefined
+      ? {}
+      : { dataStrategy: input.dataStrategy }),
+    declaredProofResults,
     distinctContentByRoute,
     emptyDataTablesByRoute,
     errorEvidenceByRoute: errorState.evidenceByRoute,
     explicitAuthenticationFeatureIds,
+    ...(failedScriptResponses.length === 0 ? {} : { failedScriptResponses }),
     featureInventory: input.featureInventory,
     networkAttempts,
     populatedTableRoutes,
     stuckLoadingRoutes,
     unreachableRoutes: input.observation.unreachableRoutes ?? [],
+    requestedFeatures: input.requestedFeatures,
   });
 
   return {
@@ -721,6 +1105,7 @@ const notFoundProbePathMarker = "__makeademo-404-probe__";
  * errors, the not-found verdict) for repair steering.
  */
 function readErrorStateRoutes(input: {
+  authWallRoutePaths: ReadonlySet<string>;
   distinctContentByRoute: ReadonlyMap<string, string[]>;
   pageErrors: string[];
   probeRoute?: {
@@ -731,10 +1116,13 @@ function readErrorStateRoutes(input: {
   };
   routes: ReadonlyArray<{
     alerts?: string[];
+    documentStatus?: number;
     headings: string[];
     path: string;
     primaryNavigation?: string[];
     text: string[];
+    textLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
+    textSample?: string;
   }>;
 }): {
   evidenceByRoute: Map<string, string[]>;
@@ -751,6 +1139,42 @@ function readErrorStateRoutes(input: {
   };
   for (const route of input.routes) {
     addEvidence(route.path, unique(route.alerts ?? []));
+    // A 4xx/5xx main-document response is a runtime fault no matter how
+    // plausible the rendered shell looks — except a 401/403 that renders a
+    // login wall, which is product surface the auth-wall verdict owns.
+    if (
+      route.documentStatus !== undefined &&
+      route.documentStatus >= 400 &&
+      !(
+        (route.documentStatus === 401 || route.documentStatus === 403) &&
+        input.authWallRoutePaths.has(route.path)
+      )
+    ) {
+      suppressedRoutePaths.add(route.path);
+      addEvidence(route.path, [
+        `HTTP ${route.documentStatus} document response — a runtime fault, not a wording fault`,
+      ]);
+    }
+    // A bare error body carries its own diagnosis: the sample exists only
+    // when the selector harvest saw nothing, and it suppresses only when it
+    // is error-shaped and no verified content contradicts it.
+    const verifiedTextCount =
+      route.textLocatorEvidence === undefined
+        ? route.text.length
+        : route.text.filter((_, index) =>
+            Boolean(route.textLocatorEvidence?.[index]),
+          ).length;
+    if (
+      route.textSample !== undefined &&
+      route.headings.length === 0 &&
+      verifiedTextCount === 0 &&
+      readStderrErrorSignal(route.textSample) !== undefined
+    ) {
+      suppressedRoutePaths.add(route.path);
+      addEvidence(route.path, [
+        `bare error body: ${route.textSample.slice(0, 200)}`,
+      ]);
+    }
   }
 
   const shellCount = new Set(
@@ -842,6 +1266,24 @@ function routeShellKey(path: string): string {
     : pathname;
 }
 
+function readLocalLinkDestination(
+  href: string,
+  sameOrigin: boolean | undefined,
+): string | undefined {
+  // A literal undefined/null segment is the app interpolating a missing
+  // value into its own URL (N158): the path is local-shaped but navigates
+  // nowhere real, so it must never become navigation evidence.
+  if (findMissingValueSegment(href) !== undefined) return undefined;
+  if (/^(?:\/(?!\/)|#|\?)/.test(href)) return href;
+  if (sameOrigin !== true) return undefined;
+  try {
+    const target = new URL(href);
+    return target.pathname + target.search + target.hash;
+  } catch {
+    return undefined;
+  }
+}
+
 function createActions(
   routes: ObservedRoute[],
   featureInventory: PreparedDemoFeature[],
@@ -850,6 +1292,15 @@ function createActions(
   errorStateRoutePaths: ReadonlySet<string> = new Set(),
 ) {
   const actions: Array<Record<string, unknown>> = [];
+  // Every assert leaves a record so the per-feature floor below can re-tag
+  // one without reparsing the built actions. floorFeatureIds is the set of
+  // features the floor may add on that assert's route: the route's own tags,
+  // except on auth walls, whose explicit-only tagging must hold.
+  const assertRecords: Array<{
+    evidenceText: string;
+    featureIds: string[];
+    floorFeatureIds: readonly string[];
+  }> = [];
   routes.forEach((fullRoute, routeIndex) => {
     // A crashed or not-found page's controls are not product surface: the
     // 2026-08-08 outline demo clicked its error boundary's "Reload" button
@@ -874,6 +1325,13 @@ function createActions(
         featureInventory,
         explicitAuthenticationFeatureIds,
       );
+    const floorFeatureIds = isAuthWallRoute(route)
+      ? []
+      : (route.featureIds ?? []);
+    const recordAssert = (evidenceText: string, featureIds: string[]) => {
+      assertRecords.push({ evidenceText, featureIds, floorFeatureIds });
+      return featureIds;
+    };
     actions.push({
       confidence: 1,
       evidence: `Playwright loaded ${route.path}`,
@@ -899,7 +1357,7 @@ function createActions(
         confidence: 0.95,
         evidence: `Playwright observed heading on ${route.path}`,
         expectedResult: `${heading} remains visible`,
-        featureIds: matchFeatureIds(heading),
+        featureIds: recordAssert(heading, matchFeatureIds(heading)),
         id,
         kind: "assert",
         ...createLocatorCandidateFields(id, locatorEvidence),
@@ -912,7 +1370,11 @@ function createActions(
         route: route.path,
       });
     });
-    if (route.headings.length === 0) {
+    // Text asserts are emitted on every route, headings or not: a page
+    // title grounds nothing about the data beneath it, and the harvested
+    // strings a feature actually needs — metrics, row text, pane labels —
+    // must be assertable wherever they rendered.
+    {
       const verifiedTexts = route.text
         .map((text, index) => ({ index, text }))
         .filter(
@@ -971,7 +1433,7 @@ function createActions(
             confidence: 0.85,
             evidence: `Playwright observed visible text on ${route.path}`,
             expectedResult: `${visibleText} remains visible`,
-            featureIds: matchFeatureIds(visibleText),
+            featureIds: recordAssert(visibleText, matchFeatureIds(visibleText)),
             id,
             kind: "assert",
             ...createLocatorCandidateFields(
@@ -984,7 +1446,9 @@ function createActions(
           });
         },
       );
-      if (textCandidates.length === 0) {
+      // The control fallback exists so a route is never assert-free; it
+      // only fires when neither headings nor text produced an assert.
+      if (route.headings.length === 0 && textCandidates.length === 0) {
         const visibleButton = route.buttons.find(
           (button, index) =>
             button.length > 0 &&
@@ -998,7 +1462,10 @@ function createActions(
             confidence: 0.85,
             evidence: `Playwright observed a visible control on ${route.path}`,
             expectedResult: `${visibleButton} remains visible`,
-            featureIds: matchFeatureIds(visibleButton),
+            featureIds: recordAssert(
+              visibleButton,
+              matchFeatureIds(visibleButton),
+            ),
             id,
             kind: "assert",
             ...createLocatorCandidateFields(
@@ -1040,9 +1507,19 @@ function createActions(
         id,
         kind: interaction.kind,
         ...createLocatorCandidateFields(id, interaction.locatorEvidence),
+        ...(interaction.navigationDestination === undefined ||
+        findMissingValueSegment(interaction.navigationDestination) !== undefined
+          ? {}
+          : { navigationDestination: interaction.navigationDestination }),
+        ...(interaction.externalDestination === undefined
+          ? {}
+          : { externalDestination: interaction.externalDestination }),
         preferredLocator,
         risks: [],
         route: route.path,
+        ...(interaction.stateTransition === undefined
+          ? {}
+          : { stateTransition: interaction.stateTransition }),
       });
       (interaction.revealedTexts ?? []).forEach(
         (revealedText, revealedIndex) => {
@@ -1052,8 +1529,9 @@ function createActions(
             confidence: 0.95,
             evidence: `Playwright observed "${revealedText.value}" appear after exercising ${interaction.name} on ${route.path}`,
             expectedResult: `${revealedText.value} becomes visible after ${interaction.name}`,
-            featureIds: matchFeatureIds(
-              `${interaction.name} ${revealedText.value}`,
+            featureIds: recordAssert(
+              revealedText.value,
+              matchFeatureIds(`${interaction.name} ${revealedText.value}`),
             ),
             id: assertId,
             kind: "assert",
@@ -1078,6 +1556,10 @@ function createActions(
         return;
       }
       const id = `click-link-${routeIndex + 1}-${index + 1}`;
+      const navigationDestination = readLocalLinkDestination(
+        link.href,
+        link.sameOrigin,
+      );
       actions.push({
         confidence: 0.9,
         evidence: `Playwright observed link to ${link.href}`,
@@ -1086,6 +1568,9 @@ function createActions(
         id,
         kind: "click",
         ...createLocatorCandidateFields(id, link.locatorEvidence),
+        ...(navigationDestination === undefined
+          ? {}
+          : { navigationDestination }),
         preferredLocator: {
           name: link.name,
           strategy: "role",
@@ -1116,7 +1601,157 @@ function createActions(
     });
   });
 
+  // The assert floor: winner-take-all tagging can leave a route-tagged
+  // feature with zero asserts even though a shared string's tokens overlap
+  // its wording — the run then fails on a scoring artifact, not missing
+  // evidence. Any feature still assertless after tagging keeps at least
+  // one: its best wording-matched assert gains the feature's id alongside
+  // the winners. Features nowhere route-tagged stay untouched, so redirect
+  // and tagging misses keep their honest route-shared verdicts.
+  for (const feature of featureInventory) {
+    if (
+      assertRecords.some((record) => record.featureIds.includes(feature.id))
+    ) {
+      continue;
+    }
+    const featureTokens = featureSemanticTokens(feature);
+    let best:
+      | { record: (typeof assertRecords)[number]; score: number }
+      | undefined;
+    for (const record of assertRecords) {
+      if (!record.floorFeatureIds.includes(feature.id)) continue;
+      const score = semanticTokens(record.evidenceText).filter((token) =>
+        featureTokens.includes(token),
+      ).length;
+      if (score > 0 && (best === undefined || score > best.score)) {
+        best = { record, score };
+      }
+    }
+    if (best !== undefined) {
+      best.record.featureIds.push(feature.id);
+    }
+  }
+
   return actions;
+}
+
+/**
+ * Passed declared proofs become first-class catalog actions: the same typed
+ * outcome Script Generation and Capture consume, so the assertion language
+ * is one across all three stages. A state-transition proof is an exercised
+ * click carrying its transition; a canvas-delta proof is an exercised click
+ * whose observed outcome is the canvas repaint; an app-state proof is an
+ * assert whose evidence lives in the app's persisted state, not the DOM.
+ * The two non-DOM kinds carry `declaredProofKind` so grounding accepts them
+ * without the DOM assert a canvas feature can never have (N157).
+ */
+function createDeclaredProofActions(
+  featureInventory: PreparedDemoFeature[],
+  declaredProofResults: ReadonlyMap<string, DeclaredProofResult>,
+): Array<Record<string, unknown>> {
+  return featureInventory.flatMap((feature): Array<Record<string, unknown>> => {
+    const proof = feature.expectedProof;
+    const proofResult =
+      proof === undefined ? undefined : declaredProofResults.get(feature.id);
+    if (
+      proof === undefined ||
+      proofResult === undefined ||
+      !proofResult.passed
+    ) {
+      return [];
+    }
+    const id = `declared-proof-${feature.id}`;
+    const route = feature.entryPaths[0] ?? "/";
+    if (proof.kind === "state-transition") {
+      return [
+        {
+          confidence: 1,
+          evidence: `Declared proof executed: ${proofResult.detail}`,
+          exercised: true,
+          expectedResult: proofResult.detail,
+          featureIds: [feature.id],
+          id,
+          kind: "click",
+          preferredLocator: {
+            name: proof.locator,
+            strategy: "role",
+            value: "button",
+          },
+          risks: [],
+          route,
+          stateTransition: {
+            control: proof.locator,
+            from: proof.from,
+            to: proof.to,
+          },
+        },
+      ];
+    }
+    if (proof.kind === "canvas-delta") {
+      return [
+        {
+          confidence: 1,
+          declaredProofKind: "canvas-delta",
+          evidence: `Declared proof executed: ${proofResult.detail}`,
+          exercised: true,
+          expectedResult: proofResult.detail,
+          featureIds: [feature.id],
+          id,
+          kind: "click",
+          preferredLocator: {
+            name: proof.locator,
+            strategy: "role",
+            value: "button",
+          },
+          risks: [],
+          route,
+        },
+      ];
+    }
+    if (proof.kind === "app-state") {
+      return [
+        {
+          confidence: 1,
+          declaredProofKind: "app-state",
+          evidence: `Declared proof executed: ${proofResult.detail}`,
+          expectedResult: `the app's persisted ${proof.source} state under ${JSON.stringify(
+            proof.key,
+          )} contains ${JSON.stringify(proof.contains)}`,
+          featureIds: [feature.id],
+          id,
+          kind: "assert",
+          preferredLocator: {
+            reason:
+              "The proof's evidence is the app's own persisted state, not an element; the page body is the filming surface.",
+            strategy: "css",
+            value: "body",
+          },
+          risks: [],
+          route,
+        },
+      ];
+    }
+    return [
+      {
+        confidence: 1,
+        evidence: `Declared proof executed: ${proofResult.detail}`,
+        expectedResult:
+          proof.kind === "visible-text"
+            ? `${proof.text} remains visible`
+            : `${proof.name} remains visible`,
+        featureIds: [feature.id],
+        id,
+        kind: "assert",
+        ...createLocatorCandidateFields(id, proofResult.locatorEvidence),
+        preferredLocator:
+          proof.kind === "visible-text"
+            ? { strategy: "text", value: proof.text }
+            : { name: proof.name, strategy: "role", value: "button" },
+        risks: [],
+        route,
+      },
+    ];
+  });
 }
 
 function matchActionFeatureIds(
@@ -1126,7 +1761,7 @@ function matchActionFeatureIds(
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
 ): string[] {
   const routeFeatureIds = route.featureIds ?? [];
-  if (isAuthWall(route)) {
+  if (isAuthWallRoute(route)) {
     return featureInventory
       .filter(
         (feature) =>
@@ -1199,31 +1834,473 @@ function createLocatorCandidateFields(
   };
 }
 
+type CatalogAction = ActionCatalog["actions"][number];
+
+function readActionsByFeatureId(
+  actionCatalog: ActionCatalog,
+): Map<string, CatalogAction[]> {
+  const actionsByFeatureId = new Map<string, CatalogAction[]>();
+  for (const action of actionCatalog.actions) {
+    for (const featureId of action.featureIds ?? []) {
+      const tagged = actionsByFeatureId.get(featureId);
+      if (tagged === undefined) {
+        actionsByFeatureId.set(featureId, [action]);
+      } else {
+        tagged.push(action);
+      }
+    }
+  }
+  return actionsByFeatureId;
+}
+
+/**
+ * Routes whose page renders route-distinct content. Interaction-revealed
+ * text is a route's content rendered on demand: for tool-shaped UIs it is
+ * the only content the route can ever show, so a route carrying a revealed
+ * assert is content-bearing for grounding and must never be classified
+ * hollow.
+ */
+function readContentRoutePaths(
+  distinctContentByRoute: ReadonlyMap<string, string[]>,
+  actionCatalog: ActionCatalog,
+): Set<string> {
+  const contentRoutePaths = new Set(
+    [...distinctContentByRoute]
+      .filter(([, content]) => content.length > 0)
+      .map(([path]) => path),
+  );
+  for (const action of actionCatalog.actions) {
+    if (action.revealedBy !== undefined) {
+      contentRoutePaths.add(action.route);
+    }
+  }
+  return contentRoutePaths;
+}
+
+/** Features blocked by an auth wall the maker never asked to film. */
+function readAuthWallFeatureIds(
+  appMap: AppMap,
+  featureInventory: PreparedDemoFeature[],
+  explicitAuthenticationFeatureIds: ReadonlySet<string>,
+): Set<string> {
+  const inventoryIds = new Set(featureInventory.map(({ id }) => id));
+  const authWallRoutes = new Set(appMap.loginOrAuthWalls);
+  return new Set(
+    appMap.discoveredRoutes
+      .filter((route) => authWallRoutes.has(route.path))
+      .flatMap((route) =>
+        (route.featureIds ?? []).filter(
+          (featureId) =>
+            inventoryIds.has(featureId) &&
+            !explicitAuthenticationFeatureIds.has(featureId),
+        ),
+      ),
+  );
+}
+
+function readAuthDegradedActionsByFeatureId(
+  actionCatalog: ActionCatalog,
+  explicitAuthenticationFeatureIds: ReadonlySet<string>,
+): Map<string, CatalogAction[]> {
+  const actionsByFeatureId = new Map<string, CatalogAction[]>();
+  for (const action of actionCatalog.actions) {
+    if (!isAuthDegradedClick(action)) continue;
+    for (const featureId of action.featureIds ?? []) {
+      if (explicitAuthenticationFeatureIds.has(featureId)) continue;
+      actionsByFeatureId.set(featureId, [
+        ...(actionsByFeatureId.get(featureId) ?? []),
+        action,
+      ]);
+    }
+  }
+  return actionsByFeatureId;
+}
+
+function readRequestedFeatureIds(
+  featureInventory: readonly PreparedDemoFeature[],
+  requestedFeatures: readonly string[],
+): Set<string> {
+  const requested = new Set(requestedFeatures.map(normalizeRequestedFeature));
+  return new Set(
+    featureInventory
+      .filter(
+        (feature) =>
+          feature.requestedFeature !== undefined ||
+          requested.has(normalizeRequestedFeature(feature.label)) ||
+          requested.has(normalizeRequestedFeature(feature.id)),
+      )
+      .map(({ id }) => id),
+  );
+}
+
+/**
+ * Grounds every prepared feature into one structured verdict (N106). This is
+ * the single grounding computation: the failure classifier and its steering
+ * prose derive from these enums, the validation report persists them, and
+ * the verify-features probe returns them — so what repair reads, what
+ * fingerprints hash, and what the gate enforced can never drift apart.
+ * Diagnosis precedence mirrors physical causality: an auth wall or an entry
+ * route that never loaded outranks content diagnoses, a stuck loading
+ * overlay outranks table and wording diagnoses, and wording is blamed only
+ * once the route demonstrably rendered content.
+ */
+function readFeatureVerdicts(input: {
+  actionCatalog: ActionCatalog;
+  actionsByFeatureId: ReadonlyMap<string, CatalogAction[]>;
+  authDegradedActionsByFeatureId: ReadonlyMap<string, CatalogAction[]>;
+  authWallFeatureIds: ReadonlySet<string>;
+  contentRoutePaths: ReadonlySet<string>;
+  declaredProofResults: ReadonlyMap<string, DeclaredProofResult>;
+  distinctContentByRoute: ReadonlyMap<string, string[]>;
+  emptyDataTablesByRoute: ReadonlyMap<
+    string,
+    { columnHeaders: number; skeletonRows: number }
+  >;
+  errorEvidenceByRoute: ReadonlyMap<string, string[]>;
+  featureInventory: PreparedDemoFeature[];
+  populatedTableRoutes: ReadonlySet<string>;
+  requestedFeatureIds: ReadonlySet<string>;
+  stuckLoadingRoutes: ReadonlySet<string>;
+  unreachableRoutes: UnreachableRoute[];
+}): FeatureVerdict[] {
+  // A zero-row data table is the feature's data surface rendering empty:
+  // for a requested feature it vetoes the route's other distinct strings
+  // (summary cards, tab labels), which render from separate queries in
+  // hollow and healthy apps alike. A populated table on the same route
+  // lifts the veto — the data surface demonstrably renders rows — and
+  // non-requested features keep the plain content rule so the default demo
+  // can still select around such routes.
+  const demonstrableRoute = (feature: PreparedDemoFeature, route: string) =>
+    input.contentRoutePaths.has(route) &&
+    (feature.requestedFeature === undefined ||
+      !input.emptyDataTablesByRoute.has(route) ||
+      input.populatedTableRoutes.has(route));
+  const failed = (
+    feature: PreparedDemoFeature,
+    failedBecause: NonNullable<FeatureVerdict["failedBecause"]>,
+    detail: string,
+    evidence: string[],
+  ): FeatureVerdict => ({
+    detail,
+    ...(evidence.length === 0 ? {} : { evidence: evidence.slice(0, 6) }),
+    failedBecause,
+    featureId: feature.id,
+    verdict: "failed",
+  });
+  return input.featureInventory.map((feature) => {
+    if (input.authWallFeatureIds.has(feature.id)) {
+      return failed(
+        feature,
+        "auth-wall",
+        "entry routes redirected to authentication the maker did not request footage of",
+        feature.entryPaths,
+      );
+    }
+    const tagged = input.actionsByFeatureId.get(feature.id) ?? [];
+    const authDegradedActions =
+      input.authDegradedActionsByFeatureId.get(feature.id) ?? [];
+    const authDegradedActionIds = new Set(
+      authDegradedActions.map(({ id }) => id),
+    );
+    // A click that left the app origin is non-navigable evidence (N158):
+    // like an auth-wall destination it never proves a feature, so it is
+    // excluded from the exercised evidence below.
+    const externalDegradedActions = tagged.filter(
+      (action) => action.externalDestination !== undefined,
+    );
+    const exercisedActions = tagged.filter(
+      (action) =>
+        action.exercised === true &&
+        !authDegradedActionIds.has(action.id) &&
+        action.externalDestination === undefined,
+    );
+    if (
+      input.requestedFeatureIds.has(feature.id) &&
+      authDegradedActions.some((action) => action.exercised === true) &&
+      exercisedActions.length === 0
+    ) {
+      const destinations = authDegradedActions.map(
+        (action) => `${action.id} → ${action.navigationDestination}`,
+      );
+      return failed(
+        feature,
+        "auth-wall",
+        `auth-degraded browser interaction${destinations.length === 1 ? "" : "s"}: ${destinations.join(", ")}`,
+        authDegradedActions.map(({ id }) => id),
+      );
+    }
+    // A declared proof's executed verdict subsumes the wording bridge
+    // (N107): "undo/redo" must pass its declared transition, not ride a
+    // nearby heading. An absent result is missing evidence, not failed
+    // evidence — the wording chain below still applies.
+    const proofResult =
+      feature.expectedProof === undefined
+        ? undefined
+        : input.declaredProofResults.get(feature.id);
+    if (proofResult !== undefined) {
+      if (proofResult.passed) {
+        return {
+          detail: proofResult.detail,
+          evidence: [`declared-proof-${feature.id}`],
+          featureId: feature.id,
+          groundedBy: "declared-proof",
+          verdict: "grounded",
+        } satisfies FeatureVerdict;
+      }
+      return failed(
+        feature,
+        "declared-proof-failed",
+        proofResult.detail,
+        feature.entryPaths,
+      );
+    }
+    const matchingAsserts = tagged.filter(
+      (action) =>
+        action.kind === "assert" &&
+        assertEvidenceMatchesFeature(action, feature),
+    );
+    // A requested feature left with only external-destination clicks has no
+    // in-app evidence at all: name the destination the clicks reached so
+    // repair steers at the entry route, not at wording. A passed declared
+    // proof or any in-app evidence above outranks this — the external click
+    // is degraded evidence, never a veto.
+    if (
+      input.requestedFeatureIds.has(feature.id) &&
+      externalDegradedActions.length > 0 &&
+      exercisedActions.length === 0 &&
+      matchingAsserts.length === 0
+    ) {
+      const destinations = externalDegradedActions.map(
+        (action) => `${action.id} → ${action.externalDestination}`,
+      );
+      return failed(
+        feature,
+        "external-destination",
+        `external-destination browser interaction${destinations.length === 1 ? "" : "s"}: ${destinations.join(", ")}`,
+        externalDegradedActions.map(({ id }) => id),
+      );
+    }
+    // A browser-exercised interaction proves the feature. Without one,
+    // verified assert evidence counts only when its visible text matches
+    // the feature, so read-only pages can ground while a wrong entry route
+    // that merely renders unrelated content cannot. Either way the feature
+    // needs a tagged route with route-distinct content: exercising a search
+    // box on a page that renders nothing demonstrates nothing.
+    if (
+      (exercisedActions.length > 0 || matchingAsserts.length > 0) &&
+      tagged.some((action) => demonstrableRoute(feature, action.route))
+    ) {
+      // A recorded control transition is the strongest exercised evidence:
+      // wording-free, so steering must never send it to wording alignment.
+      const transitionAction = exercisedActions.find(
+        (action) => action.stateTransition !== undefined,
+      );
+      const [decisiveAssert] = matchingAsserts;
+      const decisive =
+        exercisedActions.length > 0 ? exercisedActions : matchingAsserts;
+      const transition = transitionAction?.stateTransition;
+      return {
+        detail:
+          transition !== undefined
+            ? transition.control === transition.from
+              ? `${transition.from} → ${transition.to}`
+              : `${transition.control}: ${transition.from} → ${transition.to}`
+            : exercisedActions.length > 0
+              ? (exercisedActions[0]?.expectedResult ??
+                "exercised in the browser")
+              : decisiveAssert === undefined
+                ? "matched verified assert evidence"
+                : `matched on-screen text ${JSON.stringify(
+                    readAssertEvidenceText(decisiveAssert),
+                  )}`,
+        evidence: unique(
+          (transitionAction === undefined
+            ? decisive
+            : [transitionAction, ...decisive]
+          ).map(({ id }) => id),
+        ).slice(0, 4),
+        featureId: feature.id,
+        groundedBy:
+          transitionAction !== undefined
+            ? "state-transition"
+            : exercisedActions.length > 0
+              ? "interaction"
+              : "assert",
+        verdict: "grounded",
+      } satisfies FeatureVerdict;
+    }
+    const unreachable = input.unreachableRoutes.filter((route) =>
+      (route.featureIds ?? []).includes(feature.id),
+    );
+    if (unreachable.length > 0) {
+      return failed(
+        feature,
+        "app-unreachable",
+        unreachable
+          .slice(0, 2)
+          .map((route) => `${route.url}: ${route.error}`)
+          .join(" | "),
+        unreachable.map(({ url }) => url),
+      );
+    }
+    const taggedRoutes = unique(tagged.map((action) => action.route));
+    const routes = taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
+    const stuckRoutes = routes.filter((route) =>
+      input.stuckLoadingRoutes.has(route),
+    );
+    if (stuckRoutes.length > 0) {
+      return failed(
+        feature,
+        "no-assert-candidates",
+        "routes stayed behind a full-page loading overlay for the entire exploration",
+        stuckRoutes,
+      );
+    }
+    const contentRoutes = routes.filter((route) =>
+      input.contentRoutePaths.has(route),
+    );
+    const vetoTable = contentRoutes
+      .map((route) => input.emptyDataTablesByRoute.get(route))
+      .find((table) => table !== undefined);
+    if (
+      (exercisedActions.length > 0 || matchingAsserts.length > 0) &&
+      contentRoutes.length > 0 &&
+      vetoTable !== undefined
+    ) {
+      return failed(
+        feature,
+        "skeleton-rows",
+        vetoTable.skeletonRows > 0
+          ? `${vetoTable.skeletonRows} textless skeleton rows mounted under ${vetoTable.columnHeaders} column headers — the data query never resolved`
+          : `a zero-row data table rendered ${vetoTable.columnHeaders} column headers and no data rows`,
+        contentRoutes,
+      );
+    }
+    if (contentRoutes.length > 0) {
+      const featureTokens = featureSemanticTokens(feature);
+      let best:
+        | { action: CatalogAction; score: number; text: string }
+        | undefined;
+      for (const action of input.actionCatalog.actions) {
+        if (action.kind !== "assert" || !routes.includes(action.route)) {
+          continue;
+        }
+        const text = readAssertEvidenceText(action);
+        const score = semanticTokens(text).filter((token) =>
+          featureTokens.includes(token),
+        ).length;
+        if (score > 0 && (best === undefined || score > best.score)) {
+          best = { action, score, text };
+        }
+      }
+      if (best !== undefined) {
+        const winners = (best.action.featureIds ?? []).filter(
+          (featureId) => featureId !== feature.id,
+        );
+        return failed(
+          feature,
+          "route-shared-with-winners",
+          winners.length > 0
+            ? `best on-screen match ${JSON.stringify(best.text)} (score ${best.score}) was awarded to ${winners.join(", ")}`
+            : `best on-screen match ${JSON.stringify(best.text)} (score ${best.score}) was observed on a route not tagged to this feature`,
+          [best.action.id],
+        );
+      }
+      const shownContent = unique(
+        contentRoutes.flatMap(
+          (route) => input.distinctContentByRoute.get(route) ?? [],
+        ),
+      ).slice(0, 4);
+      return failed(
+        feature,
+        "token-mismatch",
+        `no harvested text shares a semantic token with the feature wording (best score 0); on-screen content: ${shownContent.join(", ")}`,
+        shownContent,
+      );
+    }
+    const errorEvidence = unique(
+      routes.flatMap((route) => input.errorEvidenceByRoute.get(route) ?? []),
+    ).slice(0, 6);
+    if (errorEvidence.length > 0) {
+      return failed(
+        feature,
+        "error-state-route",
+        errorEvidence.join(" | "),
+        routes,
+      );
+    }
+    return failed(
+      feature,
+      "no-assert-candidates",
+      "routes rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data",
+      routes,
+    );
+  });
+}
+
 function createExplorationValidationReport(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
+  dataStrategy?: PreparationManifest["dataStrategy"];
+  declaredProofResults?: ReadonlyMap<string, DeclaredProofResult>;
   distinctContentByRoute: ReadonlyMap<string, string[]>;
-  emptyDataTablesByRoute?: ReadonlyMap<string, number>;
+  emptyDataTablesByRoute?: ReadonlyMap<
+    string,
+    { columnHeaders: number; skeletonRows: number }
+  >;
   errorEvidenceByRoute?: ReadonlyMap<string, string[]>;
   explicitAuthenticationFeatureIds: ReadonlySet<string>;
+  failedScriptResponses?: Array<{ status: number; url: string }>;
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
   populatedTableRoutes?: ReadonlySet<string>;
+  requestedFeatures: string[];
   stuckLoadingRoutes?: ReadonlySet<string>;
   unreachableRoutes: UnreachableRoute[];
 }): ValidationReport {
-  const groundingFailure = readExplorationFailure(
-    input.appMap,
-    input.featureInventory,
-    input.actionCatalog,
-    input.explicitAuthenticationFeatureIds,
-    input.unreachableRoutes,
-    input.emptyDataTablesByRoute ?? new Map(),
+  const actionsByFeatureId = readActionsByFeatureId(input.actionCatalog);
+  const contentRoutePaths = readContentRoutePaths(
     input.distinctContentByRoute,
-    input.populatedTableRoutes ?? new Set(),
-    input.stuckLoadingRoutes ?? new Set(),
-    input.errorEvidenceByRoute ?? new Map(),
+    input.actionCatalog,
   );
+  const featureVerdicts = readFeatureVerdicts({
+    actionCatalog: input.actionCatalog,
+    actionsByFeatureId,
+    authDegradedActionsByFeatureId: readAuthDegradedActionsByFeatureId(
+      input.actionCatalog,
+      input.explicitAuthenticationFeatureIds,
+    ),
+    declaredProofResults: input.declaredProofResults ?? new Map(),
+    authWallFeatureIds: readAuthWallFeatureIds(
+      input.appMap,
+      input.featureInventory,
+      input.explicitAuthenticationFeatureIds,
+    ),
+    contentRoutePaths,
+    distinctContentByRoute: input.distinctContentByRoute,
+    emptyDataTablesByRoute: input.emptyDataTablesByRoute ?? new Map(),
+    errorEvidenceByRoute: input.errorEvidenceByRoute ?? new Map(),
+    featureInventory: input.featureInventory,
+    populatedTableRoutes: input.populatedTableRoutes ?? new Set(),
+    requestedFeatureIds: readRequestedFeatureIds(
+      input.featureInventory,
+      input.requestedFeatures,
+    ),
+    stuckLoadingRoutes: input.stuckLoadingRoutes ?? new Set(),
+    unreachableRoutes: input.unreachableRoutes,
+  });
+  const groundingFailure = readExplorationFailure({
+    actionCatalog: input.actionCatalog,
+    actionsByFeatureId,
+    appMap: input.appMap,
+    contentRoutePaths,
+    distinctContentByRoute: input.distinctContentByRoute,
+    emptyDataTablesByRoute: input.emptyDataTablesByRoute ?? new Map(),
+    featureInventory: input.featureInventory,
+    featureVerdicts,
+    stuckLoadingRoutes: input.stuckLoadingRoutes ?? new Set(),
+    unreachableRoutes: input.unreachableRoutes,
+  });
   // Load-breaking runtime evidence outranks grounding counts: a route that
   // crashes before rendering cannot ground anything, and only the dependency
   // repair path can fix it.
@@ -1231,13 +2308,44 @@ function createExplorationValidationReport(input: {
     groundingFailure === undefined
       ? undefined
       : readMissingModule(input.appMap.pageErrors);
+  // N128 (twenty, 2026-08-13): when the app's own server answers 5xx on a
+  // script it was asked to serve, every route renders the error overlay and
+  // the hollow page reads as "empty/unmeaningful app state" — steering
+  // repairs at the data layer while the fault is module serving. The serve
+  // failure outranks any page-shape interpretation; a named missing module
+  // still outranks it because it identifies the cause, not the delivery.
+  const failedScriptResponse =
+    groundingFailure === undefined || missingModule !== undefined
+      ? undefined
+      : input.failedScriptResponses?.[0];
+  // N139 (ghostfolio, 2026-08-14): a localized document base composed with
+  // the prepared serve path, requesting every stylesheet and Angular chunk
+  // below /en/en/. Those same-origin 404s leave a blank document and are
+  // serve/base-path evidence, not an empty data state.
+  const failedAsset404Storm =
+    groundingFailure === undefined || missingModule !== undefined
+      ? undefined
+      : readSameOriginAsset404Storm(
+          input.appMap.baseUrl,
+          input.appMap.consoleErrors,
+        );
   const failure =
-    missingModule === undefined
-      ? groundingFailure
-      : {
+    missingModule !== undefined
+      ? {
           classification: "missing dependency",
           message: `App routes crash before rendering: Module not found: Can't resolve '${missingModule}'. Install or declare the missing package for the selected app; feature grounding cannot proceed until routes render.`,
-        };
+        }
+      : failedScriptResponse !== undefined
+        ? {
+            classification: "app server error",
+            message: `App server error: the app's own script ${failedScriptResponse.url} answered HTTP ${failedScriptResponse.status}, so routes rendered the server's error output instead of the app. Fix the module compile/serve failure in the prepared runtime; the page content is a symptom, not the app state.`,
+          }
+        : failedAsset404Storm !== undefined
+          ? {
+              classification: "app server error",
+              message: `App server error: ${failedAsset404Storm.paths.length} of the document's own stylesheet/script assets returned HTTP 404 under ${failedAsset404Storm.pathPrefix} (${failedAsset404Storm.paths.slice(0, 3).join(", ")}). Fix the document base and prepared serve/base-path configuration so entry assets resolve from the app origin; the blank page is a delivery symptom, not an empty app state.`,
+            }
+          : groundingFailure;
   const actionableConsoleErrors = input.appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
   );
@@ -1271,6 +2379,7 @@ function createExplorationValidationReport(input: {
     failure.failingFeatureIds.length === 0
       ? {}
       : { failingFeatureIds: unique(failure.failingFeatureIds).sort() }),
+    ...(featureVerdicts.length === 0 ? {} : { featureVerdicts }),
     logsSummary:
       failure?.message ??
       `Playwright explored ${input.appMap.discoveredRoutes.length} route(s) in the submitted-code sandbox.`,
@@ -1286,6 +2395,14 @@ function createExplorationValidationReport(input: {
       failure === undefined
         ? []
         : [
+            ...readServiceWorkerBanHint([
+              ...input.appMap.pageErrors,
+              ...input.appMap.consoleErrors,
+            ]),
+            ...readClientStubSchemaGapHint(
+              [...input.appMap.pageErrors, ...input.appMap.consoleErrors],
+              input.dataStrategy,
+            ),
             ...(input.appMap.pageErrors.length === 0
               ? []
               : [
@@ -1308,21 +2425,41 @@ function createExplorationValidationReport(input: {
  * in the report as evidence. Exploration fails only when a feature cannot be
  * demonstrated — its entry route is unreachable, it has no grounded evidence,
  * or authentication blocks it without the maker requesting auth footage.
+ * Per-feature diagnoses are read from the verdict ledger, so the prose
+ * steering and the persisted enums can never disagree.
  */
-function readExplorationFailure(
-  appMap: AppMap,
-  featureInventory: PreparedDemoFeature[],
-  actionCatalog: ActionCatalog,
-  explicitAuthenticationFeatureIds: ReadonlySet<string>,
-  unreachableRoutes: UnreachableRoute[],
-  emptyDataTablesByRoute: ReadonlyMap<string, number>,
-  distinctContentByRoute: ReadonlyMap<string, string[]>,
-  populatedTableRoutes: ReadonlySet<string>,
-  stuckLoadingRoutes: ReadonlySet<string>,
-  errorEvidenceByRoute: ReadonlyMap<string, string[]> = new Map(),
-):
+function readExplorationFailure(input: {
+  actionCatalog: ActionCatalog;
+  actionsByFeatureId: ReadonlyMap<string, CatalogAction[]>;
+  appMap: AppMap;
+  contentRoutePaths: ReadonlySet<string>;
+  distinctContentByRoute: ReadonlyMap<string, string[]>;
+  emptyDataTablesByRoute: ReadonlyMap<
+    string,
+    { columnHeaders: number; skeletonRows: number }
+  >;
+  featureInventory: PreparedDemoFeature[];
+  featureVerdicts: FeatureVerdict[];
+  stuckLoadingRoutes: ReadonlySet<string>;
+  unreachableRoutes: UnreachableRoute[];
+}):
   | { classification: string; failingFeatureIds?: string[]; message: string }
   | undefined {
+  const {
+    actionCatalog,
+    actionsByFeatureId,
+    appMap,
+    contentRoutePaths,
+    distinctContentByRoute,
+    emptyDataTablesByRoute,
+    featureInventory,
+    featureVerdicts,
+    stuckLoadingRoutes,
+    unreachableRoutes,
+  } = input;
+  const verdictByFeatureId = new Map(
+    featureVerdicts.map((verdict) => [verdict.featureId, verdict]),
+  );
   const unreachableFailure = (features: PreparedDemoFeature[]) => {
     const featureIds = new Set(features.map(({ id }) => id));
     const unreachable = unreachableRoutes.filter((route) =>
@@ -1345,58 +2482,72 @@ function readExplorationFailure(
         .join(" | ")}.`,
     };
   };
+  // Same-origin 404s alongside chrome-only routes are browser evidence that
+  // the serving arrangement, not the data, is wrong: an SPA served at a base
+  // path it does not expect resolves its own links and session endpoints to
+  // 404 (directus, 2026-08-09). Steering only — dev servers also 404 benign
+  // probes, so this never gates.
+  const sameOrigin404Count = [
+    ...appMap.pageErrors.filter((error) => /\b404\b/.test(error)),
+    ...appMap.consoleErrors.filter((error) =>
+      /failed resource http:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0)\S* \(HTTP 404\)/.test(
+        error,
+      ),
+    ),
+  ].length;
+  const wrongBaseSteering =
+    sameOrigin404Count === 0
+      ? ""
+      : ` ${sameOrigin404Count} same-origin request(s) returned 404 during exploration — when the app's own links or session endpoints 404, the app is likely served at a base path or API base it does not expect; align the prepared serving arrangement (base path, API base URL) with how the app builds its own URLs before touching fixtures.`;
   const chromeOnlyExplanation = (tail: string) =>
-    `rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data${tail}`;
-  const emptyTableEvidence = (routePaths: readonly string[]) => {
-    const emptyTableColumns = routePaths
+    `rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data${tail}${wrongBaseSteering}`;
+  const emptyTableEvidence = (
+    routePaths: readonly string[],
+    feature?: PreparedDemoFeature,
+  ) => {
+    const emptyTable = routePaths
       .map((route) => emptyDataTablesByRoute.get(route))
-      .find((columns) => columns !== undefined);
+      .find((table) => table !== undefined);
+    if (emptyTable === undefined) {
+      return "";
+    }
+    // Rows that mounted with no cell text are a loading state whose query
+    // never resolved (midday, 2026-08-09) — a diagnosis the browser CAN
+    // make, unlike the empty-result/zero-height ambiguity below. The
+    // declared data seam turns the steering from a search into an address.
+    if (emptyTable.skeletonRows > 0) {
+      const seam = feature?.dataSeams?.[0];
+      const seamSteering =
+        seam === undefined
+          ? "Return the fixture directly, in code, from the exact function the UI calls for this data — do not gate on database or transport availability."
+          : `The declared data seam is ${seam.functionName} in ${seam.path}, backed by ${seam.fixtureModule} — the fixture never reaches the UI through it. Return the fixture in code from ${seam.functionName}; do not gate on database or transport availability.`;
+      return ` A data table (${emptyTable.columnHeaders} column headers) mounted ${emptyTable.skeletonRows} textless skeleton rows on these routes: the data query never resolved, so the table is stuck in its loading state. ${seamSteering}`;
+    }
     // Observation, not diagnosis: this gate cannot tell an empty query
     // result from a virtualized body that measured zero height (midday,
     // 2026-08-07 matrix), so it names both causes instead of asserting one.
-    return emptyTableColumns === undefined
-      ? ""
-      : ` An empty data table (${emptyTableColumns} column headers, zero data rows) rendered on these routes. Two causes produce this: the data query resolved empty (fixture shape or default filters exclude the fixture rows), or a virtualized table body measured zero height and rendered no rows despite data being present — identify which before repairing, and prefer fixture and data-path fixes over changing product components.`;
+    return ` An empty data table (${emptyTable.columnHeaders} column headers, zero data rows) rendered on these routes. Two causes produce this: the data query resolved empty (fixture shape or default filters exclude the fixture rows), or a virtualized table body measured zero height and rendered no rows despite data being present — identify which before repairing, and prefer fixture and data-path fixes over changing product components.`;
   };
-  const actionsByFeatureId = new Map<
-    string,
-    Array<ActionCatalog["actions"][number]>
-  >();
-  for (const action of actionCatalog.actions) {
-    for (const featureId of action.featureIds ?? []) {
-      const tagged = actionsByFeatureId.get(featureId);
-      if (tagged === undefined) {
-        actionsByFeatureId.set(featureId, [action]);
-      } else {
-        tagged.push(action);
-      }
-    }
-  }
-  const featuresById = new Map(
-    featureInventory.map((feature) => [feature.id, feature]),
+  const authBarrierFeatures = featureInventory.filter(
+    (feature) =>
+      verdictByFeatureId.get(feature.id)?.failedBecause === "auth-wall",
   );
-  const authWallRoutes = new Set(appMap.loginOrAuthWalls);
-  const authBarrierFeatureIds = new Set(
-    appMap.discoveredRoutes
-      .filter((route) => authWallRoutes.has(route.path))
-      .flatMap((route) =>
-        (route.featureIds ?? []).filter((featureId) => {
-          const feature = featuresById.get(featureId);
-          return (
-            feature !== undefined &&
-            !explicitAuthenticationFeatureIds.has(feature.id)
-          );
-        }),
-      ),
-  );
-  if (authBarrierFeatureIds.size > 0) {
-    const blockedFeatures = featureInventory
-      .filter((feature) => authBarrierFeatureIds.has(feature.id))
-      .map((feature) => feature.requestedFeature ?? feature.label);
+  if (authBarrierFeatures.length > 0) {
+    const blockedFeatures = authBarrierFeatures.map(
+      (feature) => feature.requestedFeature ?? feature.label,
+    );
+    const interactionEvidence = authBarrierFeatures
+      .map((feature) => {
+        const detail = verdictByFeatureId.get(feature.id)?.detail;
+        return detail?.startsWith("auth-degraded")
+          ? `${feature.id}: ${detail}`
+          : undefined;
+      })
+      .filter((detail) => detail !== undefined);
     return {
       classification: "feature auth barrier",
-      failingFeatureIds: [...authBarrierFeatureIds],
-      message: `Prepared feature routes redirected to authentication for: ${blockedFeatures.join(", ")}. Seed an authenticated demo session through the repo's demo gate so these routes render signed in, or reselect featureInventory entries onto routes outside authentication.`,
+      failingFeatureIds: authBarrierFeatures.map(({ id }) => id),
+      message: `Prepared feature routes or interactions reached authentication for: ${blockedFeatures.join(", ")}.${interactionEvidence.length === 0 ? "" : ` Auth-degraded evidence: ${interactionEvidence.join("; ")}.`} Seed an authenticated demo session through the repo's demo gate so these routes render signed in, or reselect featureInventory entries onto routes outside authentication.`,
     };
   }
   // Routes that serve their document shell but yield only structural actions
@@ -1414,20 +2565,6 @@ function readExplorationFailure(
       classification: "empty/unmeaningful app state",
       message: `Explored ${appMap.discoveredRoutes.length} route(s) that served their document shell but rendered no visible content — no headings, text, links, or controls appeared within the content wait. The prepared runtime's data fixtures or demo gating are blocking rendering; repair the prepared app so its routes render their content.`,
     };
-  }
-  const contentRoutePaths = new Set(
-    [...distinctContentByRoute]
-      .filter(([, content]) => content.length > 0)
-      .map(([path]) => path),
-  );
-  // Interaction-revealed text is a route's content rendered on demand: for
-  // tool-shaped UIs it is the only content the route can ever show, so a
-  // route carrying a revealed assert is content-bearing for grounding and
-  // must never be classified hollow.
-  for (const action of actionCatalog.actions) {
-    if (action.revealedBy !== undefined) {
-      contentRoutePaths.add(action.route);
-    }
   }
   // When no route anywhere renders route-distinct content, grounding failures
   // are a data-rendering defect, not a feature-selection problem: exercised
@@ -1453,39 +2590,10 @@ function readExplorationFailure(
       )}`,
     };
   };
-  // A zero-row data table is the feature's data surface rendering empty:
-  // for a requested feature it vetoes the route's other distinct strings
-  // (summary cards, tab labels), which render from separate queries in
-  // hollow and healthy apps alike. A populated table on the same route
-  // lifts the veto — the data surface demonstrably renders rows — and
-  // non-requested features keep the plain content rule so the default demo
-  // can still select around such routes.
-  const demonstrableRoute = (feature: PreparedDemoFeature, route: string) =>
-    contentRoutePaths.has(route) &&
-    (feature.requestedFeature === undefined ||
-      !emptyDataTablesByRoute.has(route) ||
-      populatedTableRoutes.has(route));
   const groundedFeatureIds = new Set(
-    featureInventory
-      .filter((feature) => {
-        const actions = actionsByFeatureId.get(feature.id) ?? [];
-        // A browser-exercised interaction proves the feature. Without one,
-        // verified assert evidence counts only when its visible text matches
-        // the feature, so read-only pages can ground while a wrong entry
-        // route that merely renders unrelated content cannot. Either way the
-        // feature needs a tagged route with route-distinct content: exercising
-        // a search box on a page that renders nothing demonstrates nothing.
-        return (
-          (actions.some((action) => action.exercised === true) ||
-            actions.some(
-              (action) =>
-                action.kind === "assert" &&
-                assertEvidenceMatchesFeature(action, feature),
-            )) &&
-          actions.some((action) => demonstrableRoute(feature, action.route))
-        );
-      })
-      .map((feature) => feature.id),
+    featureVerdicts
+      .filter(({ verdict }) => verdict === "grounded")
+      .map(({ featureId }) => featureId),
   );
   // Features forced onto identical tagged evidence — exactly one assert and
   // one interaction each, all shared — can never both satisfy the FlowSpec
@@ -1539,22 +2647,30 @@ function readExplorationFailure(
       message: indistinguishableMessage(requestedCollision),
     };
   }
-  if (missingRequestedFeatures.length > 0) {
-    const unreachable = unreachableFailure(missingRequestedFeatures);
-    if (unreachable !== undefined) {
-      return unreachable;
+  // One sentence per ungrounded feature, keyed off its ledger enum: naming
+  // what the feature's routes actually showed turns "no evidence" into
+  // actionable steering, and deriving the branch from the persisted enum
+  // guarantees the prose can never contradict the ledger.
+  const describeUngroundedFeature = (
+    feature: PreparedDemoFeature,
+  ): { sentence: string; verdict: FeatureVerdict | undefined } => {
+    const verdict = verdictByFeatureId.get(feature.id);
+    const tagged = actionsByFeatureId.get(feature.id) ?? [];
+    const taggedRoutes = unique(tagged.map((action) => action.route));
+    const routes = taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
+    const featureName =
+      feature.requestedFeature === undefined
+        ? `Prepared feature "${feature.label}"`
+        : `Requested feature "${feature.requestedFeature}"`;
+    if (
+      routes.length === 0 ||
+      verdict === undefined ||
+      verdict.verdict === "grounded"
+    ) {
+      return { sentence: "", verdict };
     }
-    // Naming what the feature's routes actually showed turns "no evidence"
-    // into actionable steering: a chrome-only route means the data path is
-    // broken, which the repair agent cannot see from the feature name alone.
-    const featureEvidence = missingRequestedFeatures.map((feature) => {
-      const tagged = actionsByFeatureId.get(feature.id) ?? [];
-      const taggedRoutes = unique(tagged.map((action) => action.route));
-      const routes =
-        taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
-      if (routes.length === 0) {
-        return { sentence: "", vetoedByEmptyTable: false };
-      }
+    const routeList = routes.slice(0, 4).join(", ");
+    if (verdict.failedBecause === "no-assert-candidates") {
       const stuckRoutes = routes.filter((route) =>
         stuckLoadingRoutes.has(route),
       );
@@ -1564,84 +2680,95 @@ function readExplorationFailure(
       // (cyberchef burned five on wording alignment, 2026-08-08).
       if (stuckRoutes.length > 0) {
         return {
-          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${stuckRoutes
+          sentence: ` ${featureName} is tagged to routes ${stuckRoutes
             .slice(0, 4)
             .join(
               ", ",
             )}, which stayed behind a full-page loading overlay for the entire exploration — the app never finished initializing in the demo runtime, so no interaction or assert could be exercised. Repair the prepared app's startup path (look for silently pending requests, workers that never come up, or gated initialization that never completes); featureInventory wording cannot help.`,
-          vetoedByEmptyTable: false,
+          verdict,
         };
       }
-      const contentRoutes = routes.filter((route) =>
-        contentRoutePaths.has(route),
-      );
-      // Matching evidence on a content-bearing route means the only blocker
-      // was the zero-row veto: steer the repair at the fixture shape, not at
-      // wording or the whole data path.
-      const hasMatchingEvidence =
-        tagged.some((action) => action.exercised === true) ||
-        tagged.some(
-          (action) =>
-            action.kind === "assert" &&
-            assertEvidenceMatchesFeature(action, feature),
-        );
-      if (hasMatchingEvidence && contentRoutes.length > 0) {
-        const shownContent = unique(
-          contentRoutes.flatMap(
-            (route) => distinctContentByRoute.get(route) ?? [],
-          ),
-        ).slice(0, 4);
-        return {
-          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${routes
-            .slice(0, 4)
-            .join(
-              ", ",
-            )}, which rendered distinct content (${shownContent.join(", ")}) but a zero-row data table as the feature's data surface — an empty table cannot demonstrate the feature.${emptyTableEvidence(
-            contentRoutes,
-          )}`,
-          vetoedByEmptyTable: true,
-        };
-      }
-      // A content-bearing route means rendering is fine and the lexical
-      // evidence match failed: without naming what the route showed, the
-      // repair agent is steered at the data path it cannot improve.
-      if (contentRoutes.length > 0) {
-        const shownContent = unique(
-          contentRoutes.flatMap(
-            (route) => distinctContentByRoute.get(route) ?? [],
-          ),
-        ).slice(0, 4);
-        return {
-          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${routes
-            .slice(0, 4)
-            .join(", ")}, which rendered distinct content (${shownContent.join(
-            ", ",
-          )}) — but no exercised interaction or visible-text assert matched the feature's wording; align the featureInventory wording with the on-screen labels or point entryPaths at the feature's own UI.`,
-          vetoedByEmptyTable: false,
-        };
-      }
-      // Error-state evidence names the actual breakage (toast text, the
-      // uncaught exception, the not-found verdict); with it, the repair
-      // agent fixes the contract instead of guessing at wording.
-      const errorEvidence = unique(
-        routes.flatMap((route) => errorEvidenceByRoute.get(route) ?? []),
-      ).slice(0, 6);
+    }
+    // Only-external evidence means the entry route is wrong or the feature
+    // never renders in-app: naming the destination the clicks reached keeps
+    // repair off wording alignment (N158).
+    if (verdict.failedBecause === "external-destination") {
       return {
-        errorState: errorEvidence.length > 0,
-        sentence: ` Requested feature "${feature.requestedFeature}" routes ${routes
-          .slice(0, 4)
-          .join(", ")} ${chromeOnlyExplanation(
-          `; repair the prepared app's data path for these routes.${emptyTableEvidence(
-            routes,
-          )}`,
-        )}${
-          errorEvidence.length === 0
-            ? ""
-            : ` Error-state evidence on these routes: ${errorEvidence.join(" | ")}.`
-        }`,
-        vetoedByEmptyTable: false,
+        sentence: ` ${featureName} has only browser evidence that leaves the app (${verdict.detail ?? "external-destination clicks"}) — an off-origin destination can never prove a feature. Point entryPaths at the in-app surface that shows this feature, or prepare in-app state so the feature renders locally.`,
+        verdict,
       };
-    });
+    }
+    // A failed declared proof already names the exact observed gap; the
+    // repair either fixes the app state so the declared outcome is real or
+    // corrects the declaration — wording alignment is never the answer.
+    if (verdict.failedBecause === "declared-proof-failed") {
+      return {
+        sentence: ` ${featureName} failed its declared proof on routes ${routeList}: ${verdict.detail ?? "the declared outcome was not observed"}. Fix the prepared app state so the declared outcome really happens, or correct the expectedProof declaration to what the feature actually shows.`,
+        verdict,
+      };
+    }
+    const contentRoutes = routes.filter((route) =>
+      contentRoutePaths.has(route),
+    );
+    const shownContent = unique(
+      contentRoutes.flatMap((route) => distinctContentByRoute.get(route) ?? []),
+    ).slice(0, 4);
+    // Matching evidence on a content-bearing route means the only blocker
+    // was the zero-row veto: steer the repair at the fixture shape, not at
+    // wording or the whole data path.
+    if (verdict.failedBecause === "skeleton-rows") {
+      return {
+        sentence: ` ${featureName} is tagged to routes ${routeList}, which rendered distinct content (${shownContent.join(", ")}) but a zero-row data table as the feature's data surface — an empty table cannot demonstrate the feature.${emptyTableEvidence(
+          contentRoutes,
+          feature,
+        )}`,
+        verdict,
+      };
+    }
+    // The route rendered matching text, but evidence scoring awarded every
+    // matching assert elsewhere: wording alignment cannot fix a zero-sum
+    // split — only an unclaimed entry route or a feature merge can.
+    if (verdict.failedBecause === "route-shared-with-winners") {
+      return {
+        sentence: ` ${featureName} is tagged to routes ${routeList}, whose ${verdict.detail ?? "best-matching on-screen text was awarded to another feature sharing the route"} — give this feature an entry route no other feature claims, or merge it with the winning feature in the featureInventory.`,
+        verdict,
+      };
+    }
+    // A content-bearing route means rendering is fine and the lexical
+    // evidence match failed: without naming what the route showed, the
+    // repair agent is steered at the data path it cannot improve.
+    if (verdict.failedBecause === "token-mismatch") {
+      return {
+        sentence: ` ${featureName} is tagged to routes ${routeList}, which rendered distinct content (${shownContent.join(", ")}) — but no exercised interaction or visible-text assert matched the feature's wording; align the featureInventory wording with the on-screen labels or point entryPaths at the feature's own UI.`,
+        verdict,
+      };
+    }
+    // Error-state evidence names the actual breakage (toast text, the
+    // uncaught exception, the not-found verdict); with it, the repair
+    // agent fixes the contract instead of guessing at wording.
+    return {
+      sentence: ` ${featureName} routes ${routeList} ${chromeOnlyExplanation(
+        `; repair the prepared app's data path for these routes.${emptyTableEvidence(
+          routes,
+          feature,
+        )}`,
+      )}${
+        verdict.failedBecause === "error-state-route" &&
+        verdict.detail !== undefined
+          ? ` Error-state evidence on these routes: ${verdict.detail}. The runtime is broken on these routes; featureInventory wording cannot help.`
+          : ""
+      }`,
+      verdict,
+    };
+  };
+  if (missingRequestedFeatures.length > 0) {
+    const unreachable = unreachableFailure(missingRequestedFeatures);
+    if (unreachable !== undefined) {
+      return unreachable;
+    }
+    const featureEvidence = missingRequestedFeatures.map(
+      describeUngroundedFeature,
+    );
     const routeEvidence = featureEvidence
       .map(({ sentence }) => sentence)
       .join("");
@@ -1651,14 +2778,16 @@ function readExplorationFailure(
     const missingRequestedIds = missingRequestedFeatures.map(({ id }) => id);
     return (
       hollowFailure(missingRequestedFeatures) ??
-      (featureEvidence.every(({ vetoedByEmptyTable }) => vetoedByEmptyTable)
+      (featureEvidence.every(
+        ({ verdict }) => verdict?.failedBecause === "skeleton-rows",
+      )
         ? {
             classification: "empty/unmeaningful app state",
             failingFeatureIds: missingRequestedIds,
             message: `Every requested feature's data surface rendered as a zero-row table: ${requestedFeatureNames}.${routeEvidence}`,
           }
         : featureEvidence.every(
-              (entry) => "errorState" in entry && entry.errorState === true,
+              ({ verdict }) => verdict?.failedBecause === "error-state-route",
             )
           ? {
               // Every missing feature failed on an error-state route: the
@@ -1697,8 +2826,21 @@ function readExplorationFailure(
         return undefined;
       }
       const tagged = actionsByFeatureId.get(feature.id) ?? [];
+      // A passed non-DOM proof (N157) is complete flow evidence by itself:
+      // the feature's outcome lives in app state or canvas pixels, so no
+      // preparation repair could ever render the missing DOM assert.
+      if (tagged.some((action) => action.declaredProofKind !== undefined)) {
+        return undefined;
+      }
       const missing = [
-        ...(tagged.some((action) => action.kind !== "assert")
+        // An external-destination click is non-navigable evidence (N158):
+        // flow planning will never count it, so it cannot satisfy the
+        // interaction half here either.
+        ...(tagged.some(
+          (action) =>
+            action.kind !== "assert" &&
+            action.externalDestination === undefined,
+        )
           ? []
           : ["an interaction"]),
         ...(tagged.some((action) => action.kind === "assert")
@@ -1792,11 +2934,29 @@ function readExplorationFailure(
       if (unreachable !== undefined) {
         return unreachable;
       }
+      // Wording-alignment and route-claim steering extend to default-demo
+      // features (N106): a generic "reselect" hint alone leaves the repair
+      // agent guessing which feature's wording missed. Other enums keep the
+      // reselect steering — their sentences would point at data-path repairs
+      // that reselection is meant to avoid.
+      const steerableSentences = ungroundedFeatures
+        .filter((feature) => {
+          const failedBecause = verdictByFeatureId.get(
+            feature.id,
+          )?.failedBecause;
+          return (
+            failedBecause === "token-mismatch" ||
+            failedBecause === "route-shared-with-winners"
+          );
+        })
+        .slice(0, 4)
+        .map((feature) => describeUngroundedFeature(feature).sentence)
+        .join("");
       return (
         hollowFailure(ungroundedFeatures) ?? {
           classification: "prepared feature not observable",
           failingFeatureIds: ungroundedFeatures.map(({ id }) => id),
-          message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.${formatGroundedRoutes(actionCatalog, contentRoutePaths)}`,
+          message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.${formatGroundedRoutes(actionCatalog, contentRoutePaths)}${steerableSentences}`,
         }
       );
     }
@@ -1814,15 +2974,18 @@ function readExplorationFailure(
   return undefined;
 }
 
+/** The visible text an assert proves: locator value for text asserts, accessible name otherwise. */
+function readAssertEvidenceText(action: CatalogAction): string {
+  const locator = action.preferredLocator;
+  return (locator.strategy === "text" ? locator.value : locator.name) ?? "";
+}
+
 function assertEvidenceMatchesFeature(
-  action: ActionCatalog["actions"][number],
+  action: CatalogAction,
   feature: PreparedDemoFeature,
 ): boolean {
-  const locator = action.preferredLocator;
-  const evidenceText =
-    (locator.strategy === "text" ? locator.value : locator.name) ?? "";
   const featureTokens = featureSemanticTokens(feature);
-  return semanticTokens(evidenceText).some((token) =>
+  return semanticTokens(readAssertEvidenceText(action)).some((token) =>
     featureTokens.includes(token),
   );
 }
@@ -1854,6 +3017,66 @@ function formatGroundedRoutes(
   return ` Browser evidence was grounded on: ${routes.slice(0, 6).join(", ")}. Reselect featureInventory entries onto these routes (update entryPaths and sourcePaths).`;
 }
 
+/**
+ * Matches any browser's or mocking library's report that a Service Worker
+ * could not register (Chrome's "Failed to register a ServiceWorker", MSW's
+ * "[MSW] Failed to register the Service Worker", generic "ServiceWorker
+ * registration failed"). Exploration and capture contexts block service
+ * workers by design, so this failure is structural — repair rounds must be
+ * steered off the worker instead of chasing the registration symptom.
+ */
+const serviceWorkerRegistrationFailurePattern =
+  /failed to register.*service ?worker|service ?worker registration failed/i;
+
+function readServiceWorkerBanHint(observedErrors: string[]): string[] {
+  return observedErrors.some((error) =>
+    serviceWorkerRegistrationFailurePattern.test(error),
+  )
+    ? [
+        "The demo browser blocks Service Worker registration by design, so service-worker-based request mocking (such as MSW's browser worker) can never activate here — routes gated on it render only shells or navigation chrome. Do not retry, defer, or work around the worker registration. Serve demo data at the fetch/API-client layer instead: gate the app's own data client or fetch wrapper to return deterministic in-code fixtures, and remove the service-worker registration from the demo path.",
+      ]
+    : [];
+}
+
+// A partial client stub crashes apps generically: error boundaries report the
+// field a component dereferenced on an undefined object, client caches
+// (Apollo and kin) report the field a response failed to supply. Both quote
+// the identifier, so one pattern table extracts it for any app. Extend this
+// table per the N122 detection precedent when new client stacks surface new
+// missing-field shapes.
+const clientStubSchemaGapPatterns = [
+  /Cannot read properties of undefined \(reading '([^']+)'\)/,
+  /Missing field '([^']+)'/,
+];
+
+/**
+ * Turns generic runtime-crash diagnostics into a stub schema-gap repair hint
+ * (N126). Fires only when the manifest actually declares a `client-stub`
+ * dataStrategy rung and the observed errors quote at least one field
+ * identifier — apps crashing for unrelated reasons never see this hint.
+ */
+function readClientStubSchemaGapHint(
+  observedErrors: string[],
+  dataStrategy: PreparationManifest["dataStrategy"],
+): string[] {
+  const stubServices = (dataStrategy ?? [])
+    .filter((declaration) => declaration.rung === "client-stub")
+    .map((declaration) => declaration.service);
+  if (stubServices.length === 0) return [];
+  const missingFields = unique(
+    observedErrors.flatMap((error) =>
+      clientStubSchemaGapPatterns.flatMap((pattern) => {
+        const field = pattern.exec(error)?.[1];
+        return field === undefined ? [] : [field];
+      }),
+    ),
+  );
+  if (missingFields.length === 0) return [];
+  return [
+    `The manifest declares a client-stub dataStrategy for ${stubServices.join(", ")}, and the app's crash diagnostics name response fields the stub never supplied: ${missingFields.join(", ")}. The stub transport must satisfy the complete response schema for the queries powering the entry routes, starting with the named fields — partial fixtures crash components and client caches exactly like this. Extend the stubbed responses instead of repairing the individual crash sites.`,
+  ];
+}
+
 function readMissingModule(pageErrors: string[]): string | undefined {
   for (const error of pageErrors) {
     const match =
@@ -1863,6 +3086,63 @@ function readMissingModule(pageErrors: string[]): string | undefined {
     if (match?.[1] !== undefined) return match[1];
   }
   return undefined;
+}
+
+/**
+ * Keeps only the failed script responses the app server itself answered:
+ * same-origin, 5xx, and not the 504 stale-module shape the crawler reloads
+ * through. The explorer script applies the same policy before reporting, so
+ * this is defense in depth against a drifted or hand-crafted protocol —
+ * a third-party CDN's 500 must never read as an app serve failure.
+ */
+function readFailedAppScriptResponses(
+  baseUrl: string,
+  reported: Array<{ status: number; url: string }> | undefined,
+): Array<{ status: number; url: string }> {
+  const appOrigin = new URL(baseUrl).origin;
+  return (reported ?? []).filter((response) => {
+    if (response.status < 500 || response.status === 504) return false;
+    try {
+      return new URL(response.url).origin === appOrigin;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function readSameOriginAsset404Storm(
+  baseUrl: string,
+  consoleErrors: string[],
+): { pathPrefix: string; paths: string[] } | undefined {
+  const appOrigin = new URL(baseUrl).origin;
+  const paths = unique(
+    consoleErrors.flatMap((error) =>
+      [...error.matchAll(/failed resource\s+(\S+)\s+\(HTTP 404\)/gi)].flatMap(
+        (match) => {
+          try {
+            const resource = new URL(match[1] ?? "");
+            return resource.origin === appOrigin &&
+              /\.(?:css|js|mjs)$/i.test(resource.pathname)
+              ? [resource.pathname]
+              : [];
+          } catch {
+            return [];
+          }
+        },
+      ),
+    ),
+  );
+  if (paths.length < 2) return undefined;
+  return { pathPrefix: readCommonAssetPathPrefix(paths), paths };
+}
+
+function readCommonAssetPathPrefix(paths: string[]): string {
+  let common = paths[0] ?? "/";
+  while (common.length > 1 && paths.some((path) => !path.startsWith(common))) {
+    common = common.slice(0, -1);
+  }
+  const directoryEnd = common.lastIndexOf("/");
+  return directoryEnd <= 0 ? "/" : common.slice(0, directoryEnd + 1);
 }
 
 function isActionableBrowserConsoleError(error: string): boolean {
@@ -1902,46 +3182,6 @@ function readObservedNetworkAttempts(
         ...(attempt.url === undefined ? {} : { url: attempt.url }),
       }),
     ),
-  );
-}
-
-function isAuthWall(route: {
-  buttons: string[];
-  forms?: string[];
-  headings: string[];
-  inputs: string[];
-  links?: Array<{ name: string }>;
-  path?: string;
-  requestedPath?: string;
-  title?: string;
-}): boolean {
-  const actionLabels = [
-    ...route.buttons,
-    ...(route.links ?? []).map(({ name }) => name),
-  ];
-  const hasPassword = route.inputs.some((input) => /password/i.test(input));
-  const hasIdentity = route.inputs.some((input) =>
-    /email|username|user name/i.test(input),
-  );
-  const hasIdentityProviderAction = actionLabels.some((button) =>
-    /\b(?:continue|log in|sign in)\s+(?:with\s+)?(?:apple|facebook|github|google|linkedin|microsoft|sso)\b/i.test(
-      button,
-    ),
-  );
-  const hasAuthPath =
-    /(?:^|[/#?_-])(?:auth|log-?in|oauth|sign-?in|sign-?up|sso)(?:[/#?&=_-]|$)/i.test(
-      route.path ?? "",
-    );
-  const redirected =
-    route.requestedPath !== undefined && route.requestedPath !== route.path;
-  // A password + identity pair is a login form regardless of copy; an
-  // auth-looking path alone is not — marketing pages reuse those slugs, so
-  // the path must be corroborated by a credential input or provider button.
-  return (
-    (hasPassword && hasIdentity) ||
-    (hasAuthPath &&
-      (hasPassword || hasIdentity || hasIdentityProviderAction)) ||
-    (redirected && hasIdentityProviderAction)
   );
 }
 
@@ -2000,6 +3240,7 @@ async function readExplorationProtocolFile(
   try {
     const result = await workspace.executeSubmittedCode(
       `cat ${explorerDirectory}/exploration.json`,
+      { retry: "transient" },
     );
     return result.exitCode === 0
       ? readExplorationProtocol(result.stdout)
@@ -2040,6 +3281,8 @@ function createExplorerScript(
   baseUrl: string,
   featureInventory: PreparedDemoFeature[],
   externalResourceManifest?: ExternalResourceManifest,
+  scope: "feature-entries" | "feature-proofs" | "full" = "full",
+  captureFailure?: CaptureLocatorFailure,
 ): string {
   const featureEntryTargets = createFeatureEntryTargets(
     baseUrl,
@@ -2052,14 +3295,46 @@ import { mkdir, readFile as makeADemoReadReplayFile, writeFile } from "node:fs/p
 
 const baseUrl = ${JSON.stringify(baseUrl)};
 const baseOrigin = new URL(baseUrl).origin;
+const crawlScope = ${JSON.stringify(scope)};
 const featureEntryTargets = ${JSON.stringify(featureEntryTargets)};
+const declaredProofTargets = ${JSON.stringify(createDeclaredProofTargets(baseUrl, featureInventory))};
+const replayTarget = ${JSON.stringify(
+    captureFailure === undefined
+      ? null
+      : {
+          actionId: captureFailure.actionId,
+          ...(captureFailure.locator === undefined
+            ? {}
+            : { locator: captureFailure.locator }),
+          ...(captureFailure.locatorCandidateId === undefined
+            ? {}
+            : { locatorCandidateId: captureFailure.locatorCandidateId }),
+          sceneId: captureFailure.sceneId,
+          scenePrefix: captureFailure.scenePrefix,
+        },
+  )};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
 const deadlineAtMs = Date.now() + ${Math.floor(explorationCommandTimeoutMs * 0.7)};
-const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [], unreachableRoutes: [] };
+const result = { blockedNetworkAttempts: [], consoleErrors: [], declaredProofs: [], failedScriptResponses: [], pageErrors: [], routes: [], unreachableRoutes: [] };
 const isAppUnavailableError = (error) => /(?:ERR_CONNECTION_(?:CLOSED|REFUSED|RESET)|Target page, context or browser has been closed)/i.test(
   error instanceof Error ? error.message : String(error),
 );
 const normalizeCrawlUrl = ${normalizeCrawlUrl.toString()};
+const semanticTokens = ${semanticTokens.toString()};
+const featureControlTokenGroups = ${JSON.stringify(
+    featureInventory.map((feature) => featureSemanticTokens(feature)),
+  )};
+// Within the 16-control budget, controls whose accessible names share a
+// semantic token with any prepared feature outrank purely positional picks:
+// on control-dense tools the page's 17th button is often the feature's own,
+// and it must reach both the catalog and the click loop's exercise window.
+const prioritizeFeatureControls = (buttons) => {
+  const matchesFeature = (name) => {
+    const tokens = semanticTokens(name);
+    return featureControlTokenGroups.some((group) => tokens.some((token) => group.includes(token)));
+  };
+  return [...buttons.filter(matchesFeature), ...buttons.filter((name) => !matchesFeature(name))].slice(0, 16);
+};
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
@@ -2165,13 +3440,36 @@ try {
       .slice(0, 80);
     return {
       alerts: read("[role=alert], [role=status], [role=alertdialog], [aria-live]:not([aria-live=off])"),
+      // Control names and disabled states are behavioral evidence (N105): a
+      // toggle that renames itself or a Save that enables Undo produces no
+      // heading, text, or URL delta, yet is the interaction's whole proof.
+      controls: Array.from(document.querySelectorAll("button, [role=button]")).filter(visible).slice(0, 40).map((element) => ({
+        disabled: element.disabled === true || element.getAttribute("aria-disabled") === "true",
+        name: clean(element.innerText || element.getAttribute("aria-label")),
+      })).filter((control) => control.name),
       dialogs: read("[role=dialog], dialog[open]"),
       headings: read("h1, h2, h3, [role=heading]"),
+      rowCount: Array.from(document.querySelectorAll("table tbody tr, [role=row]")).filter(visible).length,
       text: read("main p, main li, article p, [role=main] p, [role=status], [role=alert]"),
       title: document.title,
       url: location.href,
     };
   });
+  // The strongest wording-free delta between two visible states: a control
+  // leaving its disabled state, or one control name replacing another (a
+  // self-renaming toggle). Independent of describeVisibleOutcome so the
+  // transition is recorded even when a text delta names the outcome.
+  const readStateTransition = (before, after) => {
+    const enabledControl = after.controls.find((control) => !control.disabled &&
+      before.controls.some((entry) => entry.name === control.name && entry.disabled));
+    if (enabledControl) return { control: enabledControl.name, from: "disabled", to: "enabled" };
+    const beforeNames = new Set(before.controls.map((control) => control.name));
+    const afterNames = new Set(after.controls.map((control) => control.name));
+    const appeared = after.controls.find((control) => !beforeNames.has(control.name));
+    const vanished = before.controls.find((control) => !afterNames.has(control.name));
+    if (appeared && vanished) return { control: vanished.name, from: vanished.name, to: appeared.name };
+    return undefined;
+  };
   const describeVisibleOutcome = (before, after) => {
     if (after.url !== before.url) {
       const target = new URL(after.url);
@@ -2184,6 +3482,15 @@ try {
     const newText = after.text.find((value) => !before.text.includes(value));
     if (newText) return newText + " became visible";
     if (after.title !== before.title) return after.title + " became visible";
+    const transition = readStateTransition(before, after);
+    if (transition) {
+      return transition.from === "disabled"
+        ? transition.control + " [disabled] → [enabled]"
+        : transition.from + " became " + transition.to;
+    }
+    if (after.rowCount !== before.rowCount) {
+      return "visible data rows changed from " + before.rowCount + " to " + after.rowCount;
+    }
     return undefined;
   };
   // Text that appears only after an interaction is that interaction's proof:
@@ -2241,9 +3548,23 @@ try {
     recordFailedResource(request.url(), failure);
   });
   let staleModule504 = false;
+  // Status of the last main-document response. Hash navigations return no
+  // response and keep the prior value: every hash route rides that document.
+  let lastDocumentStatus;
   page.on("response", (response) => {
     if (response.status() >= 400) recordFailedResource(response.url(), "HTTP " + response.status());
     if (response.status() === 504 && response.request().resourceType() === "script") staleModule504 = true;
+    // A script the app's own server answered with 5xx is a serve failure —
+    // the page below it is the server's error output, not the app. 504 is
+    // excluded: it is the stale-module shape the reload above absorbs.
+    if (response.status() >= 500 && response.status() !== 504 && response.request().resourceType() === "script") {
+      try {
+        const url = response.url();
+        if (new URL(url).origin === baseOrigin && result.failedScriptResponses.length < 20 && !result.failedScriptResponses.some((entry) => entry.url === url)) {
+          result.failedScriptResponses.push({ status: response.status(), url });
+        }
+      } catch {}
+    }
   });
   const remainingMs = () => Math.max(0, deadlineAtMs - Date.now());
   const gotoRouteOnce = async (url) => {
@@ -2253,12 +3574,14 @@ try {
     // Every long wait is clamped to the remaining deadline so in-flight
     // work always finalizes inside the exploration command budget.
     const gotoTimeoutMs = () => Math.min(60000, Math.max(1000, remainingMs()));
+    let response;
     try {
-      await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
+      response = await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
     } catch (error) {
       if (isAppUnavailableError(error) || remainingMs() < 1000) throw error;
-      await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
+      response = await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
     }
+    if (response) lastDocumentStatus = response.status();
     await page.waitForFunction(() => document.readyState === "complete", undefined, { timeout: 10000 }).catch(() => {});
     if (remainingMs() > 0) {
       // Dev servers compile and stream first-hit routes behind a DOM-quiet
@@ -2274,6 +3597,10 @@ try {
         return ((document.body && document.body.innerText) || "").trim().length >= 40;
       }, undefined, { timeout: Math.min(15000, Math.max(1, remainingMs())) }).catch(() => {});
     }
+    // Data that lands just after first paint (slow query, lazy chunk) would
+    // otherwise be harvested mid-fetch. Polling apps never go idle, so the
+    // window is capped and a timeout is not an error.
+    await page.waitForLoadState("networkidle", { timeout: Math.min(3000, Math.max(1, remainingMs())) }).catch(() => {});
     await waitForQuietDom(300, 2500);
     // A full-viewport loading indicator means the page is not ready no
     // matter how quiet the DOM is (cyberchef, 2026-08-08): wait it out
@@ -2363,12 +3690,15 @@ try {
           : [];
         const dataTables = Array.from(document.querySelectorAll("table, [role=table], [role=grid]")).filter(visible).map((table) => {
           const headerCells = Array.from(table.querySelectorAll("th, [role=columnheader]")).filter(visible);
-          const populatedRows = headerCells.length === 0 ? [] : Array.from(table.querySelectorAll("tbody tr, [role=row]")).filter((row) =>
-            row.querySelector("th, [role=columnheader]") == null && clean(row.innerText) !== "");
-          return { headerCells, populatedRows };
+          const bodyRows = headerCells.length === 0 ? [] : Array.from(table.querySelectorAll("tbody tr, [role=row]")).filter((row) =>
+            row.querySelector("th, [role=columnheader]") == null);
+          const populatedRows = bodyRows.filter((row) => clean(row.innerText) !== "");
+          // Rows that mounted with no text are loading skeletons: a query
+          // stuck pending, not an empty result (midday, 2026-08-09).
+          return { headerCells, populatedRows, skeletonRows: bodyRows.length - populatedRows.length };
         }).filter(({ headerCells }) => headerCells.length > 0);
         const emptyDataTables = dataTables.filter(({ populatedRows }) => populatedRows.length === 0)
-          .map(({ headerCells }) => ({ columnHeaders: headerCells.length, headerTexts: headerCells.map((cell) => clean(cell.innerText)).filter(Boolean).slice(0, 24) }))
+          .map(({ headerCells, skeletonRows }) => ({ columnHeaders: headerCells.length, headerTexts: headerCells.map((cell) => clean(cell.innerText)).filter(Boolean).slice(0, 24), ...(skeletonRows > 0 ? { skeletonRows } : {}) }))
           .slice(0, 4);
         const populatedTables = dataTables.filter(({ populatedRows }) => populatedRows.length > 0);
         // Table rows are the canonical data surface of an admin or ledger
@@ -2383,7 +3713,7 @@ try {
         const paragraphTexts = Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).filter((element) => !inAlert(element)).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 80);
         return {
           alerts: Array.from(document.querySelectorAll(alertContainerSelector)).filter(visible).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 12),
-          buttons: texts("button, [role=button]", 16),
+          buttons: texts("button, [role=button]", 48),
           emptyDataTables,
           forms: Array.from(document.querySelectorAll("form")).filter(visible).map((element) => clean(element.getAttribute("aria-label") || element.getAttribute("name") || element.id || "form")).slice(0, 20),
           headings: texts("h1, h2, h3, [role=heading]"),
@@ -2397,13 +3727,19 @@ try {
           title: document.title || clean(document.querySelector("h1")?.textContent) || location.pathname,
         };
   };
-  const queue = [
-    ...featureEntryTargets,
-    { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
-  ];
+  const queue = crawlScope === "feature-proofs"
+    ? []
+    : [
+        ...featureEntryTargets,
+        { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
+      ];
   const seen = new Set();
   const harvestedOnEarlierRoutes = new Set();
-  const maxRoutes = Math.min(30, featureEntryTargets.length + 9);
+  const maxRoutes = crawlScope === "feature-proofs"
+    ? 0
+    : crawlScope === "feature-entries"
+      ? featureEntryTargets.length + 1
+      : Math.min(30, featureEntryTargets.length + 9);
   await mkdir(outputDirectory, { recursive: true });
   while (queue.length > 0 && seen.size < maxRoutes && Date.now() < deadlineAtMs) {
     const target = queue.shift();
@@ -2417,6 +3753,18 @@ try {
       if (landedUrl !== targetUrl && seen.has(landedUrl)) continue;
       seen.add(landedUrl);
       const observed = await page.evaluate(harvestPage);
+      observed.buttons = prioritizeFeatureControls(observed.buttons);
+      if (lastDocumentStatus !== undefined && lastDocumentStatus >= 400) {
+        observed.documentStatus = lastDocumentStatus;
+      }
+      // A page whose selector harvest saw nothing may still be painting a
+      // bare error body; a bounded innerText sample lets the backend read
+      // the exception text that no heading or paragraph selector reaches.
+      const selectorHarvestSawNothing = observed.headings.length === 0 && observed.text.length === 0;
+      if (selectorHarvestSawNothing) {
+        const bodySample = await page.evaluate(() => ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").trim().slice(0, 400)).catch(() => "");
+        if (bodySample) observed.textSample = bodySample;
+      }
       observed.loadingOverlay = await page.evaluate(hasCoveringLoadingOverlay).catch(() => false);
       const current = new URL(page.url());
       const path = current.pathname + current.search + current.hash;
@@ -2457,45 +3805,48 @@ try {
           })) ?? null,
         };
       }));
-      const routeNavNames = new Set([...observed.primaryNavigation, ...observed.links.map((link) => link.name)].filter(Boolean));
-      // Strings repeated from previously-visited routes are site chrome —
-      // icon ligatures, skip links, rail labels — even when they escape the
-      // nav selectors: they must not make a thin harvest look rich, or the
-      // accessibility-tree fallback never fires on data pages.
-      const distinctHarvestCount = [...new Set([...observed.headings, ...observed.text])].filter((value) => value && !routeNavNames.has(value) && !harvestedOnEarlierRoutes.has(value)).length;
-      if (distinctHarvestCount < 8) {
-        // Routes whose selector harvest stays thin beyond their own nav and
-        // link names — display-only dashboards, data tables outside the
-        // paragraph/list selectors, and control-centric tools whose pane
-        // titles live in unlabeled containers — get assert candidates from
-        // the accessibility tree so rendered content can still ground
-        // features. Each candidate is verified as a unique visible text
-        // locator below.
-        try {
-          const aria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : "";
-          // A zero-row table's column headers reach the aria tree as header
-          // cells and as the combined header-row name; both are table
-          // structure, not rendered data, and must not enter route text.
-          const emptyTableHeaderTokens = new Set((observed.emptyDataTables ?? []).flatMap((table) => (table.headerTexts ?? []).flatMap((text) => text.toLowerCase().split(/\\s+/).filter(Boolean))));
-          const isEmptyTableStructure = (candidate) =>
-            emptyTableHeaderTokens.size > 0 && candidate.toLowerCase().split(/\\s+/).filter(Boolean).every((token) => emptyTableHeaderTokens.has(token));
-          // The aria tree pierces open shadow roots (error overlays,
-          // web-component apps), and their content often arrives as one long
-          // text run — accept it and truncate instead of dropping it.
-          const cleanAriaText = (raw) => {
-            const trimmed = raw.trim();
-            const unquoted = trimmed.startsWith('"') && trimmed.endsWith('"')
-              ? trimmed.slice(1, -1).replaceAll('\\\\"', '"')
-              : trimmed;
-            return unquoted.slice(0, 120).trim();
-          };
-          const ariaTextCandidates = [...new Set([
-            ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
-            ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,399})$/gm)].map((match) => cleanAriaText(match[1])),
-          ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !isEmptyTableStructure(candidate) && !(observed.alerts || []).some((alert) => alert.includes(candidate))).slice(0, 24);
-          observed.text.push(...ariaTextCandidates);
-        } catch {}
-      }
+      // The accessibility tree is the canonical assert-candidate source: its
+      // accessible names are exactly the name-space Playwright locators
+      // resolve, and it reaches content the paragraph/list selectors never
+      // will — bare-div metrics, unlabeled pane titles, open shadow roots.
+      // It runs on every route; strings repeated from previously-visited
+      // routes are site chrome (icon ligatures, skip links, rail labels)
+      // and stay out so chrome cannot crowd the candidate budget. Each
+      // candidate is verified as a unique visible text locator below.
+      try {
+        const aria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : "";
+        // A zero-row table's column headers reach the aria tree as header
+        // cells and as the combined header-row name; both are table
+        // structure, not rendered data, and must not enter route text.
+        const emptyTableHeaderTokens = new Set((observed.emptyDataTables ?? []).flatMap((table) => (table.headerTexts ?? []).flatMap((text) => text.toLowerCase().split(/\\s+/).filter(Boolean))));
+        const isEmptyTableStructure = (candidate) =>
+          emptyTableHeaderTokens.size > 0 && candidate.toLowerCase().split(/\\s+/).filter(Boolean).every((token) => emptyTableHeaderTokens.has(token));
+        // The aria tree pierces open shadow roots (error overlays,
+        // web-component apps), and their content often arrives as one long
+        // text run — accept it and truncate instead of dropping it.
+        const cleanAriaText = (raw) => {
+          const trimmed = raw.trim();
+          const unquoted = trimmed.startsWith('"') && trimmed.endsWith('"')
+            ? trimmed.slice(1, -1).replaceAll('\\\\"', '"')
+            : trimmed;
+          return unquoted.slice(0, 120).trim();
+        };
+        const ariaTextRuns = [...new Set([
+          ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
+          ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,399})$/gm)].map((match) => cleanAriaText(match[1])),
+        ])];
+        const ariaTextCandidates = ariaTextRuns.filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !harvestedOnEarlierRoutes.has(candidate) && !isEmptyTableStructure(candidate) && !(observed.alerts || []).some((alert) => alert.includes(candidate))).slice(0, 24);
+        observed.text.push(...ariaTextCandidates);
+        // Shadow-rooted content (Vite's error overlay) is invisible to
+        // body.innerText, so the bare-error-body sample above came up
+        // empty; the aria runs are the only readable evidence. Built from
+        // the unfiltered runs so every broken route carries its sample,
+        // even when the same overlay text was harvested on an earlier one.
+        if (selectorHarvestSawNothing && observed.textSample === undefined) {
+          const ariaSample = ariaTextRuns.join(" ").replace(/\\s+/g, " ").trim().slice(0, 400);
+          if (ariaSample) observed.textSample = ariaSample;
+        }
+      } catch {}
       for (const value of [...observed.headings, ...observed.text]) {
         if (value) harvestedOnEarlierRoutes.add(value);
       }
@@ -2527,16 +3878,29 @@ try {
           await gotoRoute(routeUrl);
           const exactLocator = page.getByRole("button", { name, exact: true });
           const interactionLocator = await exactLocator.count() === 1 ? exactLocator : page.getByRole("button", { name, exact: false });
-          if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
+          // A disabled control cannot be exercised: clicking it burns the
+          // full click timeout to observe nothing. Its name stays harvested
+          // as evidence; another control's click may enable it (N105).
+          if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible()) || !(await interactionLocator.isEnabled().catch(() => false))) continue;
           const before = await readVisibleState();
           await interactionLocator.click({ timeout: 4000 });
           await waitForQuietDom(250, 1500);
           const after = await readVisibleState();
           const outcome = describeVisibleOutcome(before, after);
           if (!outcome) continue;
+          const stateTransition = readStateTransition(before, after);
+          let navigationDestination;
+          let externalDestination;
           if (after.url !== before.url) {
             const landed = new URL(after.url);
-            if (landed.origin === baseOrigin && !seen.has(normalizeCrawlUrl(landed.href))) {
+            if (landed.origin === baseOrigin) {
+              navigationDestination = landed.pathname + landed.search + landed.hash;
+            } else {
+              // N158: a click that left the app origin is non-navigable
+              // evidence; record where it went so verdicts can name it.
+              externalDestination = landed.href.slice(0, 200);
+            }
+            if (crawlScope === "full" && landed.origin === baseOrigin && !seen.has(normalizeCrawlUrl(landed.href))) {
               queue.push({
                 featureIds: [],
                 requestedPath: landed.pathname + landed.search + landed.hash,
@@ -2550,7 +3914,10 @@ try {
             locator: { name, strategy: "role", value: "button" },
             locatorEvidence,
             name,
+            ...(navigationDestination ? { navigationDestination } : {}),
+            ...(externalDestination ? { externalDestination } : {}),
             outcome,
+            ...(stateTransition ? { stateTransition } : {}),
             ...(revealedTexts.length > 0 ? { revealedTexts } : {}),
           });
         } catch (error) {
@@ -2590,6 +3957,7 @@ try {
           }
           await waitForQuietDom(250, 1500);
           const after = await readVisibleState();
+          const stateTransition = readStateTransition(before, after);
           const revealedTexts = await harvestRevealedTexts(before, after, path);
           observed.interactions.push({
             kind: input.controlKind,
@@ -2597,6 +3965,7 @@ try {
             locatorEvidence: input.locatorEvidence,
             name: input.name,
             outcome,
+            ...(stateTransition ? { stateTransition } : {}),
             ...(revealedTexts.length > 0 ? { revealedTexts } : {}),
           });
         } catch (error) {
@@ -2607,6 +3976,15 @@ try {
       // Downstream validation replays every action from a fresh navigation,
       // so evidence gathered in interaction-mutated page state must be
       // re-proven here or dropped; emitting it would fail deterministically.
+      const resolveStoredLocator = (locator) => locator.strategy === "role"
+        ? page.getByRole(locator.role, { exact: locator.exact === true, name: locator.name })
+        : locator.strategy === "label"
+          ? page.getByLabel(locator.value, { exact: locator.exact === true })
+          : locator.strategy === "placeholder"
+            ? page.getByPlaceholder(locator.value, { exact: locator.exact === true })
+            : locator.strategy === "text"
+              ? page.getByText(locator.value, { exact: locator.exact === true })
+              : page.locator(locator.value);
       const freshInteractions = [];
       for (const interaction of observed.interactions) {
         try {
@@ -2616,6 +3994,18 @@ try {
             : createInteractionLocator(interaction.locator);
           if (await freshLocator.count() === 1 && await freshLocator.isVisible()) {
             freshInteractions.push(interaction);
+            continue;
+          }
+          // Zero matches on the fresh-state name lookup is not proof the
+          // control is gone: the stored evidence locator was verified once
+          // on this route, so re-prove through it before dropping the
+          // interaction (N105).
+          const storedLocator = interaction.locatorEvidence?.locator;
+          if (storedLocator) {
+            const fallbackLocator = resolveStoredLocator(storedLocator);
+            if (await fallbackLocator.count() === 1 && await fallbackLocator.isVisible()) {
+              freshInteractions.push(interaction);
+            }
           }
         } catch (error) {
           if (isAppUnavailableError(error)) throw error;
@@ -2642,6 +4032,7 @@ try {
         (a, b) => Number(primaryNames.has(b.name)) - Number(primaryNames.has(a.name)),
       );
       for (const link of orderedLinks) {
+        if (crawlScope !== "full") break;
         const linkTarget = new URL(link.href, baseUrl);
         if (link.sameOrigin && linkTarget.origin === baseOrigin && !seen.has(normalizeCrawlUrl(linkTarget.toString()))) {
           queue.push({
@@ -2660,13 +4051,329 @@ try {
       if (isAppUnavailableError(error)) break;
     }
   }
+  // N105 stability rider: a feature entry route about to be reported
+  // content-free earns one fresh navigation and re-harvest before that
+  // verdict stands. First paints lose races the rest of the crawl has since
+  // settled (cold compiles, slow first queries, one-off hydration stalls),
+  // and a flaky miss should cost seconds, not a repair round. Only richer
+  // fresh harvests replace the observation, so a confirmed miss stays a
+  // miss; interactions are not re-exercised.
+  const reharvestThinFeatureRoute = async (route) => {
+    await gotoRoute(new URL(route.requestedPath || route.path, baseUrl).toString());
+    const fresh = await page.evaluate(harvestPage);
+    if (fresh.headings.length + fresh.text.length <= route.headings.length + route.text.length) return;
+    fresh.buttons = prioritizeFeatureControls(fresh.buttons);
+    const overlayStuck = await page.evaluate(hasCoveringLoadingOverlay).catch(() => false);
+    route.headings = fresh.headings;
+    route.text = fresh.text;
+    route.buttons = fresh.buttons;
+    route.alerts = fresh.alerts;
+    route.emptyDataTables = fresh.emptyDataTables;
+    route.populatedDataTables = fresh.populatedDataTables;
+    route.headingLocatorEvidence = await Promise.all(route.headings.map((heading) =>
+      createVerifiedRoleLocatorEvidence({ candidateNames: [heading], role: "heading", route: route.path })));
+    route.buttonLocatorEvidence = await Promise.all(route.buttons.map((button) =>
+      createVerifiedRoleLocatorEvidence({ candidateNames: [button], role: "button", route: route.path })));
+    route.textLocatorEvidence = await Promise.all(route.text.map((text) =>
+      createVerifiedDirectLocatorEvidence({ locator: { exact: true, strategy: "text", value: text }, route: route.path })));
+    if (overlayStuck) { route.loadingOverlay = true; } else { delete route.loadingOverlay; }
+    if (lastDocumentStatus !== undefined && lastDocumentStatus >= 400) { route.documentStatus = lastDocumentStatus; } else { delete route.documentStatus; }
+    delete route.textSample;
+    for (const value of [...route.headings, ...route.text]) {
+      if (value) harvestedOnEarlierRoutes.add(value);
+    }
+    if (route.screenshot) await page.screenshot({ fullPage: true, path: route.screenshot }).catch(() => {});
+    if (route.snapshot) {
+      const freshAria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : await page.locator("body").innerText();
+      await writeFile(route.snapshot, freshAria).catch(() => {});
+    }
+  };
+  for (const route of result.routes) {
+    if (Date.now() >= deadlineAtMs) break;
+    if (!(route.featureIds || []).length) continue;
+    const verifiedTextCount = route.text.filter((value, index) => value && (!route.textLocatorEvidence || Boolean(route.textLocatorEvidence[index]))).length;
+    if ((route.headings.length > 0 || verifiedTextCount > 0) && route.loadingOverlay !== true) continue;
+    try {
+      await reharvestThinFeatureRoute(route);
+    } catch (error) {
+      if (isAppUnavailableError(error)) break;
+    }
+  }
+  // N107: declared proofs execute on fresh navigations after the crawl.
+  // Each feature's typed obligation is checked from clean state — the crawl
+  // above may have already exercised and mutated these routes — and the
+  // verdict, not nearby wording, becomes the feature's grounding evidence.
+  for (const target of declaredProofTargets) {
+    if (Date.now() >= deadlineAtMs) break;
+    try {
+      await gotoRoute(target.url);
+      const proof = target.proof;
+      if (proof.kind === "visible-text") {
+        const locator = page.getByText(proof.text, { exact: true });
+        const count = await locator.count();
+        const visible = count > 0 && await locator.first().isVisible().catch(() => false);
+        const locatorEvidence = count === 1 && visible
+          ? await createVerifiedDirectLocatorEvidence({ locator: { exact: true, strategy: "text", value: proof.text }, route: target.path })
+          : undefined;
+        result.declaredProofs.push({
+          detail: visible
+            ? JSON.stringify(proof.text) + " is visible on " + target.path
+            : JSON.stringify(proof.text) + " was not found on " + target.path,
+          featureId: target.featureId,
+          ...(locatorEvidence ? { locatorEvidence } : {}),
+          passed: visible,
+        });
+      } else if (proof.kind === "element-appears") {
+        const candidates = [
+          page.getByRole("button", { exact: true, name: proof.name }),
+          page.getByRole("link", { exact: true, name: proof.name }),
+          page.getByRole("heading", { exact: true, name: proof.name }),
+          page.getByLabel(proof.name, { exact: true }),
+          page.getByText(proof.name, { exact: true }),
+        ];
+        let visible = false;
+        for (const candidate of candidates) {
+          if (await candidate.count().catch(() => 0) > 0 && await candidate.first().isVisible().catch(() => false)) { visible = true; break; }
+        }
+        result.declaredProofs.push({
+          detail: visible
+            ? "a visible element named " + JSON.stringify(proof.name) + " appeared on " + target.path
+            : "no visible element with accessible name " + JSON.stringify(proof.name) + " on " + target.path,
+          featureId: target.featureId,
+          passed: visible,
+        });
+      } else if (proof.kind === "app-state") {
+        // N157 preferred non-DOM rung: the app's own persisted state is the
+        // evidence. Read once, and once more after the settle window for
+        // apps that write their store shortly after boot.
+        const readStoredValue = () => page.evaluate(([source, key]) => {
+          try {
+            const storage = source === "session-storage" ? window.sessionStorage : window.localStorage;
+            return storage.getItem(key);
+          } catch { return null; }
+        }, [proof.source, proof.key]).catch(() => null);
+        let stored = await readStoredValue();
+        if (!(typeof stored === "string" && stored.includes(proof.contains))) {
+          await waitForQuietDom(250, 1500);
+          stored = await readStoredValue();
+        }
+        const passed = typeof stored === "string" && stored.includes(proof.contains);
+        result.declaredProofs.push({
+          detail: passed
+            ? "stored " + proof.source + " value under " + JSON.stringify(proof.key) + " contains " + JSON.stringify(proof.contains) + " on " + target.path
+            : typeof stored === "string"
+              ? "stored " + proof.source + " value under " + JSON.stringify(proof.key) + " does not contain " + JSON.stringify(proof.contains) + " on " + target.path
+              : "no " + proof.source + " value under " + JSON.stringify(proof.key) + " on " + target.path,
+          featureId: target.featureId,
+          passed,
+        });
+      } else if (proof.kind === "canvas-delta") {
+        // N157 weakest acceptable rung: click the named control and require
+        // the largest visible canvas region to render different pixels. Two
+        // pre-click shots detect self-animating canvases, whose repaints
+        // this proof could never attribute to the click.
+        const exact = page.getByRole("button", { exact: true, name: proof.locator });
+        const control = (await exact.count()) === 1 ? exact : page.getByRole("button", { exact: false, name: proof.locator });
+        const matches = await control.count();
+        if (matches !== 1) {
+          result.declaredProofs.push({
+            detail: "control " + JSON.stringify(proof.locator) + " matched " + matches + " elements on " + target.path + "; the proof needs exactly one",
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        const canvases = page.locator("canvas");
+        const canvasCount = await canvases.count().catch(() => 0);
+        let box = null;
+        for (let index = 0; index < canvasCount; index += 1) {
+          const candidate = canvases.nth(index);
+          if (!(await candidate.isVisible().catch(() => false))) continue;
+          const candidateBox = await candidate.boundingBox().catch(() => null);
+          if (!candidateBox || candidateBox.width < 2 || candidateBox.height < 2) continue;
+          if (box === null || candidateBox.width * candidateBox.height > box.width * box.height) box = candidateBox;
+        }
+        const viewport = page.viewportSize() || { height: 720, width: 1280 };
+        const clip = box === null ? null : {
+          height: Math.min(box.height, viewport.height - Math.max(box.y, 0)),
+          width: Math.min(box.width, viewport.width - Math.max(box.x, 0)),
+          x: Math.max(box.x, 0),
+          y: Math.max(box.y, 0),
+        };
+        if (clip === null || clip.width < 2 || clip.height < 2) {
+          result.declaredProofs.push({
+            detail: "no visible canvas element on " + target.path,
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        const before = await page.screenshot({ clip });
+        await page.waitForTimeout(300);
+        const beforeAgain = await page.screenshot({ clip });
+        if (!before.equals(beforeAgain)) {
+          result.declaredProofs.push({
+            detail: "the canvas repaints without interaction on " + target.path + "; canvas-delta cannot attribute a change to " + JSON.stringify(proof.locator),
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        await control.click({ timeout: 4000 });
+        await waitForQuietDom(250, 1500);
+        const after = await page.screenshot({ clip });
+        const passed = !beforeAgain.equals(after);
+        result.declaredProofs.push({
+          detail: passed
+            ? "the canvas repainted after clicking " + JSON.stringify(proof.locator) + " on " + target.path
+            : "the canvas did not change after clicking " + JSON.stringify(proof.locator) + " on " + target.path,
+          featureId: target.featureId,
+          passed,
+        });
+      } else {
+        const exact = page.getByRole("button", { exact: true, name: proof.locator });
+        const control = (await exact.count()) === 1 ? exact : page.getByRole("button", { exact: false, name: proof.locator });
+        const matches = await control.count();
+        if (matches !== 1) {
+          result.declaredProofs.push({
+            detail: "control " + JSON.stringify(proof.locator) + " matched " + matches + " elements on " + target.path + "; the proof needs exactly one",
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        const enabledBefore = await control.isEnabled().catch(() => false);
+        const nameBefore = ((await control.innerText().catch(() => "")) || "").trim();
+        const fromIsState = /^(?:enabled|disabled)$/i.test(proof.from);
+        const fromHolds = fromIsState
+          ? /^enabled$/i.test(proof.from) === enabledBefore
+          : nameBefore === "" || nameBefore === proof.from;
+        if (!fromHolds || !enabledBefore) {
+          result.declaredProofs.push({
+            detail: "control " + JSON.stringify(proof.locator) + " read " + JSON.stringify(nameBefore || (enabledBefore ? "enabled" : "disabled")) + " before the click; declared from " + JSON.stringify(proof.from) + (enabledBefore ? "" : " — a disabled control cannot be clicked; seed state so it starts enabled"),
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        await control.click({ timeout: 4000 });
+        await waitForQuietDom(250, 1500);
+        const reachedTo = /^disabled$/i.test(proof.to)
+          ? await control.isDisabled().catch(() => false)
+          : /^enabled$/i.test(proof.to)
+            ? await control.isEnabled().catch(() => false)
+            : (await page.getByRole("button", { exact: true, name: proof.to }).count().catch(() => 0)) > 0;
+        result.declaredProofs.push({
+          detail: reachedTo
+            ? JSON.stringify(proof.locator) + ": " + proof.from + " → " + proof.to + " observed on " + target.path
+            : "control " + JSON.stringify(proof.locator) + " did not reach " + JSON.stringify(proof.to) + " after the click on " + target.path,
+          featureId: target.featureId,
+          passed: reachedTo,
+        });
+      }
+    } catch (error) {
+      if (isAppUnavailableError(error)) break;
+    } finally {
+      if (
+        crawlScope === "feature-proofs" &&
+        result.declaredProofs.some((proof) => proof.featureId === target.featureId) &&
+        !result.routes.some((route) => (route.featureIds || []).includes(target.featureId))
+      ) {
+        const proofSlug = String(target.featureId).replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 80) || "feature";
+        const screenshot = outputDirectory + "/proof-" + proofSlug + ".png";
+        const snapshot = outputDirectory + "/proof-" + proofSlug + ".aria.yml";
+        await page.screenshot({ fullPage: false, path: screenshot });
+        const ariaSnapshot = await (typeof page.locator("body").ariaSnapshot === "function"
+          ? page.locator("body").ariaSnapshot()
+          : page.locator("body").innerText());
+        await writeFile(snapshot, ariaSnapshot);
+        result.routes.push({
+          buttons: [],
+          featureIds: [target.featureId],
+          forms: [],
+          headings: [],
+          inputs: [],
+          links: [],
+          path: target.path,
+          primaryNavigation: [],
+          requestedPath: target.path,
+          screenshot,
+          snapshot,
+          text: [],
+          title: (await page.title().catch(() => "")) || target.path,
+        });
+      }
+    }
+  }
+  // N125: a capture-failed candidate is re-verified in its replay context.
+  // The failing scene's action prefix executes from clean state — the state
+  // capture will actually replay the candidate in — and only then is the
+  // stored locator checked. Fresh-route verification cannot see the
+  // app-state divergence that failed the capture. Asserts observe without
+  // mutating, so replay skips them; a prefix action that itself fails means
+  // the replay context cannot be reconstructed, which is the same
+  // unreproducible verdict.
+  if (replayTarget && replayTarget.locator && Date.now() < deadlineAtMs) {
+    const resolveReplayLocator = (locator) => locator.strategy === "role"
+      ? page.getByRole(locator.role, { exact: locator.exact === true, ...(locator.name === undefined ? {} : { name: locator.name }) })
+      : locator.strategy === "label"
+        ? page.getByLabel(locator.value, { exact: locator.exact === true })
+        : locator.strategy === "placeholder"
+          ? page.getByPlaceholder(locator.value, { exact: locator.exact === true })
+          : locator.strategy === "text"
+            ? page.getByText(locator.value, { exact: locator.exact === true })
+            : locator.strategy === "test-id"
+              ? page.getByTestId(locator.value)
+              : page.locator(locator.strategy === "xpath" && !locator.value.startsWith("xpath=") ? "xpath=" + locator.value : locator.value);
+    let replayedActions = 0;
+    try {
+      if (replayTarget.scenePrefix[0]?.type !== "goto") await gotoRoute(baseUrl);
+      for (const action of replayTarget.scenePrefix) {
+        if (Date.now() >= deadlineAtMs) break;
+        if (action.type === "goto") {
+          await gotoRoute(new URL(action.path, baseUrl).toString());
+        } else if (action.type === "click" || action.type === "hover" || action.type === "fill" || action.type === "press" || action.type === "select-option" || action.type === "scroll") {
+          const actionLocator = resolveReplayLocator(action.locator);
+          if (action.type === "click") await actionLocator.click({ timeout: 4000 });
+          else if (action.type === "hover") await actionLocator.hover({ timeout: 4000 });
+          else if (action.type === "fill") await actionLocator.fill(action.value, { timeout: 4000 });
+          else if (action.type === "press") await actionLocator.press(action.key, { timeout: 4000 });
+          else if (action.type === "select-option") await actionLocator.selectOption(action.value, { timeout: 4000 });
+          else await actionLocator.scrollIntoViewIfNeeded({ timeout: 4000 });
+          await waitForQuietDom(250, 1500);
+        }
+        replayedActions += 1;
+      }
+      const candidateLocator = resolveReplayLocator(replayTarget.locator);
+      const matchCount = await candidateLocator.count();
+      const reproduced = matchCount === 1 && await candidateLocator.first().isVisible().catch(() => false);
+      result.replayVerification = {
+        actionId: replayTarget.actionId,
+        ...(replayTarget.locatorCandidateId ? { locatorCandidateId: replayTarget.locatorCandidateId } : {}),
+        detail: (reproduced
+          ? "locator resolved to one visible element"
+          : "locator matched " + matchCount + " visible element(s)")
+          + " after replaying " + replayedActions + " prefix action(s) in Scene " + replayTarget.sceneId,
+        reproduced,
+        sceneId: replayTarget.sceneId,
+      };
+    } catch (error) {
+      result.replayVerification = {
+        actionId: replayTarget.actionId,
+        ...(replayTarget.locatorCandidateId ? { locatorCandidateId: replayTarget.locatorCandidateId } : {}),
+        detail: "prefix replay failed after " + replayedActions + " action(s) in Scene " + replayTarget.sceneId + ": " + (error instanceof Error ? error.message : String(error)),
+        reproduced: false,
+        sceneId: replayTarget.sceneId,
+      };
+    }
+  }
   // Learn the app's not-found signature: what renders for a URL that cannot
   // exist. Recorded as a marker route the backend strips from the AppMap;
   // dropped when the app redirects the probe onto a real route (such apps
   // never show a 404 page, so the probe teaches nothing). Skipped past the
   // deadline and on overlay-stuck apps, where the probe would pay the full
   // overlay wait to harvest a page that renders nothing.
-  if (Date.now() < deadlineAtMs && !result.routes.some((route) => route.loadingOverlay === true)) try {
+  if (crawlScope !== "feature-proofs" && Date.now() < deadlineAtMs && !result.routes.some((route) => route.loadingOverlay === true)) try {
     const probeMarker = ${JSON.stringify(notFoundProbePathMarker)};
     const probeUrl = featureEntryTargets.some((target) => target.url.includes("#/"))
       ? new URL("#/" + probeMarker, baseUrl).toString()
@@ -2674,6 +4381,7 @@ try {
     await gotoRoute(probeUrl);
     if (page.url().includes(probeMarker)) {
       const probeObserved = await page.evaluate(harvestPage);
+      probeObserved.buttons = prioritizeFeatureControls(probeObserved.buttons);
       result.routes.push({
         alerts: [],
         buttons: [],
@@ -2698,6 +4406,34 @@ try {
 await writeFile(outputDirectory + "/exploration.json", JSON.stringify(result)).catch(() => {});
 process.stdout.write("\\n[makeademo:exploration] " + JSON.stringify(result) + "\\n");
 `;
+}
+
+/**
+ * One executable proof target per proof-declaring feature: its first entry
+ * path resolved against the app origin. Placeholder routes and off-origin
+ * paths are dropped the same way entry targets drop them.
+ */
+function createDeclaredProofTargets(
+  baseUrl: string,
+  featureInventory: PreparedDemoFeature[],
+): Array<{
+  featureId: string;
+  path: string;
+  proof: NonNullable<PreparedDemoFeature["expectedProof"]>;
+  url: string;
+}> {
+  const baseOrigin = new URL(baseUrl).origin;
+  return featureInventory.flatMap((feature) => {
+    const proof = feature.expectedProof;
+    const entryPath = feature.entryPaths[0];
+    if (proof === undefined || entryPath === undefined) return [];
+    if (findRoutePlaceholder(entryPath) !== undefined) return [];
+    const url = new URL(entryPath, baseUrl);
+    if (url.origin !== baseOrigin) return [];
+    return [
+      { featureId: feature.id, path: entryPath, proof, url: url.toString() },
+    ];
+  });
 }
 
 function createFeatureEntryTargets(

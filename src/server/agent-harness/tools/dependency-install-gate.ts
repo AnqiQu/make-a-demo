@@ -242,15 +242,42 @@ export function readYarnInstallVariant(
  */
 export function createOfflineLifecycleCommand(input: {
   installCommand: string;
+  /**
+   * True when the repo's own package-manager config disables dependency
+   * lifecycle scripts (RepoProfile.lifecycleScriptsDisabled). A real
+   * install in such a repo runs no scripts, so the gated install skipped
+   * nothing and the offline pass has no work — it is skipped entirely
+   * (N160(2): outline's enableScripts: false).
+   */
+  lifecycleScriptsDisabled?: boolean;
   packageScripts: Record<string, string>;
   /** Repo-identity yarn generation (RepoProfile.yarnVariant); overrides flag inference. */
   yarnVariant?: "berry" | "classic";
 }): string | undefined {
+  if (input.lifecycleScriptsDisabled === true) {
+    return undefined;
+  }
   const parsed = parseInstallCommand(input.installCommand);
   const manager = parsed.packageManager;
   if (manager === undefined) {
     return undefined;
   }
+  const isBerry =
+    manager === "yarn" &&
+    readYarnInstallVariant(input.installCommand, input.yarnVariant) === "berry";
+  // The sealed sandbox network blocks packets, but the package manager only
+  // sees a flaky network and retries: outline's `yarn rebuild` ground
+  // through ECONNREFUSED for 9m28s per round (N160, 2026-08-20). Telling
+  // the manager itself the network is off converts the same failure into a
+  // fast rejection with a named cause. Every part of the chain carries the
+  // prefix so a nested manager invocation inherits it. Classic yarn and bun
+  // have no manager-level offline switch; the sealed network remains their
+  // enforcement.
+  const offline = isBerry
+    ? "YARN_ENABLE_NETWORK=false "
+    : manager === "npm" || manager === "pnpm"
+      ? "npm_config_offline=true "
+      : "";
   // An install that only passed via the engine-strict bypass retry leaves a
   // repo whose engine check would kill the rebuild the same way.
   const engineBypass = parsed.tokens.includes("--config.engine-strict=false")
@@ -258,17 +285,15 @@ export function createOfflineLifecycleCommand(input: {
     : "";
   const rebuild =
     manager === "npm"
-      ? "npm rebuild"
+      ? `${offline}npm rebuild`
       : manager === "pnpm"
         ? // Recursive: a bare `pnpm rebuild` at a workspace root exits 0
           // having rebuilt nothing, because members' dependencies are
           // outside the root project's scope. `-r` covers members and
           // behaves identically in single-project repos.
-          `pnpm rebuild -r${engineBypass}`
-        : manager === "yarn" &&
-            readYarnInstallVariant(input.installCommand, input.yarnVariant) ===
-              "berry"
-          ? "yarn rebuild"
+          `${offline}pnpm rebuild -r${engineBypass}`
+        : isBerry
+          ? `${offline}yarn rebuild`
           : undefined;
   const declaresPostinstall =
     (input.packageScripts.postinstall ?? "").trim().length > 0;
@@ -277,14 +302,31 @@ export function createOfflineLifecycleCommand(input: {
   const postinstall = !declaresPostinstall
     ? undefined
     : manager === "npm" || manager === "pnpm"
-      ? `${manager} run --if-present postinstall`
+      ? `${offline}${manager} run --if-present postinstall`
       : manager === "yarn" || manager === "bun"
-        ? `${manager} run postinstall`
+        ? `${manager === "yarn" && isBerry ? offline : ""}${manager} run postinstall`
         : undefined;
   const parts = [rebuild, postinstall].filter(
     (part): part is string => part !== undefined,
   );
   return parts.length === 0 ? undefined : parts.join(" && ");
+}
+
+/**
+ * True when a failed offline lifecycle pass was refused by the package
+ * manager's own offline enforcement — the refusal `createOfflineLifecycleCommand`
+ * itself provokes by disabling the manager's network. That failure is
+ * harness-owned and deterministic: no repair candidate declared the command
+ * and none can fix it, so callers must skip the pass and let preflight
+ * measure the tree's real state instead of charging a repair round
+ * (N160(3): outline lost three rounds to it, 2026-08-20). A package's build
+ * error, or a lifecycle script's own download attempt against the sealed
+ * network, must NOT match — those remain agent-repairable.
+ */
+export function isOfflineLifecycleNetworkRefusal(output: string): boolean {
+  return /enableNetwork|Network access ha(?:s|ve) been disabled|has been blocked because of your configuration settings|ENOTCACHED|only-if-cached|ERR_PNPM_NO_OFFLINE/i.test(
+    output,
+  );
 }
 
 function withLifecycleScriptSuppression(

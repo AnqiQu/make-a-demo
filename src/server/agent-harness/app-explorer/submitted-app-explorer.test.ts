@@ -114,10 +114,86 @@ describe("exploreSubmittedApp", () => {
               }),
             }),
           ],
+          navigationDestination: "/dashboard",
           preferredLocatorCandidateId: "click-link-1-1-locator-1",
         }),
       ]),
     );
+  });
+
+  it("drops a link destination carrying a missing-value interpolation", async () => {
+    // N158 (excalidraw): the app's marketing banner built its href from an
+    // unset env value, producing the local-looking "/undefined/plus?..." —
+    // the compiled script then waited on that URL forever. A destination
+    // with a literal undefined/null segment is the app interpolating a
+    // missing value; the click stays observable, its destination does not.
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          headings: ["Canvas"],
+          links: [
+            {
+              href: "/undefined/plus?utm_source=excalidraw",
+              locatorEvidence: {
+                locator: {
+                  exact: true,
+                  name: "Excalidraw+",
+                  role: "link",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/",
+                  targetHref: "/undefined/plus?utm_source=excalidraw",
+                  visible: true,
+                },
+              },
+              name: "Excalidraw+",
+            },
+          ],
+          title: "Canvas App",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    const linkClick = artifacts.actionCatalog.actions.find(
+      ({ id }) => id === "click-link-1-1",
+    );
+    expect(linkClick).toBeDefined();
+    expect(linkClick?.navigationDestination).toBeUndefined();
+  });
+
+  it("drops an exercised click's destination carrying a missing-value interpolation", async () => {
+    // The same broken app-built URL can be observed live: clicking the
+    // banner lands the SPA fallback on "/undefined/...". The exercised click
+    // keeps its outcome evidence; the destination must not compile into a
+    // waitForURL.
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          headings: ["Canvas"],
+          interactions: [
+            {
+              kind: "click",
+              locator: { name: "Try Plus", strategy: "role", value: "button" },
+              name: "Try Plus",
+              navigationDestination: "/undefined/plus?utm_source=excalidraw",
+              outcome: "navigated to /undefined/plus?utm_source=excalidraw",
+            },
+          ],
+          title: "Canvas App",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    const exercisedClick = artifacts.actionCatalog.actions.find(
+      ({ id }) => id === "click-interaction-1-1",
+    );
+    expect(exercisedClick).toBeDefined();
+    expect(exercisedClick?.exercised).toBe(true);
+    expect(exercisedClick?.navigationDestination).toBeUndefined();
   });
 
   it("bounds browser work and stops crawling when the prepared app exits", async () => {
@@ -165,23 +241,51 @@ describe("exploreSubmittedApp", () => {
     expect(script.split("deadlineAtMs").length).toBeGreaterThanOrEqual(5);
   });
 
-  it("harvests assert text from the aria snapshot when a route renders only navigation names", async () => {
+  it("harvests assert text from the aria snapshot on every route", async () => {
     const { commands } = await exploreObservation({
       routes: [observedRoute({ headings: [] })],
     });
     const script = readExplorerScript(commands);
 
-    // The harvest must fire whenever the primary selectors found nothing
-    // beyond the route's own nav and link names — not only on fully empty
-    // pages: data tables render outside the paragraph/list selectors.
-    expect(script).toContain("routeNavNames");
+    // N105: the accessibility tree is the canonical name-space — the same
+    // one Playwright locators resolve — so its text candidates join every
+    // route's harvest, not only thin-route fallbacks. Cross-route repeats
+    // are still chrome and stay excluded.
     expect(script).toContain("ariaTextCandidates");
-    expect(script).not.toContain(
-      "observed.headings.length === 0 && observed.text.length === 0",
-    );
+    expect(script).not.toContain("distinctHarvestCount");
+    expect(script).toContain("harvestedOnEarlierRoutes.has(candidate)");
     // Rendered text only: textContent would admit <style> and <script> text
     // as heading or paragraph evidence.
     expect(script).toContain("element.innerText");
+  });
+
+  it("waits for a bounded network-quiet window and re-harvests thin feature entry routes", async () => {
+    const { commands } = await exploreObservation({
+      featureInventory: [preparedFeature({})],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    // N105 stability rider: data that lands just after first paint gets a
+    // short capped network-idle window, and a feature entry route about to
+    // be reported content-free earns one fresh navigation and re-harvest
+    // before that verdict stands.
+    expect(script).toContain("networkidle");
+    expect(script).toContain("reharvestThinFeatureRoute");
+  });
+
+  it("spends the control budget on feature-matching names before positional picks", async () => {
+    const { commands } = await exploreObservation({
+      featureInventory: [preparedFeature({})],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    // N105: the 16-control budget is kept, but controls whose accessible
+    // names token-match a prepared feature outrank purely positional picks —
+    // a control-dense page's 17th button is often the feature's own.
+    expect(script).toContain("featureControlTokenGroups");
+    expect(script).toContain("prioritizeFeatureControls");
   });
 
   it("names grounded routes when prepared features are not observable", async () => {
@@ -286,6 +390,121 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport.logsSummary).toContain(
       "rendered no visible content",
     );
+  });
+
+  it("classifies a same-origin script 5xx as an app server error, not empty app state", async () => {
+    // N128 (twenty, 2026-08-13): Vite's import-analysis answered 500 on the
+    // entry chunk, every route rendered the error overlay, and the probe
+    // read "empty/unmeaningful app state" with a data-fixtures hint —
+    // repairs aimed at the data layer while the fault was module serving.
+    const { result } = await exploreObservation({
+      failedScriptResponses: [{ status: 500, url: `${baseUrl}/src/index.tsx` }],
+      routes: [observedRoute({ title: "Vite + React" })],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "app server error",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      `${baseUrl}/src/index.tsx`,
+    );
+    expect(result.validationReport.logsSummary).toContain("500");
+  });
+
+  it("classifies Ghostfolio's same-origin asset 404 storm as an app server error", async () => {
+    // ghostfolio, 2026-08-14T03-07 matrix round 5: the localized document
+    // base composed with the serve path, so every stylesheet/entry chunk was
+    // requested below /en/en/ and 404'd before Angular could render.
+    const { result } = await exploreObservation({
+      consoleErrors: [
+        `${baseUrl}/en/portfolio: failed resource ${baseUrl}/en/en/styles.css (HTTP 404)`,
+        `${baseUrl}/en/portfolio: failed resource ${baseUrl}/en/en/chunk-KMIIHQKY.js (HTTP 404)`,
+        `${baseUrl}/en/portfolio: failed resource ${baseUrl}/en/en/main.js (HTTP 404)`,
+      ],
+      routes: [
+        observedRoute({
+          path: "/en/portfolio",
+          requestedPath: "/en/portfolio",
+          title: "Ghostfolio",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "app server error",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("/en/en/");
+    expect(result.validationReport.logsSummary).toContain("HTTP 404");
+  });
+
+  it("keeps the empty-state reading when the failing script belongs to another origin", async () => {
+    const { result } = await exploreObservation({
+      failedScriptResponses: [
+        { status: 500, url: "https://cdn.example.com/analytics.js" },
+      ],
+      routes: [observedRoute({ title: "Vite + React" })],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+  });
+
+  it("never fails a grounded exploration over a script 5xx alone", async () => {
+    // The serve-failure reading exists to redirect an already-failing run;
+    // an app that grounds its features despite a stray 5xx is working.
+    const invoicing = preparedFeature({
+      description: "Demonstrate invoicing",
+      entryPaths: ["/en/invoices"],
+      id: "invoicing",
+      label: "Invoices",
+      requestedFeature: "invoicing",
+    });
+    const { result } = await exploreObservation({
+      consoleErrors: [
+        `${baseUrl}/en/invoices: failed resource ${baseUrl}/optional/styles.css (HTTP 404)`,
+        `${baseUrl}/en/invoices: failed resource ${baseUrl}/optional/widget.js (HTTP 404)`,
+      ],
+      failedScriptResponses: [
+        { status: 500, url: `${baseUrl}/optional-widget.js` },
+      ],
+      featureInventory: [invoicing],
+      routes: [
+        observedRoute({
+          featureIds: ["invoicing"],
+          headings: ["Invoice INV-001 for Aperture Labs"],
+          path: "/en/invoices",
+          primaryNavigation: ["Overview"],
+          requestedPath: "/en/invoices",
+          text: ["Due in 14 days"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "none",
+      status: "passed",
+    });
+  });
+
+  it("lets a named missing module outrank the script 5xx reading", async () => {
+    // A page error that names the unresolvable module is deeper evidence
+    // than the 5xx that delivered it; the dependency hint stays first.
+    const { result } = await exploreObservation({
+      failedScriptResponses: [{ status: 500, url: `${baseUrl}/src/index.tsx` }],
+      pageErrors: [
+        `${baseUrl}/: Module not found: Can't resolve '@calcom/prisma/enums'`,
+      ],
+      routes: [observedRoute({ title: "Vite + React" })],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "missing dependency",
+      status: "failed",
+    });
   });
 
   it("fails a hollow app whose feature routes render only shared navigation chrome", async () => {
@@ -920,6 +1139,38 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("keeps stderr as evidence but withholds the runtime-error hint when stderr carries only warnings", async () => {
+    // N106: tsc watch mode narrates "Found 0 errors" on stderr forever, so
+    // stderr bytes alone must never steer repair at server-side errors.
+    const { result } = await exploreObservation({
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: [
+          "warn  - You have enabled experimental features.",
+          "Found 0 errors. Watching for file changes.",
+        ].join("\n"),
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.stderrExcerpts.join("\n")).toContain(
+      "Found 0 errors",
+    );
+    expect(
+      result.validationReport.suggestedRepairHints.join(" "),
+    ).not.toContain("Server-side runtime errors");
+  });
+
   it("redacts secrets from managed-app output before they enter the exploration verdict", async () => {
     const { result } = await exploreObservation({
       featureInventory: [preparedFeature()],
@@ -988,6 +1239,274 @@ describe("exploreSubmittedApp", () => {
       failureClassification: "missing dependency",
       logsSummary: expect.stringContaining("use-stick-to-bottom"),
     });
+  });
+
+  it("names the service-worker ban when registration fails as a page error", async () => {
+    // The demo browser blocks service workers by design (network lockdown),
+    // so MSW-style worker mocking can never activate — twenty rendered only
+    // navigation chrome on every route while repair rounds chased the
+    // symptom (2026-08-12). The hint must name the structural constraint.
+    const { result } = await exploreObservation({
+      featureInventory: [preparedFeature()],
+      pageErrors: [
+        "http://127.0.0.1:3001/: [MSW] Failed to register the Service Worker: Cannot read properties of undefined (reading 'active')",
+      ],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    const hints = result.validationReport.suggestedRepairHints.join(" ");
+    expect(hints).toContain("blocks Service Worker registration");
+    expect(hints).toContain("fetch/API-client layer");
+  });
+
+  it("names the service-worker ban when registration fails only in console errors", async () => {
+    const { result } = await exploreObservation({
+      consoleErrors: [
+        "http://127.0.0.1:3001/: Failed to register a ServiceWorker for scope ('http://127.0.0.1:3001/') with script ('http://127.0.0.1:3001/mockServiceWorker.js')",
+      ],
+      featureInventory: [preparedFeature()],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    const hints = result.validationReport.suggestedRepairHints.join(" ");
+    expect(hints).toContain("blocks Service Worker registration");
+  });
+
+  it("names the schema-gap fields when a client-stub declaration crashes at runtime", async () => {
+    // A client-stub rung that satisfies only part of the response schema
+    // crashes the app generically: error boundaries report the field the
+    // component dereferenced, client caches report the field they could not
+    // write. The hint must extract those identifiers and state the stub's
+    // schema obligation so repair targets the transport, not the symptom
+    // (twenty, 2026-08-12).
+    const { result } = await exploreObservation({
+      consoleErrors: [
+        "http://127.0.0.1:3001/: Missing field 'currentWorkspace' while writing result",
+      ],
+      dataStrategy: [
+        {
+          detail: "Stubbed the GraphQL client transport with fixtures.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      pageErrors: [
+        "http://127.0.0.1:3001/: TypeError: Cannot read properties of undefined (reading 'authProviders')",
+      ],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    const hints = result.validationReport.suggestedRepairHints.join(" ");
+    expect(hints).toContain("client-stub");
+    expect(hints).toContain("authProviders");
+    expect(hints).toContain("currentWorkspace");
+    expect(hints).toContain("complete response schema");
+  });
+
+  it("omits the schema-gap hint when no client-stub rung is declared", async () => {
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Embedded SQLite with seeded demo rows.",
+          rung: "embedded-config",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      pageErrors: [
+        "http://127.0.0.1:3001/: TypeError: Cannot read properties of undefined (reading 'authProviders')",
+      ],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(
+      result.validationReport.suggestedRepairHints.join(" "),
+    ).not.toContain("complete response schema");
+  });
+
+  it("keeps the schema-gap hint quiet when crash diagnostics match no schema pattern", async () => {
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Stubbed the GraphQL client transport with fixtures.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      pageErrors: ["http://127.0.0.1:3001/: Error: WebSocket handshake failed"],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(
+      result.validationReport.suggestedRepairHints.join(" "),
+    ).not.toContain("complete response schema");
+  });
+
+  it("classifies repeated refused backend calls as a client stub that never engaged", async () => {
+    // directus, 2026-08-13T23-23 matrix: the declared client-stub gated on an
+    // env var the bundler never delivers to browser code, so the stub was
+    // dead code and every data call flowed to a backend that does not exist.
+    // The probe read the hollow routes as unobservable features and five
+    // repair rounds aimed at the data layer; the refused-call storm must
+    // rename the failure to the stub gate itself.
+    const proxyError = (path: string) =>
+      `[vite] http proxy error: ${path}\nError: connect ECONNREFUSED 127.0.0.1:8055`;
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Axios and SDK seams return in-code fixtures in demo mode.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: [
+          proxyError("/auth?sessionOnly"),
+          proxyError("/server/info"),
+        ].join("\n"),
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.failureClassification).toBe(
+      "client stub not engaged",
+    );
+    expect(result.validationReport.logsSummary).toContain("127.0.0.1:8055");
+    const hints = result.validationReport.suggestedRepairHints.join(" ");
+    expect(hints).toContain("demo gate");
+    expect(hints).toContain("browser");
+  });
+
+  it("classifies rendered Directus chrome plus refused backend paths as a partially engaged client stub", async () => {
+    // directus, 2026-08-14T03-07 matrix round 6: fixture-backed app chrome,
+    // headings, and controls rendered, while uncovered auth/server seams still
+    // reached the absent 8055 backend. That is coverage evidence, not a dead
+    // browser gate.
+    const proxyError = (path: string) =>
+      `[vite] http proxy error: ${path}\nError: connect ECONNREFUSED 127.0.0.1:8055`;
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Axios and SDK seams return in-code fixtures in demo mode.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: [
+          proxyError("/auth?sessionOnly"),
+          proxyError("/auth/refresh"),
+          proxyError("/server/info"),
+        ].join("\n"),
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          buttons: ["Remind Later"],
+          featureIds: ["post-article"],
+          headings: ["Page Not Found"],
+          path: "/#/editor",
+          text: ["Directus Demo"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.failureClassification).toBe(
+      "client stub partially engaged",
+    );
+    expect(result.validationReport.logsSummary).toContain("127.0.0.1:8055");
+    expect(result.validationReport.logsSummary).toContain("/auth?sessionOnly");
+    expect(result.validationReport.logsSummary).toContain("/server/info");
+    expect(result.validationReport.logsSummary).not.toContain("dead code");
+    expect(result.validationReport.logsSummary).not.toContain(
+      "delivery channel",
+    );
+  });
+
+  it("keeps the feature classification when refused backend calls appear without a client-stub rung", async () => {
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Provisioned postgres on loopback.",
+          rung: "provisioned-service",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr:
+          "Error: connect ECONNREFUSED 127.0.0.1:5432\nError: connect ECONNREFUSED 127.0.0.1:5432",
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.failureClassification).not.toBe(
+      "client stub not engaged",
+    );
+  });
+
+  it("keeps the feature classification when a declared stub sees a single refused call", async () => {
+    // One refused connection can be a benign startup probe; the conversion
+    // demands the repeated storm that proves live transports.
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Axios and SDK seams return in-code fixtures in demo mode.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: "Error: connect ECONNREFUSED 127.0.0.1:8055",
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.failureClassification).not.toBe(
+      "client stub not engaged",
+    );
   });
 
   it("attaches the observation to a grounding failure for diagnosis", async () => {
@@ -1469,6 +1988,206 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("routes a requested feature whose only interaction lands on auth back to preparation", async () => {
+    const feature = preparedFeature({
+      description: "Show weekly availability and event duration.",
+      entryPaths: ["/availability"],
+      id: "weekly-availability",
+      label: "Weekly availability",
+      requestedFeature: "weekly availability",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [feature],
+      requestedFeatures: ["weekly availability"],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: ["Weekly availability"],
+          interactions: [
+            {
+              kind: "click",
+              locator: { name: "New", strategy: "role", value: "button" },
+              name: "New",
+              navigationDestination: "/auth/login",
+              outcome: "The next surface opened",
+            },
+          ],
+          path: "/availability",
+          text: ["Event duration 30 minutes"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "feature auth barrier",
+      logsSummary: expect.stringContaining("click-interaction-1-1"),
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("/auth/login");
+  });
+
+  it("does not let a passing declared proof mask auth-degraded requested-feature interactions", async () => {
+    const feature = preparedFeature({
+      description: "Open and share a public scheduling link.",
+      entryPaths: ["/event-types"],
+      expectedProof: { kind: "visible-text", text: "Event types" },
+      id: "event-types-public-link",
+      label: "Public scheduling link",
+      requestedFeature: "open a public scheduling link",
+    });
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail: '"Event types" is visible on /event-types',
+          featureId: feature.id,
+          passed: true,
+        },
+      ],
+      featureInventory: [feature],
+      requestedFeatures: ["open a public scheduling link"],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: ["Event types"],
+          interactions: [
+            {
+              kind: "click",
+              locator: {
+                name: "Open public link",
+                strategy: "role",
+                value: "button",
+              },
+              name: "Open public link",
+              navigationDestination: "/auth/login",
+              outcome: "/auth/login became visible",
+            },
+          ],
+          path: "/event-types",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "feature auth barrier",
+      featureVerdicts: [
+        expect.objectContaining({
+          failedBecause: "auth-wall",
+          featureId: feature.id,
+          verdict: "failed",
+        }),
+      ],
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("/auth/login");
+  });
+
+  it("fails a requested feature left with only external-destination clicks", async () => {
+    // N158 (excalidraw): the feature's one exercised interaction left the app
+    // for the marketing site. Like an auth-wall destination, that click can
+    // never prove the feature — the verdict must name the external
+    // destination instead of blaming wording.
+    const feature = preparedFeature({
+      description: "Compare plus plans.",
+      entryPaths: ["/"],
+      id: "plus-plans",
+      label: "Plus plans",
+      requestedFeature: "plus plans",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [feature],
+      requestedFeatures: ["plus plans"],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: ["Canvas workspace"],
+          interactions: [
+            {
+              externalDestination: "https://plus.excalidraw.com/plus",
+              kind: "click",
+              locator: { name: "Try Plus", strategy: "role", value: "button" },
+              name: "Try Plus",
+              outcome: "The page changed",
+            },
+          ],
+          path: "/",
+          text: ["Freehand drawing tools"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      featureVerdicts: [
+        expect.objectContaining({
+          failedBecause: "external-destination",
+          featureId: feature.id,
+          verdict: "failed",
+        }),
+      ],
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "https://plus.excalidraw.com/plus",
+    );
+  });
+
+  it("keeps a proof-grounded feature grounded despite an external-destination click", async () => {
+    // The external click is non-navigable evidence, not a veto: a feature
+    // whose declared proof passed still grounds through it (N157), and only
+    // the external destination stays unusable for flow planning.
+    const feature = preparedFeature({
+      description: "Draw and label shapes on the canvas.",
+      entryPaths: ["/"],
+      expectedProof: {
+        contains: '"type":"rectangle"',
+        key: "excalidraw",
+        kind: "app-state",
+        source: "local-storage",
+      },
+      id: "draw-shapes",
+      label: "Draw shapes",
+      requestedFeature: "draw and label shapes",
+    });
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail: 'stored value under "excalidraw" contains "type":"rectangle"',
+          featureId: feature.id,
+          passed: true,
+        },
+      ],
+      featureInventory: [feature],
+      requestedFeatures: ["draw and label shapes"],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: [],
+          interactions: [
+            {
+              externalDestination: "https://plus.excalidraw.com/plus",
+              kind: "click",
+              locator: { name: "Try Plus", strategy: "role", value: "button" },
+              name: "Try Plus",
+              outcome: "The page changed",
+            },
+          ],
+          path: "/",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      featureVerdicts: [
+        expect.objectContaining({
+          featureId: feature.id,
+          groundedBy: "declared-proof",
+          verdict: "grounded",
+        }),
+      ],
+      status: "passed",
+    });
+  });
+
   it("recognizes an OAuth-only redirect as a protected feature auth wall", async () => {
     const invoice = preparedFeature({
       authStrategy: "bypass",
@@ -1658,6 +2377,52 @@ describe("exploreSubmittedApp", () => {
       ),
       status: "failed",
     });
+  });
+
+  it("steers at the serving base when chrome-only routes carry same-origin 404s", async () => {
+    // Directus (2026-08-09): the admin SPA was served at a base it does not
+    // expect — its own links resolved to concatenated 404 routes and its
+    // session endpoint 404'd — and every repair round steered at fixtures.
+    // Same-origin 404s on a chrome-only route are browser evidence that the
+    // serving arrangement, not the data, is wrong.
+    const dataModel = preparedFeature({
+      description: "Create a collection in the data model",
+      entryPaths: ["/settings/data-model"],
+      id: "data-model",
+      label: "Data model",
+      requestedFeature: "data model",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [dataModel],
+      pageErrors: [
+        "http://127.0.0.1:5173/settings/data-model: Request failed with status code 404",
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["data-model"],
+          path: "/settings/data-model",
+          primaryNavigation: ["Settings", "Content"],
+          requestedPath: "/settings/data-model",
+          text: ["Settings", "Content"],
+        }),
+        observedRoute({
+          headings: [],
+          path: "/content",
+          primaryNavigation: ["Settings", "Content"],
+          requestedPath: "/content",
+          text: ["Settings", "Content"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "same-origin request(s) returned 404",
+    );
+    expect(result.validationReport.logsSummary).toContain("base path");
   });
 
   it("names what a content-bearing route showed when the feature's wording matched nothing", async () => {
@@ -2034,6 +2799,77 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("names the stuck-loading cause when a zero-row table mounted textless skeleton rows", async () => {
+    // Midday (2026-08-09): the transactions table mounted rows whose every
+    // cell was empty — loading skeletons for a query that never resolves.
+    // Neither of the two-cause candidates (empty query, zero-height
+    // virtualizer) fits, so both repair rounds steered at fixture shape
+    // while the actual defect was the wiring between fixture and UI. Rows
+    // without text are a third, distinguishable state, and the declared
+    // data seam names exactly where to repair it.
+    const transactions = preparedFeature({
+      dataSeams: [
+        {
+          fixtureModule: "src/demo/transaction-fixtures.ts",
+          functionName: "getTransactions",
+          path: "apps/dashboard/src/lib/queries.ts",
+        },
+      ],
+      description: "Demonstrate transactions",
+      entryPaths: ["/transactions"],
+      id: "transactions",
+      label: "Transactions",
+      requestedFeature: "transactions",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [transactions],
+      routes: [
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 8,
+              headerTexts: ["Date", "Description", "Amount"],
+              skeletonRows: 12,
+            },
+          ],
+          featureIds: ["transactions"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: {
+                strategy: "placeholder",
+                value: "Search transactions...",
+              },
+              name: "Search transactions...",
+              outcome: "The field contained the observed demo value",
+            },
+          ],
+          path: "/transactions",
+          primaryNavigation: ["Overview"],
+          requestedPath: "/transactions",
+          text: ["Search transactions...", "Review"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "12 textless skeleton rows",
+    );
+    expect(result.validationReport.logsSummary).toContain("never resolved");
+    // Steering points at the declared seam, not at fixture shape.
+    expect(result.validationReport.logsSummary).toContain("getTransactions");
+    expect(result.validationReport.logsSummary).toContain(
+      "src/demo/transaction-fixtures.ts",
+    );
+    expect(result.validationReport.logsSummary).not.toContain(
+      "virtualized table body",
+    );
+  });
+
   it("keeps a requested feature grounded when its route also renders a populated data table", async () => {
     // The zero-row veto reads "the data surface rendered empty", so a route
     // whose tables include a populated one — an incidental empty secondary
@@ -2178,12 +3014,49 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("emits text asserts alongside heading asserts on the same route", async () => {
+    // Heading presence used to gate text asserts off entirely, so a
+    // dashboard whose data renders under a page title had no assertable
+    // data text — features grounded by content, not by the title, failed
+    // as wording mismatches. Both assert kinds must coexist.
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          headings: ["Fleet dashboard"],
+          text: [
+            "Total balance $12,400",
+            "Seven vehicles are currently active",
+          ],
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "assert",
+        preferredLocator: {
+          name: "Fleet dashboard",
+          strategy: "role",
+          value: "heading",
+        },
+      }),
+    );
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "assert",
+        preferredLocator: { strategy: "text", value: "Total balance $12,400" },
+      }),
+    );
+  });
+
   it("fails a requested feature whose catalog tagging cannot satisfy flow planning", async () => {
     // Exploration grounds a feature on exercised evidence alone, but flow
-    // planning demands an interaction AND a visible assertion. A requested
-    // feature with zero tagged asserts makes flow planning structurally
-    // unsatisfiable, so the gap must fail here, where preparation repair can
-    // render assertable content or reselect the feature.
+    // planning demands an interaction AND a visible assertion. When no
+    // on-screen string shares a token with the feature wording, even the
+    // assert floor cannot help, flow planning is structurally
+    // unsatisfiable, and the gap must fail here, where preparation repair
+    // can render assertable content or reselect the feature.
     const posting = preparedFeature({
       description: "Publish a new article.",
       entryPaths: ["/#/article/demo"],
@@ -2203,7 +3076,7 @@ describe("exploreSubmittedApp", () => {
       routes: [
         observedRoute({
           featureIds: ["post-article", "article-comments"],
-          headings: ["Publish demo article"],
+          headings: ["Publish demo draft"],
           interactions: [
             {
               kind: "fill",
@@ -2214,7 +3087,7 @@ describe("exploreSubmittedApp", () => {
           ],
           path: "/#/article/demo",
           requestedPath: "/#/article/demo",
-          text: ["A shared placeholder article body"],
+          text: ["A shared placeholder draft body"],
         }),
       ],
     });
@@ -2236,17 +3109,17 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport.logsSummary).toContain(
       "align the featureInventory wording",
     );
-    expect(result.validationReport.logsSummary).toContain(
-      "Publish demo article",
-    );
+    expect(result.validationReport.logsSummary).toContain("Publish demo draft");
   });
 
   it("fails forced agent-selected features whose tagging cannot satisfy flow planning", async () => {
     // conduit (2026-08-07): no maker-requested features, so the evidence-gap
     // check skipped every inventory entry — yet flow planning must select
     // min(3, |inventory|) features, and comment-on-article had zero tagged
-    // asserts. Structurally unsatisfiable from planning's first attempt; the
-    // wedge must fail here, where preparation repair can act.
+    // asserts. With no token-overlapping string for the assert floor to
+    // multi-tag, this stays structurally unsatisfiable from planning's
+    // first attempt; the wedge must fail here, where preparation repair can
+    // act.
     const asAgentSelected = ({
       requestedFeature: _requestedFeature,
       ...feature
@@ -2272,7 +3145,7 @@ describe("exploreSubmittedApp", () => {
       routes: [
         observedRoute({
           featureIds: ["post-article", "article-comments"],
-          headings: ["Publish demo article"],
+          headings: ["Publish demo draft"],
           interactions: [
             {
               kind: "fill",
@@ -2283,7 +3156,7 @@ describe("exploreSubmittedApp", () => {
           ],
           path: "/#/article/demo",
           requestedPath: "/#/article/demo",
-          text: ["A shared placeholder article body"],
+          text: ["A shared placeholder draft body"],
         }),
       ],
     });
@@ -2787,6 +3660,40 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("classifies an exploration timeout with the app still up as a repairable render timeout", async () => {
+    // Outline (2026-08-09): the final exploration attempt hung for the full
+    // 420s protocol budget and the raw Daytona timeout escaped unclassified,
+    // killing the run and forfeiting its reserved repair rounds. An app
+    // that is up but never yields a protocol is a wedged route, not
+    // infrastructure.
+    const result = await exploreSubmittedApp({
+      baseUrl,
+      preparationManifestId: "prep_001",
+      workspace: createFakeAgentHarnessWorkspace({
+        async executeSubmittedCode(_command, options) {
+          throw new AgentHarnessCommandTimeoutError(options?.timeoutMs ?? 0);
+        },
+        async readSubmittedCodeAppStatus() {
+          return {
+            running: true,
+            stderr: "GET /collection/product-handbook-demo pending",
+            stdout: "",
+          };
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      validationReport: {
+        failureClassification: "render timeout",
+        logsSummary: expect.stringContaining("still running"),
+        status: "failed",
+      },
+    });
+    expect(result.validationReport.logsSummary).toContain("never completed");
+  });
+
   it("preserves an exploration timeout when managed app status is unavailable", async () => {
     const exploration = exploreSubmittedApp({
       baseUrl,
@@ -2807,6 +3714,1026 @@ describe("exploreSubmittedApp", () => {
   });
 });
 
+describe("feature verdict ledger", () => {
+  it("records grounded verdicts with their evidence class on a passed report", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/holdings"],
+          id: "holding-management",
+          label: "Holding management",
+          requestedFeature: "managing holdings",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["holding-management"],
+          headings: ["Holding management"],
+          interactions: [
+            {
+              kind: "click",
+              locator: {
+                name: "Add holding",
+                strategy: "role",
+                value: "button",
+              },
+              locatorEvidence: {
+                locator: {
+                  exact: true,
+                  name: "Add holding",
+                  role: "button",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/holdings",
+                  visible: true,
+                },
+              },
+              name: "Add holding",
+              outcome: "Add holding dialog became visible",
+            },
+          ],
+          path: "/holdings",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      {
+        detail: "Add holding dialog became visible",
+        evidence: ["click-interaction-1-1"],
+        featureId: "holding-management",
+        groundedBy: "interaction",
+        verdict: "grounded",
+      },
+    ]);
+  });
+
+  it("grounds a feature through a recorded control state transition", async () => {
+    // N105: a toggle that renames itself (Follow → Unfollow) or enables a
+    // control is wording-free proof of behavior; the ledger names it as its
+    // own evidence class so steering never asks for wording alignment.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Follow another author.",
+          entryPaths: ["/#/profile"],
+          id: "follow-author",
+          label: "Follow an author",
+          requestedFeature: "following an author",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["follow-author"],
+          headings: ["Author profile"],
+          interactions: [
+            {
+              kind: "click",
+              locator: { name: "Follow", strategy: "role", value: "button" },
+              locatorEvidence: {
+                locator: {
+                  exact: true,
+                  name: "Follow",
+                  role: "button",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/#/profile",
+                  visible: true,
+                },
+              },
+              name: "Follow",
+              outcome: "Follow became Unfollow",
+              stateTransition: {
+                control: "Follow",
+                from: "Follow",
+                to: "Unfollow",
+              },
+            },
+          ],
+          path: "/#/profile",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("Unfollow"),
+        featureId: "follow-author",
+        groundedBy: "state-transition",
+        verdict: "grounded",
+      }),
+    ]);
+    const clickAction = artifacts.actionCatalog.actions.find(
+      (action) => action.kind === "click" && action.exercised === true,
+    );
+    expect(clickAction?.stateTransition).toEqual({
+      control: "Follow",
+      from: "Follow",
+      to: "Unfollow",
+    });
+  });
+
+  it("observes transitions, skips disabled controls, and re-proves through stored locator evidence in the generated script", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("readStateTransition");
+    expect(script).toContain("[disabled] → [enabled]");
+    expect(script).toContain("isEnabled");
+    // Zero matches on the fresh-state name lookup must fall back to the
+    // stored verified locator before the interaction is dropped (N105).
+    expect(script).toContain("resolveStoredLocator");
+  });
+
+  it("grounds a feature through its passed declared proof regardless of wording", async () => {
+    // N107: the proof is the evidence. The route's rendered wording shares
+    // nothing with the feature, and grounding must not depend on it.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail: '"Published demo article" is visible on /#/editor',
+          featureId: "post-article",
+          passed: true,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            kind: "visible-text",
+            text: "Published demo article",
+          },
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Wombat maintenance schedule"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        featureId: "post-article",
+        groundedBy: "declared-proof",
+        verdict: "grounded",
+      }),
+    ]);
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        featureIds: ["post-article"],
+        id: "declared-proof-post-article",
+        kind: "assert",
+        preferredLocator: {
+          strategy: "text",
+          value: "Published demo article",
+        },
+      }),
+    );
+  });
+
+  it("grounds a canvas feature through a passed app-state proof on a route that renders no DOM content", async () => {
+    // N157 (excalidraw): the feature's outcome lives on a canvas, so its
+    // route harvests no headings, no text, and no assertable DOM evidence.
+    // The passed app-state proof must ground the feature AND satisfy flow
+    // planning's evidence demand by itself, or validation fails with a gap
+    // no DOM preparation can close.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'stored local-storage value under "excalidraw" contains "type":"rectangle" on /',
+          featureId: "draw-shapes",
+          passed: true,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/"],
+          expectedProof: {
+            contains: '"type":"rectangle"',
+            key: "excalidraw",
+            kind: "app-state",
+            source: "local-storage",
+          },
+          id: "draw-shapes",
+          label: "Drawing shapes",
+          requestedFeature: "draw and label shapes",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["draw-shapes"],
+          path: "/",
+          requestedPath: "/",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        featureId: "draw-shapes",
+        groundedBy: "declared-proof",
+        verdict: "grounded",
+      }),
+    ]);
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        declaredProofKind: "app-state",
+        featureIds: ["draw-shapes"],
+        id: "declared-proof-draw-shapes",
+        kind: "assert",
+      }),
+    );
+  });
+
+  it("grounds a canvas feature through a passed canvas-delta proof as an exercised click", async () => {
+    // N157 fallback rung: the backend clicked the named control and saw the
+    // canvas pixels change. The minted click is browser-exercised evidence
+    // and must carry the marker that makes the feature flow-plannable.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'the canvas changed after clicking "Rectangle" on / (canvas-delta)',
+          featureId: "draw-shapes",
+          passed: true,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/"],
+          expectedProof: { kind: "canvas-delta", locator: "Rectangle" },
+          id: "draw-shapes",
+          label: "Drawing shapes",
+          requestedFeature: "draw and label shapes",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["draw-shapes"],
+          path: "/",
+          requestedPath: "/",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        declaredProofKind: "canvas-delta",
+        exercised: true,
+        featureIds: ["draw-shapes"],
+        id: "declared-proof-draw-shapes",
+        kind: "click",
+        preferredLocator: {
+          name: "Rectangle",
+          strategy: "role",
+          value: "button",
+        },
+      }),
+    );
+  });
+
+  it("normalizes a bare fragment entryPath into observed route space for declared-proof actions", async () => {
+    // N124 (homer): the manifest contract legally allows entryPaths that
+    // start with "#" or "?", but every observed AppMap route lives in
+    // pathname+search+hash space. A declared-proof action carrying the raw
+    // "#additional-page" would point Capture at a route the catalog never
+    // observed, so ingestion must normalize entryPaths against the base URL.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail: '"This is another page" is visible on /#additional-page',
+          featureId: "additional-page",
+          passed: true,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["#additional-page"],
+          expectedProof: {
+            kind: "visible-text",
+            text: "This is another page",
+          },
+          id: "additional-page",
+          label: "Additional page",
+          requestedFeature: "additional page",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["additional-page"],
+          headings: ["Additional page"],
+          path: "/#additional-page",
+          requestedPath: "/#additional-page",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        id: "declared-proof-additional-page",
+        route: "/#additional-page",
+      }),
+    );
+    // Ingestion-time normalization is the invariant: no catalog action may
+    // ever carry a route outside the observed pathname+search+hash space.
+    for (const action of artifacts.actionCatalog.actions) {
+      expect(action.route).toMatch(/^\//);
+    }
+  });
+
+  it("reclassifies regrounding as unreproducible when prefix replay cannot find the candidate", async () => {
+    // N125(3): the candidate stayed missing even in the replayed capture
+    // context, so the exploration-time evidence does not exist in the state
+    // the demo replays. That is app-state divergence for preparation
+    // repair; the script channel cannot fix an app that no longer shows
+    // the element.
+    const { result } = await exploreObservation({
+      captureFailure: {
+        actionId: "click-save",
+        locator: { name: "Save entry", role: "button", strategy: "role" },
+        locatorCandidateId: "save-entry-locator-1",
+        sceneId: "scene-editor",
+        scenePrefix: [{ id: "goto-root", path: "/", type: "goto" }],
+        screenshotPath: "/tmp/run/makeademo-validation-failure.png",
+      },
+      replayVerification: {
+        actionId: "click-save",
+        detail:
+          "locator matched 0 visible element(s) after replaying 1 prefix action(s) in Scene scene-editor",
+        locatorCandidateId: "save-entry-locator-1",
+        reproduced: false,
+        sceneId: "scene-editor",
+      },
+      routes: [observedRoute({ headings: ["Records workspace"] })],
+    });
+
+    expect(result.kind).toBe("repairable-failure");
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "evidence unreproducible at replay",
+      status: "failed",
+    });
+    // The exploration-vs-replay evidence pair: the certified locator on one
+    // side, the replayed observation on the other.
+    expect(result.validationReport.logsSummary).toContain("click-save");
+    expect(result.validationReport.logsSummary).toContain("Save entry");
+    expect(result.validationReport.logsSummary).toContain(
+      "matched 0 visible element(s)",
+    );
+    expect(result.validationReport.screenshots).toContain(
+      "/tmp/run/makeademo-validation-failure.png",
+    );
+  });
+
+  it("keeps regrounding artifacts when prefix replay reproduces the candidate", async () => {
+    // A reproduced candidate means the exploration evidence stands; the
+    // capture failure was transient, and regrounding proceeds normally.
+    const { result } = await exploreObservation({
+      captureFailure: {
+        actionId: "click-save",
+        locator: { name: "Save entry", role: "button", strategy: "role" },
+        locatorCandidateId: "save-entry-locator-1",
+        sceneId: "scene-editor",
+        scenePrefix: [{ id: "goto-root", path: "/", type: "goto" }],
+      },
+      replayVerification: {
+        actionId: "click-save",
+        detail:
+          "locator resolved to one visible element after replaying 1 prefix action(s) in Scene scene-editor",
+        locatorCandidateId: "save-entry-locator-1",
+        reproduced: true,
+        sceneId: "scene-editor",
+      },
+      routes: [observedRoute({ headings: ["Records workspace"] })],
+    });
+
+    requireArtifacts(result);
+  });
+
+  it("fails a feature whose declared proof failed even when wording would ground it", async () => {
+    // The excalidraw vacuous-pass hole: "undo/redo" must pass its declared
+    // transition, not ride a nearby heading. A failed proof subsumes every
+    // wording bridge.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'control "Follow" reads "Follow" after the click; declared to "Unfollow"',
+          featureId: "post-article",
+          passed: false,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            from: "Follow",
+            kind: "state-transition",
+            locator: "Follow",
+            to: "Unfollow",
+          },
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Posting an article"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining('declared to "Unfollow"'),
+        failedBecause: "declared-proof-failed",
+        featureId: "post-article",
+        verdict: "failed",
+      }),
+    ]);
+    expect(result.validationReport.logsSummary).toContain("declared proof");
+  });
+
+  it("falls back to wording grounding when a declared proof was never executed", async () => {
+    // An unexecuted proof (deadline, unreachable entry) is missing
+    // evidence, not failed evidence: the wording chain still applies.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            kind: "visible-text",
+            text: "Published demo article",
+          },
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Posting an article"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        featureId: "post-article",
+        groundedBy: "assert",
+        verdict: "grounded",
+      }),
+    ]);
+  });
+
+  it("embeds declared proof targets in the generated script", async () => {
+    const { commands } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            kind: "visible-text",
+            text: "Published demo article",
+          },
+        }),
+      ],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("declaredProofTargets");
+    expect(script).toContain("result.declaredProofs");
+  });
+
+  it("names the winning feature and steers at an unclaimed entry route when the crawl never tagged the feature", async () => {
+    // The untagged corner: allocation-chart's entry route rendered content
+    // whose tokens overlap the feature, but the crawl tagged the route to
+    // portfolio-overview alone (redirect or tagging miss). The assert floor
+    // cannot reach an untagged feature, so route-shared-with-winners is the
+    // honest verdict and the steering asks for an unclaimed entry route.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Show the portfolio overview.",
+          entryPaths: ["/en/portfolio"],
+          id: "portfolio-overview",
+          label: "Portfolio overview",
+          requestedFeature: "portfolio overview",
+        }),
+        preparedFeature({
+          description: "Chart the portfolio allocation split.",
+          entryPaths: ["/en/portfolio"],
+          id: "allocation-chart",
+          label: "Allocation chart",
+          requestedFeature: "allocation chart",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["portfolio-overview"],
+          headings: ["Portfolio holdings overview"],
+          path: "/en/portfolio",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        featureId: "portfolio-overview",
+        groundedBy: "assert",
+        verdict: "grounded",
+      }),
+      expect.objectContaining({
+        detail: expect.stringContaining('"Portfolio holdings overview"'),
+        failedBecause: "route-shared-with-winners",
+        featureId: "allocation-chart",
+        verdict: "failed",
+      }),
+    ]);
+    const failed = result.validationReport.featureVerdicts?.[1];
+    expect(failed?.detail).toContain("portfolio-overview");
+    expect(result.validationReport.logsSummary).toContain(
+      "an entry route no other feature claims",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      '"Portfolio holdings overview"',
+    );
+  });
+
+  it("keeps at least one assert for a route-tagged feature the winners out-scored", async () => {
+    // Winner-take-all tagging awards every shared string to the strongest
+    // feature, leaving a co-tagged feature assertless and failing the whole
+    // run — even though one shared heading could serve both. The floor
+    // multi-tags the best wording-matched assert so the feature grounds.
+    const overview = preparedFeature({
+      description: "Review the portfolio holdings overview.",
+      entryPaths: ["/en/portfolio"],
+      id: "portfolio-overview",
+      label: "Portfolio overview",
+      requestedFeature: "portfolio overview",
+    });
+    const allocation = preparedFeature({
+      description: "Chart the holdings allocation.",
+      entryPaths: ["/en/portfolio"],
+      id: "allocation-chart",
+      label: "Allocation chart",
+      requestedFeature: "allocation chart",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [overview, allocation],
+      routes: [
+        observedRoute({
+          featureIds: ["portfolio-overview", "allocation-chart"],
+          headings: [
+            "Portfolio holdings overview",
+            "Overview performance summary",
+          ],
+          path: "/en/portfolio",
+          requestedPath: "/en/portfolio",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        featureIds: ["portfolio-overview", "allocation-chart"],
+        kind: "assert",
+        preferredLocator: expect.objectContaining({
+          name: "Portfolio holdings overview",
+        }),
+      }),
+    );
+    expect(artifacts.validationReport.featureVerdicts).toContainEqual(
+      expect.objectContaining({
+        featureId: "allocation-chart",
+        groundedBy: "assert",
+        verdict: "grounded",
+      }),
+    );
+  });
+
+  it("distinguishes a token mismatch from shared-route loss and names the on-screen content", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Show the portfolio overview.",
+          entryPaths: ["/en/portfolio"],
+          id: "portfolio-overview",
+          label: "Portfolio overview",
+          requestedFeature: "portfolio overview",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["portfolio-overview"],
+          headings: ["Wombat maintenance schedule"],
+          path: "/en/portfolio",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("Wombat maintenance schedule"),
+        failedBecause: "token-mismatch",
+        featureId: "portfolio-overview",
+        verdict: "failed",
+      }),
+    ]);
+    expect(result.validationReport.logsSummary).toContain(
+      "align the featureInventory wording",
+    );
+  });
+
+  it("marks error-state routes as runtime faults that wording cannot repair", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/broken"],
+          id: "invoice-review",
+          label: "Invoice review",
+          requestedFeature: "reviewing invoices",
+        }),
+      ],
+      pageErrors: [
+        "http://127.0.0.1:3000/broken: TypeError: Cannot read properties of undefined",
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["invoice-review"],
+          headings: ["Application error"],
+          path: "/broken",
+        }),
+        observedRoute({
+          headings: ["Completely unrelated welcome copy"],
+          path: "/",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("TypeError"),
+        failedBecause: "error-state-route",
+        featureId: "invoice-review",
+        verdict: "failed",
+      }),
+    ]);
+    expect(result.validationReport.logsSummary).toContain(
+      "featureInventory wording cannot help",
+    );
+  });
+
+  it("treats a 4xx or 5xx document response as an error state no matter what the page renders", async () => {
+    // ghostfolio-class failure: the server answers the entry route with a
+    // 500 whose body still renders headings. Any wording steering there is
+    // a lie — the fault is the runtime, and only the document status says
+    // so once the page paints a plausible-looking shell.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Browse generated reports.",
+          entryPaths: ["/reports"],
+          id: "report-list",
+          label: "Report list",
+          requestedFeature: "report list",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          documentStatus: 500,
+          featureIds: ["report-list"],
+          headings: ["Report list"],
+          path: "/reports",
+          requestedPath: "/reports",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("HTTP 500"),
+        failedBecause: "error-state-route",
+        featureId: "report-list",
+        verdict: "failed",
+      }),
+    ]);
+    expect(result.validationReport.featureVerdicts?.[0]?.detail).toContain(
+      "runtime fault, not a wording fault",
+    );
+  });
+
+  it("reads a bare error body as an error state and carries the sample as evidence", async () => {
+    // A crashed SPA route serves HTTP 200 and paints nothing but the
+    // exception text in an unstyled body: no headings, no verifiable text.
+    // The bounded innerText sample is the only witness, and its error shape
+    // must route the failure to runtime repair, not wording alignment.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Browse generated reports.",
+          entryPaths: ["/reports"],
+          id: "report-list",
+          label: "Report list",
+          requestedFeature: "report list",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["report-list"],
+          path: "/reports",
+          requestedPath: "/reports",
+          textSample:
+            "TypeError: Cannot read properties of undefined (reading 'map') at ReportList.render",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("TypeError"),
+        failedBecause: "error-state-route",
+        featureId: "report-list",
+        verdict: "failed",
+      }),
+    ]);
+  });
+
+  it("keeps a plain-worded empty body out of the error-state diagnosis", async () => {
+    // The sample only diagnoses when it is error-shaped: a thin route whose
+    // body text is ordinary copy stays a wording problem, not a runtime
+    // fault.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Browse generated reports.",
+          entryPaths: ["/reports"],
+          id: "report-list",
+          label: "Report list",
+          requestedFeature: "report list",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["report-list"],
+          path: "/reports",
+          requestedPath: "/reports",
+          textSample: "Welcome to the reporting workspace",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        failedBecause: "no-assert-candidates",
+        featureId: "report-list",
+        verdict: "failed",
+      }),
+    ]);
+  });
+
+  it("marks the empty-table veto as skeleton rows with the table shape in the detail", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Review recent transactions.",
+          entryPaths: ["/transactions"],
+          id: "transaction-review",
+          label: "Transaction review",
+          requestedFeature: "transaction review",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 5,
+              headerTexts: ["Date", "Payee", "Amount"],
+              skeletonRows: 6,
+            },
+          ],
+          featureIds: ["transaction-review"],
+          headings: ["Transactions"],
+          path: "/transactions",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("6 textless skeleton rows"),
+        failedBecause: "skeleton-rows",
+        featureId: "transaction-review",
+        verdict: "failed",
+      }),
+    ]);
+  });
+
+  it("marks auth-walled features and unreachable entry routes with their own enums", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/invoices"],
+          id: "invoice-list",
+          label: "Invoice list",
+          requestedFeature: "listing invoices",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["invoice-list"],
+          headings: ["Sign in"],
+          inputs: ["Email", "Password"],
+          path: "/invoices",
+        }),
+      ],
+    });
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        failedBecause: "auth-wall",
+        featureId: "invoice-list",
+        verdict: "failed",
+      }),
+    ]);
+
+    const unreachable = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/reports"],
+          id: "report-review",
+          label: "Report review",
+          requestedFeature: "reviewing reports",
+        }),
+      ],
+      routes: [observedRoute({ headings: ["Welcome home"] })],
+      unreachableRoutes: [
+        {
+          error: "net::ERR_CONNECTION_REFUSED",
+          featureIds: ["report-review"],
+          url: "http://127.0.0.1:3000/reports",
+        },
+      ],
+    });
+    expect(unreachable.result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("ERR_CONNECTION_REFUSED"),
+        failedBecause: "app-unreachable",
+        featureId: "report-review",
+        verdict: "failed",
+      }),
+    ]);
+  });
+
+  it("marks routes with nothing to assert as no-assert-candidates", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Browse the media library.",
+          entryPaths: ["/library"],
+          id: "media-library",
+          label: "Media library",
+          requestedFeature: "browsing the media library",
+        }),
+        preparedFeature({
+          description: "Read the welcome dashboard.",
+          entryPaths: ["/"],
+          id: "welcome-dashboard",
+          label: "Welcome dashboard",
+          requestedFeature: "welcome dashboard",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["media-library"],
+          path: "/library",
+        }),
+        observedRoute({
+          featureIds: ["welcome-dashboard"],
+          headings: ["Welcome dashboard"],
+          path: "/",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        failedBecause: "no-assert-candidates",
+        featureId: "media-library",
+        verdict: "failed",
+      }),
+      expect.objectContaining({
+        featureId: "welcome-dashboard",
+        groundedBy: "assert",
+        verdict: "grounded",
+      }),
+    ]);
+  });
+
+  it("extends per-feature wording steering to default-demo features", async () => {
+    const defaultFeature = (
+      id: string,
+      label: string,
+      entryPath: string,
+      description: string,
+    ): PreparedDemoFeature => ({
+      authStrategy: "none",
+      description,
+      entryPaths: [entryPath],
+      fixtureNotes: [],
+      id,
+      label,
+      sourcePaths: ["src/app.tsx"],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [
+        defaultFeature(
+          "board-view",
+          "Board view",
+          "/board",
+          "Show the kanban board view.",
+        ),
+        defaultFeature(
+          "list-view",
+          "List view",
+          "/list",
+          "Show the task list view.",
+        ),
+        defaultFeature(
+          "settings-panel",
+          "Settings panel",
+          "/settings",
+          "Adjust workspace settings.",
+        ),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["board-view"],
+          headings: ["Board view"],
+          path: "/board",
+        }),
+        observedRoute({
+          featureIds: ["list-view"],
+          headings: ["List view"],
+          path: "/list",
+        }),
+        observedRoute({
+          featureIds: ["settings-panel"],
+          headings: ["Notification preferences"],
+          path: "/settings",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failedBecause: "token-mismatch",
+          featureId: "settings-panel",
+          verdict: "failed",
+        }),
+      ]),
+    );
+    expect(result.validationReport.logsSummary).toContain("Settings panel");
+    expect(result.validationReport.logsSummary).toContain(
+      "align the featureInventory wording",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "Notification preferences",
+    );
+  });
+});
+
 type ExplorationResult = Awaited<ReturnType<typeof exploreSubmittedApp>>;
 
 async function exploreObservation(input: {
@@ -2817,10 +4744,25 @@ async function exploreObservation(input: {
     url?: string;
   }>;
   capacityProbeOutput?: string;
+  captureFailure?: Parameters<typeof exploreSubmittedApp>[0]["captureFailure"];
   consoleErrors?: string[];
+  dataStrategy?: Parameters<typeof exploreSubmittedApp>[0]["dataStrategy"];
+  declaredProofs?: Array<{
+    detail: string;
+    featureId: string;
+    passed: boolean;
+  }>;
+  failedScriptResponses?: Array<{ status: number; url: string }>;
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];
   readSubmittedCodeAppStatus?: AgentHarnessWorkspace["readSubmittedCodeAppStatus"];
+  replayVerification?: {
+    actionId: string;
+    detail: string;
+    locatorCandidateId?: string;
+    reproduced: boolean;
+    sceneId: string;
+  };
   requestedFeatures?: string[];
   routes: Array<Record<string, unknown>>;
   unreachableRoutes?: Array<{
@@ -2832,6 +4774,12 @@ async function exploreObservation(input: {
   const commands: string[] = [];
   const result = await exploreSubmittedApp({
     baseUrl,
+    ...(input.captureFailure === undefined
+      ? {}
+      : { captureFailure: input.captureFailure }),
+    ...(input.dataStrategy === undefined
+      ? {}
+      : { dataStrategy: input.dataStrategy }),
     ...(input.featureInventory === undefined
       ? {}
       : { featureInventory: input.featureInventory }),
@@ -2855,7 +4803,16 @@ async function exploreObservation(input: {
           stdout: `\n[makeademo:exploration] ${JSON.stringify({
             blockedNetworkAttempts: input.blockedNetworkAttempts ?? [],
             consoleErrors: input.consoleErrors ?? [],
+            ...(input.declaredProofs === undefined
+              ? {}
+              : { declaredProofs: input.declaredProofs }),
+            ...(input.failedScriptResponses === undefined
+              ? {}
+              : { failedScriptResponses: input.failedScriptResponses }),
             pageErrors: input.pageErrors ?? [],
+            ...(input.replayVerification === undefined
+              ? {}
+              : { replayVerification: input.replayVerification }),
             routes: input.routes,
             unreachableRoutes: input.unreachableRoutes ?? [],
           })}\n`,

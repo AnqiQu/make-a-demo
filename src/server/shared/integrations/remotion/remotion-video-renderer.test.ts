@@ -1,13 +1,12 @@
 import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "@playwright/test";
 import { describe, expect, it } from "vitest";
 import type { CompositingRenderPlan } from "../../../pipeline/07-compositing/video-renderer.interface";
 import { RemotionVideoRenderer } from "./remotion-video-renderer";
 
 describe("RemotionVideoRenderer", () => {
-  it("renders a minimal compositor-native Scene with the pinned local browser", async () => {
+  it("renders a minimal compositor-native Scene with Remotion's managed headless shell", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "makeademo-remotion-smoke-"),
     );
@@ -16,16 +15,23 @@ describe("RemotionVideoRenderer", () => {
     const bundleDirectory = join(directory, "bundles");
     await mkdir(publicDir, { recursive: true });
     const renderer = new RemotionVideoRenderer({
-      browserExecutable: chromium.executablePath(),
+      // No browserExecutable: use the chrome-headless-shell that Remotion
+      // pins and ensures under node_modules/.remotion, exactly like
+      // production compositing. Do not pin a full-Chrome build (e.g.
+      // Playwright's Chrome for Testing) here: full Chrome stops producing
+      // frames while the macOS display sleeps, so the root-component
+      // delayRender times out on every unattended run regardless of GL
+      // backend or headless mode. The headless shell has no display
+      // coupling. First run on a fresh node_modules downloads the shell,
+      // the same cost production compositing pays.
       bundleRoot: process.cwd(),
       entryPoint: join(
         process.cwd(),
         "src/server/shared/integrations/remotion/remotion-entry.tsx",
       ),
       tempRoot: bundleDirectory,
-      // Remotion's default 30s delayRender timeout flakes when the headless
-      // browser loads the bundle on a machine saturated by parallel suite
-      // workers; give it headroom without giving up the real browser.
+      // Remotion's default 30s delayRender timeout has been outrun on a
+      // host saturated by parallel suite browsers; keep headroom.
       timeoutInMilliseconds: 120_000,
     });
 

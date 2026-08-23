@@ -7,6 +7,7 @@ import {
   readFile,
   rm,
   stat,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,6 +16,8 @@ import { promisify } from "node:util";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { AgentHarnessControlPlaneError } from "../../../agent-harness/daytona/workspace.interface";
+import { createDaytonaControlPlaneEnvelope } from "./daytona-control-plane";
 import {
   DaytonaSdkPreparationWorkspaceProvider,
   createDaytonaSdkPreparationWorkspaceHandle,
@@ -22,6 +25,19 @@ import {
 } from "./daytona-sdk-preparation-workspace-provider";
 
 const execFileAsync = promisify(execFile);
+
+/** The real envelope with waits removed, so retry paths run at test speed. */
+function instantControlPlane() {
+  return createDaytonaControlPlaneEnvelope({
+    logger: {
+      error: async () => {},
+      info: async () => {},
+      warn: async () => {},
+    },
+    random: () => 0.5,
+    wait: async () => {},
+  });
+}
 
 describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   it("creates a non-auto-stopping agent sandbox from the configured snapshot", async () => {
@@ -128,6 +144,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           }
         },
       } as never,
+      controlPlane: instantControlPlane(),
     });
     const handle = await provider.create();
 
@@ -179,6 +196,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           calls.push({ delete: input.id ?? input.name });
         },
       } as never,
+      controlPlane: instantControlPlane(),
       sandboxCreateTimeoutSeconds: 180,
     });
 
@@ -195,6 +213,174 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         options: { timeout: 180 },
       },
     ]);
+  });
+
+  it("retries sandbox creation past a transient 502 window", async () => {
+    // Outline (2026-08-09): one 502 at an unretried create seam ended the
+    // whole run inside the parallel launch window.
+    const calls: unknown[] = [];
+    const sandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    let creates = 0;
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          creates += 1;
+          if (creates === 1) {
+            throw Object.assign(
+              new Error("Request failed with status code 502"),
+              { statusCode: 502 },
+            );
+          }
+          return sandbox;
+        },
+        async delete() {},
+      } as never,
+      controlPlane: instantControlPlane(),
+    });
+
+    const handle = await provider.create();
+
+    expect(handle.id).toBe("sandbox_123");
+    expect(creates).toBe(2);
+  });
+
+  it("waits out the in-progress conflict message during deletion", async () => {
+    // The message shape midday actually died on (2026-08-09) — carried by
+    // a plain 409 body, not the older "state change in progress" wording.
+    const calls: unknown[] = [];
+    let deletes = 0;
+    const parentSandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          return parentSandbox;
+        },
+        async delete() {
+          deletes += 1;
+          if (deletes < 3) {
+            throw Object.assign(
+              new Error(
+                "An operation is already in progress for this resource",
+              ),
+              { statusCode: 409 },
+            );
+          }
+        },
+      } as never,
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await handle.destroy();
+
+    expect(deletes).toBe(3);
+  });
+
+  it("retries the submitted-code network toggle through a conflict and succeeds", async () => {
+    // Midday (2026-08-09): the network toggle's first 409 killed the run
+    // and surfaced to the maker as a repair prompt. The toggle is
+    // re-issuable: wait for the in-progress operation, then re-issue.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        networkError: Object.assign(
+          new Error("An operation is already in progress for this resource"),
+          { statusCode: 409 },
+        ),
+        networkFailuresBeforeSuccess: 2,
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.setSubmittedCodeNetworkAccess(true);
+
+    expect(
+      calls.filter((call) => "updateNetworkSettings" in Object(call)),
+    ).toHaveLength(3);
+  });
+
+  it("surfaces an exhausted control-plane retry as a typed infrastructure failure", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        networkError: Object.assign(
+          new Error("An operation is already in progress for this resource"),
+          { statusCode: 409 },
+        ),
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    const thrown: unknown = await handle.workspace
+      .setSubmittedCodeNetworkAccess(true)
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(thrown).toMatchObject({ operation: "sandbox.network-update" });
+  });
+
+  it("routes control-plane attribution through a caller-provided pipeline logger", async () => {
+    // The pipeline hands the provider its own structured logger (the
+    // mini-matrix ran with every daytona.* event dark because only sinks
+    // were wireable, 2026-08-10); events must land there attributed.
+    const entries: Array<Record<string, unknown>> = [];
+    const calls: unknown[] = [];
+    const sandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          return sandbox;
+        },
+        async delete() {},
+      } as never,
+      controlPlaneLogger: {
+        error: async (entry) => void entries.push(entry),
+        info: async (entry) => void entries.push(entry),
+        warn: async (entry) => void entries.push(entry),
+      },
+    });
+
+    await provider.create();
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        event: "daytona.agent-sandbox.create.attempt",
+      }),
+    );
+  });
+
+  it("attributes every control-plane attempt to its seam in the pipeline log", async () => {
+    // A 27-minute silent gap must never again be unattributable: each
+    // attempt names its operation and sandbox before the SDK call starts.
+    const lines: string[] = [];
+    const calls: unknown[] = [];
+    const sandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          return sandbox;
+        },
+        async delete() {},
+      } as never,
+      sandboxLogSinks: [{ write: (line) => void lines.push(line) }],
+    });
+
+    await provider.create();
+
+    expect(
+      lines.some((line) =>
+        line.includes('"event":"daytona.agent-sandbox.create.attempt"'),
+      ),
+    ).toBe(true);
   });
 
   it("attaches configured Daytona secrets to the parent sandbox", async () => {
@@ -238,6 +424,88 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ],
     });
+  });
+
+  it("extends the upload attempt timeout to cover a large archive payload", async () => {
+    // twenty's 294MB screened archive could not finish inside the default
+    // 600s per-attempt bound, so the envelope abandoned two live transfers
+    // as hangs and the N133 cap ended the run (2026-08-13T23-23 matrix).
+    // The bound must scale with the payload it polices.
+    const calls: unknown[] = [];
+    const runOptions: Array<{ operation: string; options: unknown }> = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+      controlPlane: {
+        async run(operation, attempt, options) {
+          runOptions.push({ operation, options });
+          return attempt();
+        },
+      },
+    });
+    const handle = await provider.create();
+    const localDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-large-upload-"),
+    );
+    try {
+      const largePath = join(localDirectory, "screened-repo.tar.gz");
+      const largeBytes = 300 * 1024 * 1024;
+      await writeFile(largePath, "");
+      await truncate(largePath, largeBytes);
+
+      await handle.workspace.uploadFiles([
+        {
+          destinationPath: "/workspace/.makeademo/screened-repo.tar.gz",
+          sourcePath: largePath,
+        },
+      ]);
+
+      const upload = runOptions.find(({ operation }) => {
+        return operation === "fs.upload";
+      });
+      expect(upload?.options).toMatchObject({
+        // 300MB at the 256KiB/s worst-case floor plus fixed headroom.
+        attemptTimeoutMs: (largeBytes / (256 * 1024)) * 1000 + 60_000,
+      });
+    } finally {
+      await rm(localDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps the default upload attempt timeout for small payloads", async () => {
+    const calls: unknown[] = [];
+    const runOptions: Array<{ operation: string; options: unknown }> = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+      controlPlane: {
+        async run(operation, attempt, options) {
+          runOptions.push({ operation, options });
+          return attempt();
+        },
+      },
+    });
+    const handle = await provider.create();
+    const localDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-small-upload-"),
+    );
+    try {
+      const smallPath = join(localDirectory, "script.ts");
+      await writeFile(smallPath, "export const scene = 1;\n");
+
+      await handle.workspace.uploadFiles([
+        {
+          destinationPath: "/workspace/.makeademo/capture/script.ts",
+          sourcePath: smallPath,
+        },
+      ]);
+
+      const upload = runOptions.find(({ operation }) => {
+        return operation === "fs.upload";
+      });
+      expect(upload).toBeDefined();
+      expect(upload?.options).not.toHaveProperty("attemptTimeoutMs");
+    } finally {
+      await rm(localDirectory, { force: true, recursive: true });
+    }
   });
 
   it("uploads workspace artifacts to the Daytona workspace", async () => {
@@ -314,6 +582,273 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).rejects.toThrow(
       "Daytona agent artifact filesystem transfer failed for /workspace/.makeademo/action-catalog.json (13 bytes): filesystem upload rejected",
     );
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      1,
+    );
+  });
+
+  it("retries a transient 502 while writing a text artifact", async () => {
+    // homer and twenty each lost a whole matrix run to one transient 502
+    // during an artifact upload (2026-08-09); a single retry absorbs the blip.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeClient(calls, {
+        uploadError: Object.assign(
+          new Error("Request failed with status code 502"),
+          { statusCode: 502 },
+        ),
+        uploadFailuresBeforeSuccess: 1,
+      }),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeTextFile(
+      "/workspace/.makeademo/repo-profile.json",
+      "{}",
+    );
+
+    const uploads = calls.filter(
+      (call) => "uploadFiles" in Object(call),
+    ) as Array<{ uploadFiles: Array<{ destination: string }> }>;
+    expect(uploads).toHaveLength(2);
+    expect(uploads[0]?.uploadFiles[0]?.destination).not.toBe(
+      uploads[1]?.uploadFiles[0]?.destination,
+    );
+    expect(
+      calls.filter(
+        (call) =>
+          "executeCommand" in Object(call) &&
+          String((call as { executeCommand: string }).executeCommand).includes(
+            "mv -f",
+          ),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("fails a persistent 502 text artifact transfer after bounded retries", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeClient(calls, {
+        uploadError: Object.assign(
+          new Error("Request failed with status code 502"),
+          { statusCode: 502 },
+        ),
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.writeTextFile(
+        "/workspace/.makeademo/repo-profile.json",
+        "{}",
+      ),
+    ).rejects.toThrow(
+      "Daytona agent artifact filesystem transfer failed for /workspace/.makeademo/repo-profile.json (2 bytes): Request failed with status code 502",
+    );
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      3,
+    );
+  });
+
+  it("survives a sustained control-plane 502 window with the default transfer ladder", async () => {
+    // A real Daytona incident (directus, 2026-08-12T20:40) 502-stormed the
+    // API for minutes, not one blip; the run died mid-window because the
+    // default transfer ladder covered ~5s. The default ladder must span a
+    // control-plane-scale outage before declaring a transfer dead.
+    const waits: number[] = [];
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        uploadError: Object.assign(
+          new Error("Request failed with status code 502"),
+          { statusCode: 502 },
+        ),
+        uploadFailuresBeforeSuccess: 5,
+      }),
+      controlPlane: createDaytonaControlPlaneEnvelope({
+        logger: {
+          error: async () => {},
+          info: async () => {},
+          warn: async () => {},
+        },
+        random: () => 0.5,
+        wait: async (delayMs) => {
+          waits.push(delayMs);
+        },
+      }),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeTextFile(
+      "/workspace/.makeademo/runtime-target-selection-contract.json",
+      "{}",
+    );
+
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      6,
+    );
+    const coveredWindowMs = waits.reduce(
+      (total, delayMs) => total + delayMs,
+      0,
+    );
+    expect(coveredWindowMs).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("retries a transient 502 while uploading screened workspace files", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeClient(calls, {
+        uploadError: Object.assign(
+          new Error("Request failed with status code 502"),
+          { statusCode: 502 },
+        ),
+        uploadFailuresBeforeSuccess: 1,
+      }),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.uploadFiles([
+      {
+        destinationPath: "/workspace/package.json",
+        sourcePath: "/tmp/repo/package.json",
+      },
+    ]);
+
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      2,
+    );
+  });
+
+  it("recreates one wedged linked sandbox and replays the screened workspace upload", async () => {
+    const calls: unknown[] = [];
+    const parentSandbox = fakeLinkedSandbox(
+      calls,
+      "parent_sandbox",
+      "parent ok",
+    );
+    const wedgedSandbox = fakeLinkedSandbox(
+      calls,
+      "submitted_wedged",
+      "wedged",
+      { uploadFilesNeverResolves: true },
+    );
+    const replacementSandbox = fakeLinkedSandbox(
+      calls,
+      "submitted_replacement",
+      "replacement ok",
+    );
+    let linkedCreates = 0;
+    let markStaleDeleteStarted!: () => void;
+    let releaseStaleDelete!: () => void;
+    const staleDeleteStarted = new Promise<void>((resolve) => {
+      markStaleDeleteStarted = resolve;
+    });
+    const staleDeletePending = new Promise<void>((resolve) => {
+      releaseStaleDelete = resolve;
+    });
+    const fastEnvelope = createDaytonaControlPlaneEnvelope({
+      logger: {
+        error: async () => {},
+        info: async () => {},
+        warn: async () => {},
+      },
+      random: () => 0.5,
+      wait: async () => {},
+    });
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: {
+        async create(input: unknown, options?: unknown) {
+          calls.push({ create: input, options });
+          if (
+            typeof input === "object" &&
+            input !== null &&
+            "linkedSandbox" in input
+          ) {
+            linkedCreates += 1;
+            return linkedCreates === 1 ? wedgedSandbox : replacementSandbox;
+          }
+          return parentSandbox;
+        },
+        async delete(input: { id?: string; name?: string }) {
+          const sandboxId = input.id ?? input.name;
+          calls.push({ delete: sandboxId });
+          if (sandboxId === "submitted_wedged") {
+            // Cleanup of the wedged target must not hold the replay hostage.
+            markStaleDeleteStarted();
+            await staleDeletePending;
+          }
+        },
+      } as never,
+      controlPlane: {
+        run(operation, attempt, options) {
+          return fastEnvelope.run(operation, attempt, {
+            ...options,
+            attemptTimeoutMs: 10,
+          });
+        },
+      },
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    const upload = handle.workspace.uploadFiles([
+      {
+        destinationPath: "/workspace/.makeademo/screened-repo.tar.gz",
+        sourcePath: "/tmp/screened-repo.tar.gz",
+      },
+    ]);
+
+    await staleDeleteStarted;
+    try {
+      await vi.waitFor(
+        () => {
+          expect(
+            calls.filter(
+              (call) =>
+                "uploadFiles" in Object(call) &&
+                (call as { uploadFiles: { sandbox: string } }).uploadFiles
+                  .sandbox === "submitted_replacement",
+            ),
+          ).toHaveLength(1);
+        },
+        { interval: 5, timeout: 500 },
+      );
+    } finally {
+      releaseStaleDelete();
+    }
+    await upload;
+
+    expect(linkedCreates).toBe(2);
+    expect(
+      calls.filter(
+        (call) =>
+          "uploadFiles" in Object(call) &&
+          (call as { uploadFiles: { sandbox: string } }).uploadFiles.sandbox ===
+            "submitted_wedged",
+      ),
+    ).toHaveLength(2);
+    expect(
+      calls.filter(
+        (call) =>
+          "uploadFiles" in Object(call) &&
+          (call as { uploadFiles: { sandbox: string } }).uploadFiles.sandbox ===
+            "submitted_replacement",
+      ),
+    ).toHaveLength(1);
+    expect(calls).toContainEqual({ delete: "submitted_wedged" });
+    expect(handle.workspace.submittedCodeSandboxId).toBe(
+      "submitted_replacement",
+    );
+    const linkedCreateCalls = calls.filter(
+      (call) =>
+        "create" in Object(call) &&
+        "linkedSandbox" in Object((call as { create: unknown }).create),
+    );
+    expect(linkedCreateCalls[1]).toEqual(linkedCreateCalls[0]);
   });
 
   it("reconnects to an existing sandbox as a preparation workspace", async () => {
@@ -420,6 +955,151 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("retries an agent-sandbox command past a transient control-plane 502", async () => {
+    // ghostfolio 2026-08-13T01-12: the first harness step after an
+    // 11-minute prep agent succeeded was `cat`-ing the manifest, and one
+    // raw 502 killed the run. Agent-sandbox commands are harness-authored
+    // idempotent bookkeeping, so they ride the transient ladder (N123).
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommand502FailuresBeforeSuccess: 1 }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.execute(
+      "cat /workspace/.makeademo/preparation-manifest.json",
+    );
+
+    expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "ok" });
+    expect(
+      calls.filter((call) => "executeCommand" in Object(call)),
+    ).toHaveLength(2);
+  });
+
+  it("wraps a persistent command 502 window as a typed infrastructure failure", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        executeCommand502FailuresBeforeSuccess: 99,
+      }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("git status --porcelain"),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+  });
+
+  it("never re-issues a command whose deadline elapsed", async () => {
+    // A command deadline is the command's outcome — the harness converts it
+    // into bounded feedback; blindly re-running a possibly-completed
+    // command could double its side effects.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommandNeverResolves: true }),
+      commandTimeoutMs: 1,
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.execute("npm ci")).rejects.toThrow(
+      "Daytona command did not finish within 1ms.",
+    );
+    expect(
+      calls.filter((call) => "executeCommand" in Object(call)),
+    ).toHaveLength(1);
+  });
+
+  it("classifies a transient failure on an at-most-once command without re-issuing it", async () => {
+    // The restore path's `git apply` may already have taken effect when a
+    // 502 masks its success; retry: "none" keeps at-most-once semantics
+    // while still classifying the loss as infrastructure.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommand502FailuresBeforeSuccess: 1 }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("git apply --binary /tmp/restore.patch", {
+        retry: "none",
+      }),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(
+      calls.filter((call) => "executeCommand" in Object(call)),
+    ).toHaveLength(1);
+  });
+
+  it("does not re-issue a submitted-code command on a transient failure by default", async () => {
+    // Submitted-code commands can drive the app under test (exploration
+    // crawls, capture scripts); a 502 can mask a command that already ran,
+    // so the default is classify-only — never a blind re-issue.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        submittedExecute502: { commandIncludes: "capture.mjs", failures: 1 },
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.executeSubmittedCode("bun /tmp/capture.mjs"),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(
+      calls.filter((call) => {
+        const command = Object(call).executeCommand as
+          | { command?: string; sandbox?: string }
+          | string
+          | undefined;
+        return (
+          typeof command === "object" &&
+          command?.command?.includes("capture.mjs") === true
+        );
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("retries a submitted-code command that opted into transient retry", async () => {
+    // Provably idempotent submitted-code reads (cat exploration output,
+    // readiness curls) declare retry: "transient" explicitly.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        submittedExecute502: {
+          commandIncludes: "exploration.json",
+          failures: 1,
+        },
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.executeSubmittedCode(
+      "cat /workspace/.makeademo/exploration/exploration.json",
+      { retry: "transient" },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(
+      calls.filter((call) => {
+        const command = Object(call).executeCommand as
+          | { command?: string; sandbox?: string }
+          | string
+          | undefined;
+        return (
+          typeof command === "object" &&
+          command?.command?.includes("exploration.json") === true
+        );
+      }),
+    ).toHaveLength(2);
+  });
+
   it("streams command output through a Daytona PTY when callbacks are provided", async () => {
     const calls: unknown[] = [];
     const streamed: string[] = [];
@@ -451,13 +1131,39 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       { waitForConnection: true },
       {
+        // One upfront-consumed heredoc script with the command's stdin
+        // sealed and the exit trailer inside: no queued input survives
+        // into the command's lifetime for a child to steal (the stolen
+        // sentinel false-kill class, ghostfolio 2026-08-09).
         sendInput: expect.stringMatching(
-          /^stty -echo\nopencode run hello\nprintf '\\n__MAKEADEMO_EXIT_[A-Za-z0-9]{16,}__:%s\\n' \$\?\nexit\n$/,
+          /^stty -echo\nexec bash -s <<'__MAKEADEMO_SCRIPT_[A-Za-z0-9]+__' \|\| exit\n\{\nopencode run hello\n\} <\/dev\/null\nprintf '\\n__MAKEADEMO_EXIT_[A-Za-z0-9]{16,}__:%s\\n' \$\?\n__MAKEADEMO_SCRIPT_[A-Za-z0-9]+__\n$/,
         ),
       },
       { wait: true },
       { disconnect: true },
     ]);
+  });
+
+  it("refuses to fabricate an exit code when the PTY ends without the exit trailer", async () => {
+    // ghostfolio's round-1 preflight "installed" a large monorepo in ~30
+    // seconds without running anything (2026-08-12): the PTY stream ended
+    // before the exit trailer arrived and the missing status defaulted to
+    // the shell's own exit 0 — a phantom success that left no evidence and
+    // let the build run against an empty node_modules. The trailer is the
+    // only channel that carries the command's real status, so a result
+    // without it must surface as transport loss, never as an exit code.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptySentinelLost: true }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("npm ci", { onStdout: () => {} }),
+    ).rejects.toMatchObject({
+      kind: "transport",
+      name: "AgentHarnessCommandTimeoutError",
+    });
   });
 
   it("ignores an exit sentinel forged by the command's own output", async () => {
@@ -648,6 +1354,56 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).rejects.toThrow("Daytona sandbox log write did not finish within 1ms.");
   });
 
+  it("retries a durable sandbox log write past a transient 502", async () => {
+    // A duplicated audit line is acceptable; a run killed by one 502 while
+    // appending its own audit trail is not (N123).
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        sandboxLogWrite502FailuresBeforeSuccess: 1,
+      }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeSandboxLog({
+      event: "repo-preparation.started",
+      stage: "repo-preparation",
+    });
+
+    expect(
+      calls.filter((call) => {
+        const command = Object(call).executeCommand;
+        return (
+          typeof command === "string" &&
+          command.includes(">> '/tmp/makeademo/sandbox-log.jsonl'")
+        );
+      }),
+    ).toHaveLength(2);
+  });
+
+  it("retries sandbox log collection past a transient 502", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        sandboxLogCollect502FailuresBeforeSuccess: 1,
+        sandboxLogContents: '{"event":"repo-preparation.failed"}',
+      }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.collectSandboxLogs()).resolves.toEqual([
+      '{"event":"repo-preparation.failed"}',
+    ]);
+    expect(
+      calls.filter((call) => {
+        const command = Object(call).executeCommand;
+        return typeof command === "string" && command.includes("tail -c");
+      }),
+    ).toHaveLength(2);
+  });
+
   it("disconnects active streaming commands before deleting the sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -658,7 +1414,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const execution = handle.workspace.execute("opencode run slow", {
       onStdout: () => {},
     });
-    await Promise.resolve();
+    await waitForCall(calls, "sendInput");
     await handle.destroy();
 
     await expect(execution).resolves.toMatchObject({ exitCode: 7 });
@@ -966,8 +1722,13 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       workspaceId: "workspace_123",
     });
 
-    expect(relayedLogs).toHaveLength(1);
-    expect(JSON.parse(relayedLogs[0] ?? "{}")).toMatchObject({
+    // The same sinks also carry daytona-control-plane attribution events;
+    // this test pins the sandbox-audit relay specifically.
+    const sandboxAuditLogs = relayedLogs.filter((line) =>
+      line.includes('"component":"daytona-sandbox"'),
+    );
+    expect(sandboxAuditLogs).toHaveLength(1);
+    expect(JSON.parse(sandboxAuditLogs[0] ?? "{}")).toMatchObject({
       component: "daytona-sandbox",
       event: "project-validation.dependency-install.started",
       message: "project-validation.dependency-install.started",
@@ -1002,7 +1763,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         create: {
           autoStopInterval: 0,
           autoDeleteInterval: 0,
-          disk: 10,
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
           networkBlockAll: true,
@@ -1010,6 +1770,61 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       },
     ]);
+  });
+
+  it("creates a heavyweight submitted-code sandbox from the heavyweight snapshot", async () => {
+    // Daytona rejects a `resources` override on snapshot creation ("Cannot
+    // specify Sandbox resources when using a snapshot", 2026-08-14 wave-10):
+    // capacity classes are snapshot variants, never creation-time resources.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+      submittedCodeSnapshotHeavyweight:
+        "makeademo-submitted-code-browser-mem16",
+    });
+
+    await provider.create({ submittedCodeSandboxClass: "heavyweight" });
+
+    expect(calls[1]).toEqual({
+      create: {
+        autoDeleteInterval: 0,
+        autoStopInterval: 0,
+        ephemeral: true,
+        linkedSandbox: "parent_sandbox",
+        networkBlockAll: true,
+        snapshot: "makeademo-submitted-code-browser-mem16",
+      },
+    });
+  });
+
+  it("falls back to the standard snapshot with a warning when no heavyweight snapshot is configured", async () => {
+    // A missing capacity upgrade must never block the batch: the entry runs
+    // under-sized and fails with resource evidence instead of never launching.
+    const lines: string[] = [];
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      sandboxLogSinks: [{ write: (line) => void lines.push(line) }],
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    await provider.create({ submittedCodeSandboxClass: "heavyweight" });
+
+    expect(calls[1]).toEqual(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          snapshot: "makeademo-submitted-code-browser",
+        }),
+      }),
+    );
+    expect(
+      lines.some((line) =>
+        line.includes(
+          '"event":"daytona.submitted-code-sandbox.heavyweight-fallback"',
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("continues when org policy rejects submitted-code network overrides", async () => {
@@ -1143,6 +1958,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   it("retries a transient submitted-code artifact upload", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
       client: fakeLinkedClient(calls, {
         submittedUploadFailuresBeforeSuccess: 1,
       }),
@@ -1171,9 +1987,67 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(2);
   });
 
+  it("retries the prepared-workspace sync after a transient submitted-code failure", async () => {
+    // Cyberchef died 71 minutes in when one control-plane socket dropped
+    // during a workspace reset (2026-08-09): the sync is idempotent, so a
+    // transport blip costs a bounded retry, never the run.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeLinkedClient(calls, {
+        submittedUploadFailuresBeforeSuccess: 1,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.syncSubmittedCodeWorkspace(),
+    ).resolves.toBeUndefined();
+
+    const submittedUploads = calls.filter(
+      (call) =>
+        typeof call === "object" &&
+        call !== null &&
+        "uploadFiles" in call &&
+        (call as { uploadFiles: { sandbox: string } }).uploadFiles.sandbox ===
+          "submitted_sandbox",
+    );
+    expect(submittedUploads).toHaveLength(2);
+  });
+
+  it("treats an abruptly closed control-plane socket as a transient transfer failure", async () => {
+    // Bun's fetch reports a dropped Daytona API connection as "The socket
+    // connection was closed unexpectedly" — same transport blip as a 502,
+    // same bounded retry.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeClient(calls, {
+        uploadError: new Error(
+          "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+        ),
+        uploadFailuresBeforeSuccess: 1,
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.writeTextFile(
+        "/workspace/.makeademo/repo-profile.json",
+        "{}",
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      2,
+    );
+  });
+
   it("reports a typed submitted-code artifact failure after bounded retries", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
       client: fakeLinkedClient(calls, {
         submittedUploadFailuresBeforeSuccess: 99,
       }),
@@ -1256,7 +2130,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         create: {
           autoStopInterval: 0,
           autoDeleteInterval: 0,
-          disk: 10,
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
           networkBlockAll: true,
@@ -1396,6 +2269,56 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       stdout: "",
       terminationReason: "exited",
     });
+  });
+
+  it("classifies a transient failure launching the managed app without re-issuing it", async () => {
+    // A 502 can mask a launch that already started the app; re-issuing
+    // would run two app processes, so the launch is at most once and its
+    // transport loss surfaces classified (N123).
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        sessionLaunch502FailuresBeforeSuccess: 1,
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.startSubmittedCodeApp({
+        command: "npm run dev",
+        cwd: "/workspace/repo",
+      }),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(
+      calls.filter((call) => "executeSessionCommand" in Object(call)),
+    ).toHaveLength(1);
+  });
+
+  it("retries a managed-app status read past a transient 502", async () => {
+    // Status polls are pure reads issued continuously by the readiness
+    // loop; one 502 mid-incident must not end the round.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        sessionStatus502FailuresBeforeSuccess: 1,
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.startSubmittedCodeApp({
+      command: "npm run dev",
+      cwd: "/workspace/repo",
+    });
+    const status = await handle.workspace.readSubmittedCodeAppStatus();
+
+    expect(status.running).toBe(false);
+    expect(
+      calls.filter((call) => "getSessionCommand" in Object(call)),
+    ).toHaveLength(2);
   });
 
   it("passes the configured command timeout to submitted-code Daytona commands", async () => {
@@ -1861,7 +2784,10 @@ function fakeLinkedClient(
     networkCloseError?: Error;
     networkError?: Error;
     remoteCleanupNeverResolves?: boolean;
+    sessionLaunch502FailuresBeforeSuccess?: number;
+    sessionStatus502FailuresBeforeSuccess?: number;
     submittedDeleteFailuresBeforeSuccess?: number;
+    submittedExecute502?: { commandIncludes: string; failures: number };
     submittedUploadFailuresBeforeSuccess?: number;
   } = {},
 ) {
@@ -2133,10 +3059,17 @@ function fakeLinkedSandbox(
     networkCloseError?: Error;
     networkError?: Error;
     remoteCleanupNeverResolves?: boolean;
+    sessionLaunch502FailuresBeforeSuccess?: number;
+    sessionStatus502FailuresBeforeSuccess?: number;
+    submittedExecute502?: { commandIncludes: string; failures: number };
     submittedUploadFailuresBeforeSuccess?: number;
+    uploadFilesNeverResolves?: boolean;
   } = {},
 ) {
   let uploadAttempts = 0;
+  let submittedExecute502Failures = 0;
+  let sessionLaunch502Failures = 0;
+  let sessionStatus502Failures = 0;
   return {
     fs: {
       async downloadFiles(
@@ -2158,6 +3091,9 @@ function fakeLinkedSandbox(
             ...(timeoutSec === undefined ? {} : { timeoutSec }),
           },
         });
+        if (options.uploadFilesNeverResolves === true) {
+          await new Promise<void>(() => {});
+        }
         if (
           id === "submitted_sandbox" &&
           uploadAttempts <= (options.submittedUploadFailuresBeforeSuccess ?? 0)
@@ -2181,6 +3117,18 @@ function fakeLinkedSandbox(
       },
       async executeCommand(command: string) {
         calls.push({ executeCommand: { command, sandbox: id } });
+        if (
+          id === "submitted_sandbox" &&
+          options.submittedExecute502 !== undefined &&
+          command.includes(options.submittedExecute502.commandIncludes) &&
+          submittedExecute502Failures < options.submittedExecute502.failures
+        ) {
+          submittedExecute502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
+        }
         if (options.executeCommandNeverResolves === true) {
           await new Promise(() => {});
         }
@@ -2226,12 +3174,34 @@ function fakeLinkedSandbox(
         calls.push({
           executeSessionCommand: { ...request, sandbox: id, sessionId },
         });
+        if (
+          id === "submitted_sandbox" &&
+          sessionLaunch502Failures <
+            (options.sessionLaunch502FailuresBeforeSuccess ?? 0)
+        ) {
+          sessionLaunch502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
+        }
         return { cmdId: "cmd_123" };
       },
       async getSessionCommand(sessionId: string, commandId: string) {
         calls.push({
           getSessionCommand: { commandId, sandbox: id, sessionId },
         });
+        if (
+          id === "submitted_sandbox" &&
+          sessionStatus502Failures <
+            (options.sessionStatus502FailuresBeforeSuccess ?? 0)
+        ) {
+          sessionStatus502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
+        }
         return { exitCode: 0 };
       },
       async getSessionCommandLogs(sessionId: string, commandId: string) {
@@ -2259,6 +3229,7 @@ function fakeClient(
   options: {
     commandsRequireSandboxRestart?: boolean;
     downloadError?: string;
+    executeCommand502FailuresBeforeSuccess?: number;
     executeCommandFails?: boolean;
     executeCommandNeverResolves?: boolean;
     executeCommandOmitsExitCode?: boolean;
@@ -2266,21 +3237,31 @@ function fakeClient(
     failSubmittedCodeNetworkDisable?: boolean;
     missingSubmittedCodeImage?: boolean;
     networkError?: Error;
+    networkFailuresBeforeSuccess?: number;
     ptyConnectionFailuresBeforeSuccess?: number;
     ptyDisconnectNeverResolves?: boolean;
     ptyForgedExitSentinel?: string;
     ptyNeverConnects?: boolean;
     ptyRequiresSandboxRestart?: boolean;
+    ptySentinelLost?: boolean;
     ptyStaleDuplicateIdOnFirstCreate?: boolean;
     ptyWaitFails?: boolean;
     ptyWaitsForDisconnect?: boolean;
+    sandboxLogCollect502FailuresBeforeSuccess?: number;
     sandboxLogContents?: string;
+    sandboxLogWrite502FailuresBeforeSuccess?: number;
     sandboxRestartDoesNotRecover?: boolean;
     uploadError?: Error;
+    uploadFailuresBeforeSuccess?: number;
   } = {},
 ) {
   let submittedCodeInitializationFailures = 0;
+  let uploadFailures = 0;
+  let networkFailures = 0;
   let ptyConnectionFailures = 0;
+  let executeCommand502Failures = 0;
+  let sandboxLogWrite502Failures = 0;
+  let sandboxLogCollect502Failures = 0;
   let sandboxStarted =
     options.ptyRequiresSandboxRestart !== true &&
     options.commandsRequireSandboxRestart !== true;
@@ -2301,7 +3282,12 @@ function fakeClient(
       },
       async uploadFiles(files: unknown[]) {
         calls.push({ uploadFiles: files });
-        if (options.uploadError !== undefined) {
+        if (
+          options.uploadError !== undefined &&
+          (options.uploadFailuresBeforeSuccess === undefined ||
+            uploadFailures < options.uploadFailuresBeforeSuccess)
+        ) {
+          uploadFailures += 1;
           throw options.uploadError;
         }
       },
@@ -2364,6 +3350,12 @@ function fakeClient(
                 new TextEncoder().encode(options.ptyForgedExitSentinel),
               );
             }
+            if (options.ptySentinelLost === true) {
+              // The stream dies before the trailer chunk arrives: partial
+              // output only, and wait() below still reports the shell's
+              // own exit 0.
+              return;
+            }
             // Echo the sentinel the provider actually asked for, so a nonce
             // in the trailer stays honest instead of being hardcoded here.
             const sentinel =
@@ -2417,10 +3409,42 @@ function fakeClient(
           command.includes("tail -c") &&
           command.includes("/tmp/makeademo/sandbox-log.jsonl")
         ) {
+          if (
+            sandboxLogCollect502Failures <
+            (options.sandboxLogCollect502FailuresBeforeSuccess ?? 0)
+          ) {
+            sandboxLogCollect502Failures += 1;
+            throw Object.assign(
+              new Error("Request failed with status code 502"),
+              { statusCode: 502 },
+            );
+          }
           return {
             exitCode: 0,
             result: options.sandboxLogContents ?? "",
           };
+        }
+        if (
+          command.includes(">> '/tmp/makeademo/sandbox-log.jsonl'") &&
+          sandboxLogWrite502Failures <
+            (options.sandboxLogWrite502FailuresBeforeSuccess ?? 0)
+        ) {
+          sandboxLogWrite502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
+        }
+        if (
+          !command.includes("/tmp/makeademo/sandbox-log.jsonl") &&
+          executeCommand502Failures <
+            (options.executeCommand502FailuresBeforeSuccess ?? 0)
+        ) {
+          executeCommand502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
         }
         if (options.executeCommandFails === true) {
           throw new Error("executeCommand failed");
@@ -2504,7 +3528,12 @@ function fakeClient(
     },
     async updateNetworkSettings(settings: unknown) {
       calls.push({ updateNetworkSettings: settings });
-      if (options.networkError !== undefined) {
+      if (
+        options.networkError !== undefined &&
+        (options.networkFailuresBeforeSuccess === undefined ||
+          networkFailures < options.networkFailuresBeforeSuccess)
+      ) {
+        networkFailures += 1;
         throw options.networkError;
       }
     },

@@ -2,11 +2,40 @@ import { describe, expect, it } from "vitest";
 import {
   batteryPowerWarning,
   matrixRepoEnvVar,
+  notifyMatrixRunComplete,
   renderMatrixReport,
   resolveMatrixEntries,
+  resolveMatrixNotification,
   runPipelineMatrix,
 } from "../scripts/run-pipeline-matrix";
 import type { DefaultDemoPipelineResult } from "../src/server/agent-harness/default/default-demo-pipeline";
+import type { MatrixRunReportEmailInput } from "../src/server/shared/integrations/email/matrix-run-email-notifier.interface";
+
+const enabledNotificationEnv = {
+  RESEND_API_KEY: "re_test",
+  RESEND_FROM_EMAIL: "MakeADemo <demo@makeademo.example>",
+  TEXTME: "true",
+  TEXTME_EMAIL: "operator@example.com",
+};
+
+function recordingNotifier(behaviour?: { throwOnSend?: boolean }) {
+  const sent: MatrixRunReportEmailInput[] = [];
+  return {
+    sendMatrixRunReportEmail: async (input: MatrixRunReportEmailInput) => {
+      sent.push(input);
+      if (behaviour?.throwOnSend) {
+        throw new Error("Resend failed to send matrix run email");
+      }
+    },
+    sent,
+  };
+}
+
+const oneOfEachResult = [
+  { detail: "run/final-video.mp4", name: "vite-spa", status: "passed" },
+  { detail: "exploration failed", name: "midday", status: "failed" },
+  { detail: "no repo URL", name: "pnpm-monorepo", status: "skipped" },
+] as const;
 
 const runnableEntry = {
   name: "vite-spa",
@@ -125,6 +154,75 @@ describe("runPipelineMatrix", () => {
     ]);
   });
 
+  it("hands every entry the same batch bulk-transfer limiter", async () => {
+    // Each entry's multi-GB clone and archive upload share one uplink; the
+    // batch must hand every pipeline the same limiter so those transfers
+    // serialize instead of starving each other (calcom and ghostfolio died
+    // mid-clone behind twenty's 294MB upload, 2026-08-13T23-23).
+    const limiters: unknown[] = [];
+    await runPipelineMatrix(
+      resolveMatrixEntries(
+        [
+          { name: "alpha", repoUrl: "https://github.com/example/alpha" },
+          { name: "bravo", repoUrl: "https://github.com/example/bravo" },
+        ],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async (_input, _runId, batch) => {
+          limiters.push(batch.bulkTransferLimiter);
+          await batch.bulkTransferLimiter.run(async () => {});
+          return passingPipelineResult();
+        },
+      },
+    );
+
+    expect(limiters).toHaveLength(2);
+    expect(limiters[0]).toBeDefined();
+    expect(limiters[0]).toBe(limiters[1]);
+  });
+
+  it("staggers runnable launches with bounded jitter when enabled", async () => {
+    // Eleven sandboxes created in the same second are their own
+    // control-plane herd (2026-08-09): create calls queue behind each
+    // other's state changes and the batch synchronizes onto every
+    // conflict window. Spreading launches 30-60s apart de-correlates them.
+    const sleeps: number[] = [];
+    const results = await runPipelineMatrix(
+      resolveMatrixEntries(
+        [
+          { name: "alpha", repoUrl: "https://github.com/example/alpha" },
+          { name: "unpublished" },
+          { name: "bravo", repoUrl: "https://github.com/example/bravo" },
+          { name: "charlie", repoUrl: "https://github.com/example/charlie" },
+        ],
+        {},
+      ),
+      {
+        launchStagger: {
+          random: () => 0.5,
+          sleep: async (delayMs) => {
+            sleeps.push(delayMs);
+          },
+        },
+        log: () => {},
+        runPipeline: async () => passingPipelineResult(),
+      },
+    );
+
+    // The first runnable entry launches immediately; each later one waits
+    // its cumulative offset (random 0.5 centers the 30-60s gap at 45s).
+    // Skipped entries consume no stagger slot.
+    expect(sleeps).toEqual([45_000, 90_000]);
+    expect(results.map((result) => result.status)).toEqual([
+      "passed",
+      "skipped",
+      "passed",
+      "passed",
+    ]);
+  });
+
   it("keeps report rows in entry order and keeps going when one entry fails", async () => {
     const results = await runPipelineMatrix(
       resolveMatrixEntries(
@@ -208,6 +306,64 @@ describe("runPipelineMatrix", () => {
       "preparation-preflight failed: Submitted-code build failed: > cyberchef@11.3.0 build",
     );
   });
+
+  it("carries the trailing makeademo marker line and bounds a runaway first line", async () => {
+    // Ghost (2026-08-09): the report row was mid-word compiler-warning
+    // garbage while the informative fact — the exit=124 trailer — sat at
+    // the end of the message. Diagnosis required the JSONL every time.
+    const garbage = "readCoord(pCellData+8, &c); aCoord[2] = c.f; ".repeat(20);
+    const results = await runPipelineMatrix(
+      resolveMatrixEntries(
+        [{ name: "ghost", repoUrl: "https://github.com/example/ghost" }],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async () => {
+          throw new Error(
+            [
+              `preparation-preflight failed: Network-closed lifecycle scripts failed after the dependency install: ite3 install: ${garbage}`,
+              ".../node_modules/sqlite3 install: gyp info ok",
+              "[makeademo:command-end] exit=124",
+            ].join("\n"),
+          );
+        },
+      },
+    );
+
+    const detail = results[0]?.detail ?? "";
+    expect(detail).toContain("Network-closed lifecycle scripts failed");
+    expect(detail).toContain("[makeademo:command-end] exit=124");
+    expect(detail.length).toBeLessThan(400);
+  });
+
+  it("carries a clone failure's trailing fatal line into the report detail", async () => {
+    // calcom and ghostfolio (2026-08-13T23-23): the report row ended at
+    // "exit 128: Cloning into ..." while git's fatal: line — the actual
+    // cause — sat at the end of the message, lost to truncation.
+    const results = await runPipelineMatrix(
+      resolveMatrixEntries(
+        [{ name: "calcom", repoUrl: "https://github.com/example/calcom" }],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async () => {
+          throw new Error(
+            [
+              "git clone --depth 1 --no-tags https://github.com/example/calcom /tmp/repo-snapshot failed with exit 128: Cloning into '/tmp/repo-snapshot'...",
+              "error: RPC failed; curl 18 transfer closed with outstanding read data remaining",
+              "fatal: fetch-pack: invalid index-pack output",
+            ].join("\n"),
+          );
+        },
+      },
+    );
+
+    const detail = results[0]?.detail ?? "";
+    expect(detail).toContain("failed with exit 128");
+    expect(detail).toContain("fatal: fetch-pack: invalid index-pack output");
+  });
 });
 
 describe("renderMatrixReport", () => {
@@ -230,6 +386,121 @@ describe("renderMatrixReport", () => {
     expect(report).toContain("failed");
     expect(report).toContain("exploration failed");
     expect(report).toContain("skipped");
+  });
+});
+
+describe("resolveMatrixNotification", () => {
+  it("stays disabled unless TEXTME is explicitly on", () => {
+    expect(resolveMatrixNotification({}).status).toBe("disabled");
+    expect(resolveMatrixNotification({ TEXTME: "false" }).status).toBe(
+      "disabled",
+    );
+    expect(resolveMatrixNotification({ TEXTME: "0" }).status).toBe("disabled");
+  });
+
+  it("resolves the recipient and reused Resend credentials when fully configured", () => {
+    const notification = resolveMatrixNotification({
+      RESEND_API_KEY: "re_test",
+      RESEND_FROM_EMAIL: "MakeADemo <demo@makeademo.example>",
+      TEXTME: "true",
+      TEXTME_EMAIL: "operator@example.com",
+    });
+
+    expect(notification).toEqual({
+      apiKey: "re_test",
+      fromEmail: "MakeADemo <demo@makeademo.example>",
+      status: "enabled",
+      to: "operator@example.com",
+    });
+  });
+
+  it("reports misconfiguration by name instead of throwing when a value is missing", () => {
+    const notification = resolveMatrixNotification({
+      RESEND_API_KEY: "re_test",
+      RESEND_FROM_EMAIL: "MakeADemo <demo@makeademo.example>",
+      TEXTME: "1",
+    });
+
+    expect(notification.status).toBe("misconfigured");
+    if (notification.status !== "misconfigured") {
+      throw new Error("expected a misconfigured notification");
+    }
+    expect(notification.reason).toContain("TEXTME_EMAIL");
+  });
+});
+
+describe("notifyMatrixRunComplete", () => {
+  it("sends nothing when TEXTME is disabled", async () => {
+    const notifier = recordingNotifier();
+    await notifyMatrixRunComplete({
+      batchStamp: "2026-08-12T18-00-00-000Z",
+      env: {},
+      log: () => {},
+      notifier,
+      reportMarkdown: "| Entry | Status |\n",
+      results: [...oneOfEachResult],
+    });
+
+    expect(notifier.sent).toEqual([]);
+  });
+
+  it("emails the recipient the report with the per-status counts when enabled", async () => {
+    const notifier = recordingNotifier();
+    await notifyMatrixRunComplete({
+      batchStamp: "2026-08-12T18-00-00-000Z",
+      env: enabledNotificationEnv,
+      log: () => {},
+      notifier,
+      reportMarkdown: "| Entry | Status |\n",
+      results: [...oneOfEachResult],
+    });
+
+    expect(notifier.sent).toEqual([
+      {
+        batchStamp: "2026-08-12T18-00-00-000Z",
+        failed: 1,
+        passed: 1,
+        reportMarkdown: "| Entry | Status |\n",
+        skipped: 1,
+        to: "operator@example.com",
+      },
+    ]);
+  });
+
+  it("swallows and logs a notifier failure so the batch result is unaffected", async () => {
+    const notifier = recordingNotifier({ throwOnSend: true });
+    const logs: string[] = [];
+    await expect(
+      notifyMatrixRunComplete({
+        batchStamp: "2026-08-12T18-00-00-000Z",
+        env: enabledNotificationEnv,
+        log: (message) => logs.push(message),
+        notifier,
+        reportMarkdown: "| Entry | Status |\n",
+        results: [...oneOfEachResult],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(notifier.sent).toHaveLength(1);
+    expect(logs.some((line) => line.includes("run notification failed"))).toBe(
+      true,
+    );
+  });
+
+  it("logs which value is missing and sends nothing when misconfigured", async () => {
+    const notifier = recordingNotifier();
+    const logs: string[] = [];
+    await notifyMatrixRunComplete({
+      batchStamp: "2026-08-12T18-00-00-000Z",
+      env: { ...enabledNotificationEnv, TEXTME_EMAIL: undefined },
+      log: (message) => logs.push(message),
+      notifier,
+      reportMarkdown: "| Entry | Status |\n",
+      results: [...oneOfEachResult],
+    });
+
+    expect(notifier.sent).toEqual([]);
+    expect(logs.some((line) => line.includes("TEXTME_EMAIL"))).toBe(true);
   });
 });
 

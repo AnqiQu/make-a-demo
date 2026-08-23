@@ -13,6 +13,7 @@ import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   type RepoSnapshotGit,
@@ -89,6 +90,144 @@ describe("readGithubRepoSnapshot", () => {
     expect(
       snapshot.files.find(({ path }) => path === "package-link.json"),
     ).toEqual({ path: "package-link.json", symlinkTarget: "package.json" });
+  });
+
+  it("reads the root .yarnrc.yml so lifecycle-script policy reaches the profiler", async () => {
+    // N160(2) regression, wave 17: outline's enableScripts: false never
+    // reached profileRepo because .yarnrc.yml was not a readable file name,
+    // so lifecycleScriptsDisabled could never be set in production.
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-yarnrc-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/berry-app",
+        runDirectory,
+      },
+      {
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "berry archive");
+          },
+          async clone(input) {
+            await mkdir(input.checkoutPath, { recursive: true });
+            await writeFile(join(input.checkoutPath, "package.json"), "{}");
+            await writeFile(
+              join(input.checkoutPath, ".yarnrc.yml"),
+              "nodeLinker: node-modules\nenableScripts: false\n",
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    expect(
+      snapshot.files.find(({ path }) => path === ".yarnrc.yml")?.text,
+    ).toContain("enableScripts: false");
+  });
+
+  it("reads compose files and prisma schemas for data-service detection", async () => {
+    // N122: servicesRequired detection reads docker-compose services and the
+    // Prisma datasource provider — those files must reach the profiler with
+    // text, not as bare paths.
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-services-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/data-backed-app",
+        runDirectory,
+      },
+      {
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "data archive");
+          },
+          async clone(input) {
+            await mkdir(join(input.checkoutPath, "prisma"), {
+              recursive: true,
+            });
+            await writeFile(join(input.checkoutPath, "package.json"), "{}");
+            await writeFile(
+              join(input.checkoutPath, "docker-compose.yml"),
+              "services:\n  db:\n    image: postgres:16\n",
+            );
+            await writeFile(
+              join(input.checkoutPath, "prisma", "schema.prisma"),
+              'datasource db {\n  provider = "postgresql"\n}\n',
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    expect(
+      snapshot.files.find(({ path }) => path === "docker-compose.yml")?.text,
+    ).toContain("postgres:16");
+    expect(
+      snapshot.files.find(({ path }) => path === "prisma/schema.prisma")?.text,
+    ).toContain('provider = "postgresql"');
+  });
+
+  it("logs a failed clone with the full git stderr before rethrowing", async () => {
+    // calcom and ghostfolio's clones died mid-transfer with exit 128
+    // (2026-08-13T23-23) and the fatal: line never reached any log — the
+    // report row truncated it and nothing durable recorded it.
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-clone-failure-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const events: Array<{ event: string; fields: Record<string, unknown> }> =
+      [];
+    const cloneFailure = new Error(
+      [
+        "git clone --depth 1 --no-tags https://github.com/acme/big-app failed with exit 128:",
+        "Cloning into '/tmp/repo-snapshot'...",
+        "error: RPC failed; curl 18 transfer closed with outstanding read data remaining",
+        "fatal: fetch-pack: invalid index-pack output",
+      ].join("\n"),
+    );
+
+    await expect(
+      readGithubRepoSnapshot(
+        {
+          log: async (event, fields = {}) => {
+            events.push({ event, fields });
+          },
+          repoUrl: "https://github.com/acme/big-app",
+          runDirectory,
+        },
+        {
+          git: {
+            async archiveRevision() {},
+            async clone() {
+              throw cloneFailure;
+            },
+            async readHead() {
+              return "abc123def456";
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow(cloneFailure);
+
+    const failure = events.find(({ event }) => event === "repo.clone.failed");
+    expect(String(failure?.fields.error)).toContain(
+      "fatal: fetch-pack: invalid index-pack output",
+    );
   });
 
   it("kills a repository clone that hangs past its timeout", async () => {
@@ -179,7 +318,7 @@ describe("readGithubRepoSnapshot", () => {
       {
         git: {
           async archiveRevision(input) {
-            await writeFile(input.archivePath, "vendored archive");
+            await writeFile(input.archivePath, gzipSync("vendored archive"));
           },
           async clone(input) {
             await mkdir(join(input.checkoutPath, "node_modules/pkg"), {
@@ -330,7 +469,10 @@ describe("readGithubRepoSnapshot", () => {
     const git: RepoSnapshotGit = {
       async archiveRevision(input) {
         excludedPaths = input.excludedPaths ?? [];
-        await writeFile(input.archivePath, "sanitized execution archive");
+        await writeFile(
+          input.archivePath,
+          gzipSync("sanitized execution archive"),
+        );
       },
       async clone(input) {
         await mkdir(join(input.checkoutPath, "certificates"), {
@@ -425,7 +567,10 @@ describe("readGithubRepoSnapshot", () => {
     const git: RepoSnapshotGit = {
       async archiveRevision(input) {
         excludedPaths = input.excludedPaths ?? [];
-        await writeFile(input.archivePath, "sanitized execution archive");
+        await writeFile(
+          input.archivePath,
+          gzipSync("sanitized execution archive"),
+        );
       },
       async clone(input) {
         await mkdir(join(input.checkoutPath, "config"), { recursive: true });
@@ -449,6 +594,10 @@ describe("readGithubRepoSnapshot", () => {
         await writeFile(
           join(input.checkoutPath, "packages", "app", ".npmrc"),
           "registry=https://registry.npmjs.org/\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, ".yarnrc.yml"),
+          'npmRegistries:\n  "https://npm.corp.example":\n    npmAuthToken: corp_secret\n',
         );
         await writeFile(
           join(input.checkoutPath, "config", "prod.tfvars"),
@@ -489,6 +638,7 @@ describe("readGithubRepoSnapshot", () => {
     expect(excludedPaths).toEqual([
       ".envrc",
       ".npmrc",
+      ".yarnrc.yml",
       "config/prod.env",
       "config/prod.tfvars",
       "config/secrets.txt",
@@ -536,9 +686,43 @@ describe("readGithubRepoSnapshot", () => {
     expect(snapshot.secretQuarantineManifest.entries).toEqual([
       expect.objectContaining({ kind: "environment-file", path: ".env" }),
     ]);
-    const archive = await readFile(snapshot.sourceArchive.path);
+    const archive = gunzipSync(await readFile(snapshot.sourceArchive.path));
     expect(archive.includes("index.ts")).toBe(true);
     expect(archive.includes("production-secret")).toBe(false);
+  });
+
+  it("produces a gzip-compressed archive through the real git", async () => {
+    // The screened archive crosses the network twice (developer uplink to the
+    // sandbox); twenty's uncompressed 294MB tar could not finish inside the
+    // upload attempt timeout on a contended uplink (2026-08-13T23-23 matrix).
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-gzip-archive-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const git: RepoSnapshotGit = {
+      archiveRevision: defaultRepoSnapshotGit.archiveRevision,
+      async clone(input) {
+        await createRealGitCheckout(input.checkoutPath);
+      },
+      readHead: defaultRepoSnapshotGit.readHead,
+    };
+
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/gzip-archive-app",
+        runDirectory,
+      },
+      { git },
+    );
+
+    expect(snapshot.sourceArchive.path.endsWith("screened-repo.tar.gz")).toBe(
+      true,
+    );
+    const archive = await readFile(snapshot.sourceArchive.path);
+    expect(archive[0]).toBe(0x1f);
+    expect(archive[1]).toBe(0x8b);
   });
 
   it("rejects an archive that still contains a quarantined path", async () => {
@@ -648,8 +832,9 @@ describe("readGithubRepoSnapshot", () => {
     expect(archivedRevisions).toEqual(["abc123def456"]);
     expect(snapshot.sourceArchive).toEqual({
       commitSha: "abc123def456",
-      path: join(runDirectory, "screened-repo.tar"),
+      path: join(runDirectory, "screened-repo.tar.gz"),
       sha256: createHash("sha256").update(archiveContents).digest("hex"),
+      sizeBytes: Buffer.byteLength(archiveContents),
     });
     await expect(readFile(snapshot.sourceArchive.path, "utf8")).resolves.toBe(
       archiveContents,

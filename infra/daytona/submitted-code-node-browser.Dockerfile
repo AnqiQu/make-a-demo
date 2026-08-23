@@ -10,6 +10,18 @@ RUN apt-get update \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+# Data-service binaries for the provisioned-service rung (N122(5)): the
+# sandbox-services module boots these on loopback inside the sealed sandbox,
+# so they must ship in the snapshot. mariadb-server answers the mysql service
+# class — detection normalizes mariadb/percona onto mysql and the protocol is
+# what drivers dial. Versions are whatever the noble archive pins; the
+# snapshot itself is the version pin. The apt-created default postgres
+# cluster and any auto-start units are irrelevant here: nothing supervises
+# services in the sandbox, the module initializes its own data directories.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends mariadb-server postgresql postgresql-contrib redis-server \
+  && rm -rf /var/lib/apt/lists/*
+
 # Node lines (N78): every common LTS line is baked as a checksum-verified
 # official tarball so the backend can swap /usr/local wholesale to the
 # repository's pinned line before any repo command runs. Post-swap there is

@@ -59,6 +59,140 @@ describe("assertPreparedFeatureInventory", () => {
     ).toThrow(/template/);
   });
 
+  it("requires a declared proof for every maker-requested feature once coverage holds", () => {
+    // N107: the feature says how to prove it. Coverage errors stay first —
+    // prepare the right feature set, then declare each proof.
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: ["creating an account"] },
+        preparationManifest: manifestWithFeatures([
+          {
+            id: "create-account",
+            label: "Creating an account",
+            requestedFeature: "creating an account",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/create-account.*expectedProof|expectedProof.*create-account/s);
+  });
+
+  it("rejects residual template values in declared proofs", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: {
+              kind: "visible-text",
+              text: "replace-with-on-screen-text-proving tracker",
+            },
+            id: "tracker",
+            label: "Tracker",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/declared proofs must replace template values/);
+  });
+
+  it("rejects a state-transition proof that starts disabled and steers to seeding", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: {
+              from: "disabled",
+              kind: "state-transition",
+              locator: "Undo",
+              to: "enabled",
+            },
+            id: "undo-redo",
+            label: "Undo and redo",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/seed.*starts enabled|starts enabled.*seed/is);
+  });
+
+  it("rejects selector-shaped proof locators and steers to accessible names", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: { kind: "element-appears", name: "#export-button" },
+            id: "export-report",
+            label: "Export report",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/accessible name/i);
+  });
+
+  it("rejects a selector-shaped canvas-delta locator but accepts app-state keys verbatim", () => {
+    // N157: a canvas-delta locator is an accessible name, so selector syntax
+    // is rejected like every other locator. An app-state key is the app's
+    // own storage key — whatever the app writes, including dots or dashes —
+    // so the accessible-name rule must not apply to it.
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: { kind: "canvas-delta", locator: ".tool-rectangle" },
+            id: "draw-shapes",
+            label: "Drawing shapes",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/accessible name/i);
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: {
+              contains: '"type":"rectangle"',
+              key: ".excalidraw/scene",
+              kind: "app-state",
+              source: "local-storage",
+            },
+            id: "draw-shapes",
+            label: "Drawing shapes",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects two features declaring the identical proof", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: { kind: "visible-text", text: "Portfolio overview" },
+            id: "portfolio-overview",
+            label: "Portfolio overview",
+          },
+          {
+            expectedProof: { kind: "visible-text", text: "Portfolio overview" },
+            id: "allocation-chart",
+            label: "Allocation chart",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/identical|indistinguishable/i);
+  });
+
   it("reports every unknown source path at once with the eligibility rule", () => {
     // Midday's 2026-08-08 regression: one-path-at-a-time rejection made the
     // repair whack-a-mole — the agent fixed evidencePaths, then the same
@@ -172,6 +306,7 @@ describe("assertPreparedFeatureInventory", () => {
   it("accepts an original browser entry module as UI source", () => {
     const preparationManifest = manifestWithFeatures([
       {
+        expectedProof: { kind: "visible-text", text: "Published demo article" },
         id: "post-article",
         label: "Posting an article",
         requestedFeature: "posting an article",
@@ -274,7 +409,7 @@ describe("assertPreparedFeatureInventory", () => {
     ).not.toThrow();
   });
 
-  it("rejects feature evidence owned by a non-selected browser application", () => {
+  it("rejects a feature whose sources cite no path in the selected application", () => {
     const preparationManifest = manifestWithFeatures([
       {
         id: "landing-page",
@@ -296,7 +431,304 @@ describe("assertPreparedFeatureInventory", () => {
         ]),
         runPlan: dashboardRunPlan(),
       }),
-    ).toThrow(/belongs to non-selected browser application apps\/website/);
+    ).toThrow(/must cite the selected browser application apps\/dashboard/);
+  });
+
+  // N162 (ghost, 2026-08-20): admin features genuinely live in a sibling
+  // client directory that the selected server app builds and serves.
+  // Directory ownership is not a target switch; the appDir lock and the
+  // cite-the-selected-app anchor above carry that protection.
+  it("accepts sibling-client sourcePaths when the feature also cites the selected application", () => {
+    const preparationManifest = manifestWithFeatures([
+      {
+        id: "manage-posts",
+        label: "Manage posts",
+        sourcePaths: [
+          "apps/dashboard/src/server/admin/app.ts",
+          "apps/website/src/app/page.tsx",
+        ],
+      },
+    ]);
+    preparationManifest.appDir = "apps/dashboard";
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: multiAppProfile(),
+        repoSourcePaths: new Set([
+          "README.md",
+          "apps/dashboard/src/server/admin/app.ts",
+          "apps/website/src/app/page.tsx",
+        ]),
+        runPlan: dashboardRunPlan(),
+      }),
+    ).not.toThrow();
+  });
+
+  // N122(2): the enforcement half of the data-backend ladder's closed loop —
+  // detection fills servicesRequired, and preparation cannot be complete
+  // until every detected service is answered by a ladder rung.
+  it("rejects a manifest that leaves a detected data service unanswered", () => {
+    let thrown: Error | undefined;
+    try {
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          { id: "dashboard", label: "Dashboard" },
+        ]),
+        repoProfile: profileWithServices([
+          {
+            evidencePaths: ["docker-compose.yml", "prisma/schema.prisma"],
+            service: "postgres",
+          },
+          { evidencePaths: [".env.example"], service: "redis" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      });
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    // One error names every unanswered service with its evidence and the
+    // rungs available today, so the repair states the fix (the
+    // flow-planning lesson: rules fire only when satisfiable).
+    expect(thrown?.message).toContain("postgres");
+    expect(thrown?.message).toContain("docker-compose.yml");
+    expect(thrown?.message).toContain("redis");
+    expect(thrown?.message).toContain(".env.example");
+    expect(thrown?.message).toContain("embedded-config");
+    expect(thrown?.message).toContain("client-stub");
+    expect(thrown?.message).toContain("declared-stub");
+  });
+
+  it("accepts a manifest whose data strategy answers every detected service", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "Prisma provider switched to sqlite with a seeded demo file",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+      {
+        detail: "cache layer returns in-code fixtures under the demo gate",
+        rung: "declared-stub",
+        service: "redis",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+          { evidencePaths: [".env.example"], service: "redis" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects data strategy rungs the backend does not yet provide", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "neon driver swapped for pg against a local socket",
+        rung: "provider-recipe",
+        service: "postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(
+      /provider-recipe.*not yet.*embedded-config, provisioned-service, client-stub, declared-stub/s,
+    );
+  });
+
+  it("accepts a provisioned-service declaration for a provisionable service", () => {
+    // N122(5): the provisioned-service rung is real for postgres, mysql,
+    // and redis — the sandbox boots them on loopback and runs the declared
+    // migrate and seed commands.
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "harness Postgres on loopback with prisma migrate and seed",
+        migrationCommand: "npx prisma migrate deploy",
+        rung: "provisioned-service",
+        seedCommand: "npx prisma db seed",
+        service: "postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects provisioned-service declarations the sandbox cannot boot", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "documents served from a real mongo",
+        rung: "provisioned-service",
+        service: "mongodb",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["package.json"], service: "mongodb" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/mongodb.*mysql, postgres, redis/s);
+  });
+
+  it("rejects migration and seed commands outside the provisioned-service rung", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "Prisma provider switched to sqlite with a seeded demo file",
+        migrationCommand: "npx prisma migrate deploy",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/migrationCommand.*provisioned-service/s);
+  });
+
+  it("rejects duplicate data strategy entries for one service", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "sqlite swap",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+      {
+        detail: "also stubbed",
+        rung: "declared-stub",
+        service: "Postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/postgres more than once/);
+  });
+
+  it("rejects residual template values in data strategy details", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "replace-with-how-postgres-is-served-for-the-demo",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/dataStrategy.*template/s);
+  });
+
+  it("requires no data strategy when detection found no services", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          { id: "dashboard", label: "Dashboard" },
+        ]),
+        repoProfile: profileWithServices([]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows additional declarations for services detection missed", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "Prisma provider switched to sqlite with a seeded demo file",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+      {
+        detail: "search index served from generated fixtures",
+        rung: "declared-stub",
+        service: "elasticsearch",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -320,6 +752,34 @@ function dashboardRunPlan(): RunPlan {
       targetId: "apps/dashboard",
     },
     validationExpectations: [],
+  };
+}
+
+function profileWithServices(
+  servicesRequired: RepoProfile["servicesRequired"],
+): RepoProfile {
+  return {
+    authHints: [],
+    candidateAppDirs: ["."],
+    candidateBuildCommands: [],
+    candidateInstallCommands: ["npm ci"],
+    candidatePorts: [3000],
+    candidateStartCommands: ["npm start"],
+    confidence: { assumptions: [], overall: 1 },
+    detectedFrameworks: ["next"],
+    dockerHints: [],
+    envExamples: [],
+    externalServiceHints: [],
+    lockfiles: ["package-lock.json"],
+    packageManager: "npm",
+    packageScripts: { start: "next start" },
+    repoUrl: "https://github.com/example/app",
+    requiredEnvHints: [],
+    rootDir: "/workspace",
+    securityWarnings: [],
+    ...(servicesRequired === undefined ? {} : { servicesRequired }),
+    unsupportedReasons: [],
+    workspaces: { isMonorepo: false, packageDirectories: [] },
   };
 }
 
@@ -369,6 +829,7 @@ function manifestWithFeatures(
     authStrategy?: "bypass" | "demo-identity" | "none";
     description?: string;
     entryPaths?: string[];
+    expectedProof?: PreparationManifest["productContext"]["featureInventory"][number]["expectedProof"];
     id: string;
     label: string;
     requestedFeature?: string;
@@ -390,13 +851,14 @@ function manifestWithFeatures(
     ports: [3000],
     productContext: {
       evidencePaths: ["README.md"],
-      featureInventory: features.map((feature) => ({
+      featureInventory: features.map(({ expectedProof, ...feature }) => ({
         authStrategy: "none",
         description: `Demonstrate ${feature.label}`,
         entryPaths: ["/"],
         fixtureNotes: [],
         sourcePaths: ["src/routes.tsx"],
         ...feature,
+        ...(expectedProof === undefined ? {} : { expectedProof }),
       })),
       name: "Conduit",
       summary: "A publishing platform.",

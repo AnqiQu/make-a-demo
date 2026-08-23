@@ -17,6 +17,7 @@ import {
   CAPTURE_SCRIPT_TIMEOUT_MS,
 } from "./capture-execution-budget";
 import {
+  CaptureBrowserActionFailureError,
   type CaptureRuntimeProtocol,
   formatCaptureRuntimeProtocolLog,
   readCaptureRuntimeProtocol,
@@ -181,6 +182,20 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       appOutput,
     );
     if (result.exitCode !== 0) {
+      try {
+        readSuccessfulCaptureProtocol({
+          expectedStepIdsByScene: expectedStepIdsByScene(input),
+          protocol,
+          requireValidationLifecycle: false,
+          requireVisibleAssertions: false,
+          sceneIds: input.scenes.map((scene) => scene.id),
+        });
+      } catch (error) {
+        if (error instanceof CaptureBrowserActionFailureError) {
+          error.message = `${error.message} Full output: ${join(input.runDirectory, "stdout.log")}, ${join(input.runDirectory, "stderr.log")}.`;
+          throw error;
+        }
+      }
       throw new Error(
         formatSceneFailure(
           "continuous-take",

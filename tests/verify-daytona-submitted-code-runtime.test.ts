@@ -9,7 +9,10 @@ import {
 import { createFakeAgentHarnessWorkspace } from "../src/server/agent-harness/daytona/workspace.test-helpers";
 
 describe("verifyDaytonaSubmittedCodeRuntime", () => {
-  it("pins the local browser toolchain to the submitted-code runtime", async () => {
+  it("pins the local bun toolchain to the submitted-code runtime", async () => {
+    // The @playwright/test pin left with the full-Chrome remotion smoke
+    // (bdc514a): sandbox scripts run the sandbox image's own pinned
+    // Playwright, so only the bun toolchain still pairs local with sandbox.
     const packageJson = JSON.parse(
       await readFile(new URL("../package.json", import.meta.url), "utf8"),
     ) as {
@@ -18,7 +21,6 @@ describe("verifyDaytonaSubmittedCodeRuntime", () => {
     };
 
     expect(packageJson.packageManager).toBe("bun@1.3.14");
-    expect(packageJson.devDependencies["@playwright/test"]).toBe("1.60.0");
     expect(packageJson.devDependencies["bun-types"]).toBe("1.3.14");
   });
 

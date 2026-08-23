@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
 import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
+import type { AgentHarnessPipelineResult } from "../orchestration/agent-harness";
 import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import {
   type DefaultDemoPipelineOptions,
@@ -39,8 +40,9 @@ describe("runDefaultDemoPipeline", () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-private-"));
     const sourceArchive = {
       commitSha: "abc123def456",
-      path: join(outputRoot, "screened-repo.tar"),
+      path: join(outputRoot, "screened-repo.tar.gz"),
       sha256: "archive-sha256",
+      sizeBytes: 2,
     };
     const installationTokenProvider = {
       async createInstallationToken() {
@@ -87,6 +89,67 @@ describe("runDefaultDemoPipeline", () => {
     await expect(
       readFile(join(outputRoot, "private-repo", "input.json"), "utf8"),
     ).resolves.not.toContain("short-lived-secret");
+  });
+
+  it("routes the repo snapshot read through the shared bulk-transfer limiter", async () => {
+    // A matrix batch cloning several multi-GB repos into one launch window
+    // starves the shared uplink (calcom and ghostfolio died mid-clone,
+    // 2026-08-13T23-23); the batch hands each pipeline one limiter so bulk
+    // transfers run one at a time.
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-limiter-"));
+    const events: string[] = [];
+    const sourceArchive = {
+      commitSha: "abc123def456",
+      path: join(outputRoot, "screened-repo.tar.gz"),
+      sha256: "archive-sha256",
+      sizeBytes: 2,
+    };
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: [],
+          repoUrl: "https://github.com/acme/serialized-clone",
+        },
+        {
+          bulkTransferLimiter: {
+            async run(task) {
+              events.push("limiter acquired");
+              try {
+                return await task();
+              } finally {
+                events.push("limiter released");
+              }
+            },
+          },
+          async createHarnessDependencies() {
+            throw new Error("dependency handoff observed");
+          },
+          outputRoot,
+          async readRepoSnapshot() {
+            events.push("snapshot read");
+            return {
+              commitSha: sourceArchive.commitSha,
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 2 },
+              secretQuarantineManifest: {
+                entries: [],
+                version: "2026-07-15",
+              },
+              sourceArchive,
+            };
+          },
+          runId: "limited-clone",
+        },
+      ),
+    ).rejects.toThrow("dependency handoff observed");
+
+    expect(events).toEqual([
+      "limiter acquired",
+      "snapshot read",
+      "limiter released",
+    ]);
   });
 
   it("runs the default harness, Footage Capture, and Compositing rails", async () => {
@@ -254,8 +317,9 @@ describe("runDefaultDemoPipeline", () => {
             },
             sourceArchive: {
               commitSha: "abc123def456",
-              path: join(outputRoot, "screened-repo.tar"),
+              path: join(outputRoot, "screened-repo.tar.gz"),
               sha256: "screened-repo-sha256",
+              sizeBytes: 134_113_964,
             },
           };
         },
@@ -268,6 +332,7 @@ describe("runDefaultDemoPipeline", () => {
         async runHarnessPipeline(input, dependencies, harnessOptions) {
           calls.push(`harness:${input.repoUrl}:${input.runId}`);
           expect(harnessOptions).toEqual({
+            captureAcceptedScript: expect.any(Function),
             destroyWorkspaceOnCompletion: false,
             jobDeadlineMs: 90 * 60_000,
             repoPreparationRepairLimit: 2,
@@ -283,12 +348,13 @@ describe("runDefaultDemoPipeline", () => {
             ],
             version: "2026-07-15",
           });
+          expect(input.archiveSizeBytes).toBe(134_113_964);
           expect(input.demoBrief.preferredAppDir).toBe("apps/calendar");
           await dependencies.artifactStore?.writeJson(
             "/workspace/.makeademo/pipeline-run-manifest.json",
             { finalStatus: "passed" },
           );
-          return {
+          const pipelineResult: AgentHarnessPipelineResult = {
             pipelineRunManifest: {
               artifactPaths: {
                 captureRuntimeReset:
@@ -328,7 +394,7 @@ describe("runDefaultDemoPipeline", () => {
             },
             scriptCandidate: {
               assumptions: [],
-              browserActionCompilerVersion: "2026-07-18.1",
+              browserActionCompilerVersion: "2026-08-14.1",
               bunRuntimeVersion: "1.3.14",
               captureSdkVersion: "2026-07-18.1",
               conformanceResult: {
@@ -397,6 +463,30 @@ describe("runDefaultDemoPipeline", () => {
               },
             ],
           };
+          const { preparationManifest, scriptCandidate } = pipelineResult;
+          if (
+            preparationManifest === undefined ||
+            scriptCandidate === undefined
+          ) {
+            throw new Error("test harness result is missing capture inputs");
+          }
+          const captureReport = await harnessOptions?.captureAcceptedScript?.({
+            captureRuntimeReset: {
+              artifactPath:
+                "/workspace/.makeademo/capture-runtime-reset-validation-report.json",
+              stage: "capture-runtime-reset",
+              status: "passed",
+            },
+            preparationManifest,
+            scriptCandidate,
+            workspace: workspaceHandle.workspace,
+          });
+          expect(captureReport).toMatchObject({
+            failureClassification: "none",
+            stage: "footage-capture",
+            status: "passed",
+          });
+          return pipelineResult;
         },
       },
     );
@@ -533,8 +623,9 @@ describe("runDefaultDemoPipeline", () => {
               },
               sourceArchive: {
                 commitSha: "abc123def456",
-                path: join(outputRoot, "screened-repo.tar"),
+                path: join(outputRoot, "screened-repo.tar.gz"),
                 sha256: "screened-repo-sha256",
+                sizeBytes: 2,
               },
             };
           },
@@ -608,8 +699,9 @@ function syntheticSuccessOptions(config: {
         },
         sourceArchive: {
           commitSha: "abc123def456",
-          path: join(outputRoot, "screened-repo.tar"),
+          path: join(outputRoot, "screened-repo.tar.gz"),
           sha256: "screened-repo-sha256",
+          sizeBytes: 2,
         },
       };
     },
@@ -659,7 +751,7 @@ function syntheticSuccessOptions(config: {
         },
         scriptCandidate: {
           assumptions: [],
-          browserActionCompilerVersion: "2026-07-18.1",
+          browserActionCompilerVersion: "2026-08-14.1",
           bunRuntimeVersion: "1.3.14",
           captureSdkVersion: "2026-07-18.1",
           conformanceResult: {

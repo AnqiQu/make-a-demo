@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
+import type { PreparedDemoFeature } from "../schemas/artifacts";
 import { exploreSubmittedApp } from "./submitted-app-explorer";
 
 const execFileAsync = promisify(execFile);
@@ -25,11 +26,19 @@ setTimeout(() => {
 </script>
 </body></html>`;
 
-async function buildExplorerScript(baseUrl: string): Promise<string> {
+async function buildExplorerScript(
+  baseUrl: string,
+  featureInventory?: PreparedDemoFeature[],
+  scope?: "feature-entries" | "feature-proofs",
+  captureFailure?: Parameters<typeof exploreSubmittedApp>[0]["captureFailure"],
+): Promise<string> {
   const commands: string[] = [];
   await exploreSubmittedApp({
     baseUrl,
+    ...(captureFailure === undefined ? {} : { captureFailure }),
+    ...(featureInventory === undefined ? {} : { featureInventory }),
     preparationManifestId: "prep_script_test",
+    ...(scope === undefined ? {} : { scope }),
     workspace: createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command: string) {
         commands.push(command);
@@ -112,6 +121,220 @@ describe("generated exploration script", () => {
       server.close();
     }
   }, 30_000);
+
+  it("records a click's same-origin navigation destination as structured evidence", async () => {
+    const navigationPage = `<!doctype html><html><head><title>Calendar</title></head><body>
+<h1>Calendar</h1>
+<button onclick="history.pushState({}, '', '/auth/login'); document.querySelector('h1').textContent = 'Login'">New</button>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(navigationPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 30_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        routes: Array<{
+          interactions: Array<{
+            name: string;
+            navigationDestination?: string;
+          }>;
+        }>;
+      };
+
+      expect(result.routes[0]?.interactions).toContainEqual(
+        expect.objectContaining({
+          name: "New",
+          navigationDestination: "/auth/login",
+        }),
+      );
+    } finally {
+      server.close();
+    }
+  }, 35_000);
+
+  it("records a click that leaves the app origin as an external destination", async () => {
+    // N158 (excalidraw): a marketing-banner click that navigates off the app
+    // must be recorded as non-navigable evidence — the observed external URL,
+    // never a local navigationDestination the compiler could wait on.
+    const awayServer = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><head><title>Plus</title></head><body><h1>Plus plans</h1></body></html>",
+      );
+    });
+    await new Promise<void>((resolve) =>
+      awayServer.listen(0, "127.0.0.1", resolve),
+    );
+    const awayAddress = awayServer.address();
+    if (awayAddress === null || typeof awayAddress === "string") {
+      throw new Error("away server did not expose a port");
+    }
+    const awayUrl = `http://127.0.0.1:${awayAddress.port}/plus`;
+    const appPage = `<!doctype html><html><head><title>Canvas</title></head><body>
+<h1>Canvas</h1>
+<button onclick="location.href='${awayUrl}'">Try Plus</button>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(appPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-external-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 30_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        routes: Array<{
+          interactions: Array<{
+            externalDestination?: string;
+            name: string;
+            navigationDestination?: string;
+          }>;
+        }>;
+      };
+
+      const interaction = result.routes[0]?.interactions.find(
+        ({ name }) => name === "Try Plus",
+      );
+      expect(interaction).toBeDefined();
+      expect(interaction?.navigationDestination).toBeUndefined();
+      expect(interaction?.externalDestination).toBe(awayUrl);
+    } finally {
+      server.close();
+      awayServer.close();
+    }
+  }, 35_000);
+
+  it("records control renames and disabled-to-enabled transitions as interaction outcomes", async () => {
+    // N105: a toggle that renames itself (Follow → Unfollow) and a click
+    // that enables a disabled control (Save draft → Undo enabled) are
+    // wording-free proof of behavior; both previously produced no visible
+    // delta the outcome describer could see, so the interactions were
+    // silently discarded.
+    const togglePage = `<!doctype html><html><head><title>Toggle App</title></head><body>
+<h1>Project workspace</h1>
+<main><p>Quarterly planning workspace for the demo team</p></main>
+<button onclick="this.textContent='Unfollow'">Follow</button>
+<button onclick="document.getElementById('undo').disabled = false">Save draft</button>
+<button id="undo" disabled>Undo</button>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(togglePage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 60_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{
+          buttons: string[];
+          interactions: Array<{
+            name: string;
+            outcome: string;
+            stateTransition?: { control: string; from: string; to: string };
+          }>;
+        }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const route = result.routes[0];
+      expect(route?.buttons).toContain("Undo");
+      expect(route?.interactions).toContainEqual(
+        expect.objectContaining({
+          name: "Follow",
+          outcome: "Follow became Unfollow",
+          stateTransition: {
+            control: "Follow",
+            from: "Follow",
+            to: "Unfollow",
+          },
+        }),
+      );
+      expect(route?.interactions).toContainEqual(
+        expect.objectContaining({
+          name: "Save draft",
+          outcome: "Undo [disabled] → [enabled]",
+          stateTransition: { control: "Undo", from: "disabled", to: "enabled" },
+        }),
+      );
+      // The disabled control itself is never clicked.
+      expect(route?.interactions).not.toContainEqual(
+        expect.objectContaining({ name: "Undo" }),
+      );
+    } finally {
+      server.close();
+    }
+  }, 60_000);
 
   it("quarantines alert text from the content harvest into a separate alerts field", async () => {
     // Error toasts are what an app shows when it fails; harvested as text
@@ -602,6 +825,487 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("harvests accessibility-tree text even when the selector harvest is rich", async () => {
+    // A dashboard's headline metric often renders in a bare div the
+    // paragraph/list selectors never reach. A rich selector harvest must not
+    // suppress the aria harvest, or exactly the string a feature needs for
+    // grounding goes unseen while filler paragraphs fill the report.
+    const richDashboardPage = `<!doctype html><html><head><title>Fleet App</title></head><body>
+<h1>Fleet dashboard</h1><h2>Vehicles</h2><h3>Maintenance</h3>
+<main>
+<p>Seven vehicles are currently active</p>
+<p>Two vehicles are charging at depot four</p>
+<p>One vehicle needs a tire rotation</p>
+<p>Route coverage is nominal today</p>
+<p>Depot four reports full capacity</p>
+</main>
+<div>Total balance $12,400</div>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(richDashboardPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-aria-rich-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.text).toContain("Total balance $12,400");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("keeps a feature-named control inside the harvest budget on a control-dense page", async () => {
+    // Seventeen filler buttons precede the one control the prepared feature
+    // is about. A positional cut would drop it; the budget must spend its
+    // slots on feature-matching accessible names first.
+    const fillers = Array.from(
+      { length: 17 },
+      (_, index) => `<button>Filler action ${index + 1}</button>`,
+    ).join("\n");
+    const controlDensePage = `<!doctype html><html><head><title>Dense App</title></head><body>
+<main>
+${fillers}
+<button>Export report</button>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(controlDensePage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-controls-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`, [
+          {
+            authStrategy: "none",
+            description: "Export the monthly report.",
+            entryPaths: ["/"],
+            fixtureNotes: [],
+            id: "export-report",
+            label: "Export report",
+            sourcePaths: ["src/export.ts"],
+          },
+        ])
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ buttons: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.buttons).toContain("Export report");
+      expect(result.routes[0]?.buttons.length).toBeLessThanOrEqual(16);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("records the document status and a body sample for an error response", async () => {
+    // A route answering 500 with a bare stack-trace body: the status and a
+    // bounded innerText sample must reach the observation so the backend
+    // can classify the route as a runtime fault instead of a wording gap.
+    const brokenPage = `<!doctype html><html><head><title>Broken</title></head><body><pre>TypeError: Cannot read properties of undefined (reading 'map')
+    at ReportList.render (/app/src/reports.tsx:12:5)</pre></body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(500, { "content-type": "text/html; charset=utf-8" });
+      response.end(brokenPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-status-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ documentStatus?: number; textSample?: string }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.documentStatus).toBe(500);
+      expect(result.routes[0]?.textSample).toContain("TypeError");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("executes declared proofs and records pass and fail outcomes", async () => {
+    // N107: two declared proofs against a live page — a visible-text proof
+    // that holds and a state-transition proof whose control never renames.
+    // Both verdicts must reach the observation with honest details.
+    const proofPage = `<!doctype html><html><head><title>Proof App</title></head><body>
+<main>
+<h1>Editor</h1>
+<p>Published demo article</p>
+<button onclick="this.textContent='Unfollow'">Follow</button>
+<button>Stubborn</button>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(proofPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-proofs-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`, [
+          {
+            authStrategy: "none",
+            description: "Publish a demo article.",
+            entryPaths: ["/"],
+            expectedProof: {
+              kind: "visible-text",
+              text: "Published demo article",
+            },
+            fixtureNotes: [],
+            id: "post-article",
+            label: "Posting an article",
+            sourcePaths: ["src/editor.tsx"],
+          },
+          {
+            authStrategy: "none",
+            description: "Follow an author.",
+            entryPaths: ["/"],
+            expectedProof: {
+              from: "Follow",
+              kind: "state-transition",
+              locator: "Follow",
+              to: "Unfollow",
+            },
+            fixtureNotes: [],
+            id: "follow-author",
+            label: "Following an author",
+            sourcePaths: ["src/profile.tsx"],
+          },
+          {
+            authStrategy: "none",
+            description: "Rename the stubborn control.",
+            entryPaths: ["/"],
+            expectedProof: {
+              from: "Stubborn",
+              kind: "state-transition",
+              locator: "Stubborn",
+              to: "Convinced",
+            },
+            fixtureNotes: [],
+            id: "stubborn-control",
+            label: "Stubborn control",
+            sourcePaths: ["src/stubborn.tsx"],
+          },
+        ])
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 30_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        declaredProofs?: Array<{
+          detail: string;
+          featureId: string;
+          passed: boolean;
+        }>;
+        fatalError?: string;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const byFeature = new Map(
+        (result.declaredProofs ?? []).map((proof) => [proof.featureId, proof]),
+      );
+      expect(byFeature.get("post-article")?.passed).toBe(true);
+      expect(byFeature.get("follow-author")?.passed).toBe(true);
+      expect(byFeature.get("follow-author")?.detail).toContain("Unfollow");
+      expect(byFeature.get("stubborn-control")?.passed).toBe(false);
+      expect(byFeature.get("stubborn-control")?.detail).toContain("Convinced");
+    } finally {
+      server.close();
+    }
+  }, 40_000);
+
+  it("executes app-state and canvas-delta proofs against a live canvas page", async () => {
+    // N157 (excalidraw): the feature's outcome renders to a canvas and never
+    // enters the DOM. The app-state rung reads the app's own persisted
+    // storage; the canvas-delta rung clicks the named control and
+    // screenshot-diffs the canvas region. Pass and fail verdicts must both
+    // reach the observation with honest details.
+    const canvasPage = `<!doctype html><html><head><title>Canvas Studio</title></head><body>
+<main>
+<h1>Canvas Studio</h1>
+<button id="draw">Draw rectangle</button>
+<button>Inert control</button>
+<canvas id="board" width="300" height="200"></canvas>
+<script>
+localStorage.setItem("studio-scene", JSON.stringify({ shapes: [{ label: "Server rack", type: "rectangle" }] }));
+const context = document.getElementById("board").getContext("2d");
+context.fillStyle = "#ffffff";
+context.fillRect(0, 0, 300, 200);
+document.getElementById("draw").addEventListener("click", () => {
+  context.fillStyle = "#c0392b";
+  context.fillRect(40, 40, 120, 80);
+});
+</script>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(canvasPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-canvas-proofs-"),
+      );
+      const canvasFeature = (
+        id: string,
+        expectedProof: PreparedDemoFeature["expectedProof"],
+      ): PreparedDemoFeature => ({
+        authStrategy: "none",
+        description: `Canvas behavior ${id}.`,
+        entryPaths: ["/"],
+        ...(expectedProof === undefined ? {} : { expectedProof }),
+        fixtureNotes: [],
+        id,
+        label: id,
+        sourcePaths: ["src/board.tsx"],
+      });
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`, [
+          canvasFeature("scene-persisted", {
+            contains: '"type":"rectangle"',
+            key: "studio-scene",
+            kind: "app-state",
+            source: "local-storage",
+          }),
+          canvasFeature("scene-wrong-shape", {
+            contains: '"type":"ellipse"',
+            key: "studio-scene",
+            kind: "app-state",
+            source: "local-storage",
+          }),
+          canvasFeature("scene-missing-key", {
+            contains: '"type":"rectangle"',
+            key: "absent-key",
+            kind: "app-state",
+            source: "local-storage",
+          }),
+          canvasFeature("draw-rectangle", {
+            kind: "canvas-delta",
+            locator: "Draw rectangle",
+          }),
+          canvasFeature("inert-control", {
+            kind: "canvas-delta",
+            locator: "Inert control",
+          }),
+        ])
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 45_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        declaredProofs?: Array<{
+          detail: string;
+          featureId: string;
+          passed: boolean;
+        }>;
+        fatalError?: string;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const byFeature = new Map(
+        (result.declaredProofs ?? []).map((proof) => [proof.featureId, proof]),
+      );
+      expect(byFeature.get("scene-persisted")?.passed).toBe(true);
+      expect(byFeature.get("scene-persisted")?.detail).toContain(
+        "studio-scene",
+      );
+      expect(byFeature.get("scene-wrong-shape")?.passed).toBe(false);
+      expect(byFeature.get("scene-wrong-shape")?.detail).toContain("ellipse");
+      expect(byFeature.get("scene-missing-key")?.passed).toBe(false);
+      expect(byFeature.get("scene-missing-key")?.detail).toContain(
+        "absent-key",
+      );
+      expect(byFeature.get("draw-rectangle")?.passed).toBe(true);
+      expect(byFeature.get("inert-control")?.passed).toBe(false);
+      expect(byFeature.get("inert-control")?.detail).toContain(
+        "did not change",
+      );
+    } finally {
+      server.close();
+    }
+  }, 60_000);
+
+  it("re-harvests a feature entry route whose first paint rendered nothing", async () => {
+    // The first hit races a cold compile and serves only a skeleton; every
+    // later hit renders the real page. A feature entry route about to be
+    // reported content-free must get one fresh navigation before that
+    // verdict stands, so a flaky first paint costs seconds, not a repair
+    // round.
+    const skeletonPage = `<!doctype html><html><head><title>Fleet App</title></head><body>
+<input placeholder="Loading" />
+</body></html>`;
+    const contentPage = `<!doctype html><html><head><title>Fleet App</title></head><body>
+<h1>Fleet dashboard</h1>
+<main><p>Seven vehicles are currently active</p></main>
+</body></html>`;
+    let rootHits = 0;
+    const server = createServer((request, response) => {
+      if ((request.url ?? "/").split("?")[0] === "/") {
+        rootHits += 1;
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+        });
+        response.end(rootHits === 1 ? skeletonPage : contentPage);
+        return;
+      }
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-reharvest-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`, [
+          {
+            authStrategy: "none",
+            description: "Watch the vehicle fleet dashboard.",
+            entryPaths: ["/"],
+            fixtureNotes: [],
+            id: "fleet-dashboard",
+            label: "Fleet dashboard",
+            sourcePaths: ["src/dashboard.tsx"],
+          },
+        ])
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ headings: string[]; text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.headings).toContain("Fleet dashboard");
+      expect(result.routes[0]?.text).toContain(
+        "Seven vehicles are currently active",
+      );
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("reports a headers-only table as an empty data table and a populated one as none", async () => {
     // A data query that resolves empty or mis-shaped renders a table shell
     // with headers and no rows — silently, with no error and no request.
@@ -783,11 +1487,11 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
-  it("discounts strings repeated from earlier routes when deciding a thin harvest", async () => {
+  it("harvests a later route's plain-div content despite chrome repeated from earlier routes", async () => {
     // Icon-ligature and skip-link strings escape the nav selectors and
-    // repeat on every route. On later routes they must not make a thin
-    // harvest look rich, or the accessibility-tree fallback never fires and
-    // a data page's real content (here, text in a plain div) goes unseen.
+    // repeat on every route. They must not crowd the aria candidate budget
+    // on later routes, where a data page's real content (here, text in a
+    // plain div) still has to be seen.
     const junk =
       "<ul><li>people_alt</li><li>folder</li><li>insights</li><li>bookmark</li><li>translate</li><li>public</li><li>storage</li><li>tune</li></ul>";
     const navigation =
@@ -1152,4 +1856,482 @@ document.body.appendChild(document.createElement("vite-error-overlay"));
       server.close();
     }
   }, 30_000);
+
+  it("reports a same-origin script 5xx and leaves other failed resources out", async () => {
+    // N128 (twenty, 2026-08-13): Vite answered 500 on the entry chunk, so
+    // every route was the error overlay; the backend needs the failing
+    // script's URL and status to call it a serve failure instead of
+    // interpreting the hollow page as empty app state.
+    const server = createServer((request, response) => {
+      if (request.url?.startsWith("/src/index.tsx")) {
+        response.writeHead(500, { "content-type": "text/plain" });
+        response.end("[vite] Internal server error: transform failed");
+        return;
+      }
+      if (request.url?.startsWith("/missing.js")) {
+        response.writeHead(404, { "content-type": "text/plain" });
+        response.end("not found");
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html><html><head><title>Vite + React</title></head><body>
+<div id="root"></div>
+<script type="module" src="/src/index.tsx"></script>
+<script src="/missing.js"></script>
+</body></html>`);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-5xx-"),
+      );
+      // The page renders nothing, so the content waits run long; clamp the
+      // script's own deadline the way the shadow-root test does.
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      )
+        .replaceAll("/workspace/.makeademo/exploration", outputDirectory)
+        .replace(
+          /deadlineAtMs = Date\.now\(\) \+ \d+/,
+          "deadlineAtMs = Date.now() + 15000",
+        );
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        failedScriptResponses?: Array<{ status: number; url: string }>;
+        fatalError?: string;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.failedScriptResponses).toEqual([
+        {
+          status: 500,
+          url: `http://127.0.0.1:${address.port}/src/index.tsx`,
+        },
+      ]);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("carries shadow-rooted overlay text as the route's text sample", async () => {
+    // body.innerText cannot see into the overlay's shadow root, so the
+    // bare-error-body sample comes up empty; the aria-derived text must
+    // fill the sample or the backend reads the route as silently blank.
+    const shadowOverlayPage = `<!doctype html><html><head><title>Overlay</title></head><body>
+<div id="root"></div>
+<script>
+class ErrorOverlay extends HTMLElement {
+  constructor() {
+    super();
+    const root = this.attachShadow({ mode: "open" });
+    root.innerHTML = "<div>[plugin:vite:import-analysis] Failed to resolve import \\"@directus-extensions\\" from \\"src/extensions.ts\\". Does the file exist?</div>";
+  }
+}
+customElements.define("vite-error-overlay", ErrorOverlay);
+document.body.appendChild(document.createElement("vite-error-overlay"));
+</script>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(shadowOverlayPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-shadow-sample-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      )
+        .replaceAll("/workspace/.makeademo/exploration", outputDirectory)
+        .replace(
+          /deadlineAtMs = Date\.now\(\) \+ \d+/,
+          "deadlineAtMs = Date.now() + 15000",
+        );
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ textSample?: string }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.textSample).toContain(
+        "Failed to resolve import",
+      );
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("crawls only declared feature entry routes in feature-entries scope", async () => {
+    // N108: the preparation-time feature probe re-runs the gate's own
+    // harvest, but scoped to the manifest's entry routes — a link the full
+    // crawl would follow must stay unvisited so the probe's cost tracks the
+    // feature count, not the app's link graph.
+    const pages = new Map([
+      [
+        "/",
+        `<!doctype html><html><head><title>Home</title></head><body>
+<h1>Control room</h1><a href="/hidden">Archived reports</a>
+<main><p>Operations overview for the demo workspace</p></main>
+</body></html>`,
+      ],
+      [
+        "/hidden",
+        "<!doctype html><html><head><title>Hidden</title></head><body><h1>Archived reports</h1></body></html>",
+      ],
+      [
+        "/panel",
+        `<!doctype html><html><head><title>Panel</title></head><body>
+<h1>Signal panel</h1><main><p>Live signal strength for every relay</p></main>
+</body></html>`,
+      ],
+    ]);
+    const server = createServer((request, response) => {
+      const page = pages.get(new URL(request.url ?? "/", "http://s").pathname);
+      response.writeHead(page === undefined ? 404 : 200, {
+        "content-type": "text/html; charset=utf-8",
+      });
+      response.end(page ?? "<!doctype html><html><body>missing</body></html>");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-scope-"),
+      );
+      const script = (
+        await buildExplorerScript(
+          `http://127.0.0.1:${address.port}`,
+          [
+            {
+              authStrategy: "none",
+              description: "Watch live relay signal strength.",
+              entryPaths: ["/panel"],
+              fixtureNotes: [],
+              id: "signal-panel",
+              label: "Signal panel",
+              sourcePaths: ["src/panel.tsx"],
+            },
+          ],
+          "feature-entries",
+        )
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ headings: string[]; path: string }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const crawledPaths = result.routes
+        .map((route) => route.path)
+        .filter((path) => !path.includes("__makeademo-404-probe__"));
+      expect(crawledPaths).toContain("/panel");
+      expect(crawledPaths).toContain("/");
+      expect(crawledPaths).not.toContain("/hidden");
+      expect(
+        result.routes.find((route) => route.path === "/panel")?.headings,
+      ).toContain("Signal panel");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("runs only fresh declared proofs in feature-proofs scope", async () => {
+    const requestedPaths: string[] = [];
+    const server = createServer((request, response) => {
+      const path = new URL(request.url ?? "/", "http://s").pathname;
+      requestedPaths.push(path);
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+      });
+      response.end(`<!doctype html><html><head><title>Proof</title></head><body>
+<h1>${path === "/panel" ? "Signal panel" : "Unexpected route"}</h1>
+</body></html>`);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-proofs-"),
+      );
+      const script = (
+        await buildExplorerScript(
+          `http://127.0.0.1:${address.port}`,
+          [
+            {
+              authStrategy: "none",
+              description: "Watch live relay signal strength.",
+              entryPaths: ["/panel"],
+              expectedProof: {
+                kind: "visible-text",
+                text: "Signal panel",
+              },
+              fixtureNotes: [],
+              id: "signal-panel",
+              label: "Signal panel",
+              requestedFeature: "signal panel",
+              sourcePaths: ["src/panel.tsx"],
+            },
+          ],
+          "feature-proofs",
+        )
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        declaredProofs: Array<{
+          featureId: string;
+          passed: boolean;
+        }>;
+        fatalError?: string;
+        routes: Array<{ featureIds?: string[]; path: string }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.declaredProofs).toEqual([
+        expect.objectContaining({ featureId: "signal-panel", passed: true }),
+      ]);
+      expect(result.routes).toEqual([
+        expect.objectContaining({
+          featureIds: ["signal-panel"],
+          path: "/panel",
+        }),
+      ]);
+      expect(requestedPaths).toEqual(["/panel"]);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("re-verifies a capture-failed candidate after replaying its scene prefix", async () => {
+    // N125: the failed candidate's element exists only in the state the
+    // scene's earlier actions produce. A fresh-route verification would
+    // certify or reject it in the wrong context; the replay verification
+    // must execute the prefix first and find the element reproduced.
+    const editorPage = `<!doctype html><html><head><title>Editor App</title></head><body>
+<h1>Records workspace</h1>
+<main><p>Weekly records for the demo workspace</p></main>
+<button onclick="document.getElementById('panel').innerHTML='<button>Save entry</button>'">Open editor</button>
+<div id="panel"></div>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(editorPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-replay-"),
+      );
+      const script = (
+        await buildExplorerScript(
+          `http://127.0.0.1:${address.port}`,
+          undefined,
+          undefined,
+          {
+            actionId: "click-save",
+            locator: { name: "Save entry", role: "button", strategy: "role" },
+            locatorCandidateId: "save-entry-locator-1",
+            sceneId: "scene-editor",
+            scenePrefix: [
+              { id: "goto-root", path: "/", type: "goto" },
+              {
+                id: "open-editor",
+                locator: {
+                  name: "Open editor",
+                  role: "button",
+                  strategy: "role",
+                },
+                type: "click",
+              },
+            ],
+          },
+        )
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 60_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        replayVerification?: {
+          actionId: string;
+          detail: string;
+          locatorCandidateId?: string;
+          reproduced: boolean;
+          sceneId: string;
+        };
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.replayVerification).toMatchObject({
+        actionId: "click-save",
+        locatorCandidateId: "save-entry-locator-1",
+        reproduced: true,
+        sceneId: "scene-editor",
+      });
+    } finally {
+      server.close();
+    }
+  }, 60_000);
+
+  it("reports a candidate its scene prefix cannot reproduce as unreproduced", async () => {
+    // N125: when the element is absent even in the replayed state, the
+    // evidence is unreproducible at replay — app-state divergence, not a
+    // locator drafting problem — and the verdict must say so.
+    const editorPage = `<!doctype html><html><head><title>Editor App</title></head><body>
+<h1>Records workspace</h1>
+<main><p>Weekly records for the demo workspace</p></main>
+<button onclick="document.getElementById('panel').innerHTML='<button>Save entry</button>'">Open editor</button>
+<div id="panel"></div>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(editorPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-replay-"),
+      );
+      const script = (
+        await buildExplorerScript(
+          `http://127.0.0.1:${address.port}`,
+          undefined,
+          undefined,
+          {
+            actionId: "click-publish",
+            locator: {
+              name: "Publish entry",
+              role: "button",
+              strategy: "role",
+            },
+            locatorCandidateId: "publish-entry-locator-1",
+            sceneId: "scene-editor",
+            scenePrefix: [
+              { id: "goto-root", path: "/", type: "goto" },
+              {
+                id: "open-editor",
+                locator: {
+                  name: "Open editor",
+                  role: "button",
+                  strategy: "role",
+                },
+                type: "click",
+              },
+            ],
+          },
+        )
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 60_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        replayVerification?: { detail: string; reproduced: boolean };
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.replayVerification).toMatchObject({
+        actionId: "click-publish",
+        reproduced: false,
+        sceneId: "scene-editor",
+      });
+      expect(result.replayVerification?.detail).toContain(
+        "after replaying 2 prefix action(s)",
+      );
+    } finally {
+      server.close();
+    }
+  }, 60_000);
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, posix } from "node:path";
 
@@ -11,24 +11,35 @@ import type {
   AgentHarnessSubmittedCodeAppStatus,
   AgentHarnessWorkspace,
   AgentHarnessWorkspaceCommandResult,
+  AgentHarnessWorkspaceCreateInput,
   AgentHarnessWorkspaceDownloadFile,
   AgentHarnessWorkspaceExecuteOptions,
   AgentHarnessWorkspaceHandle,
   AgentHarnessWorkspaceLogEntry,
   AgentHarnessWorkspaceProvider,
   AgentHarnessWorkspaceUploadFile,
+  SubmittedCodeSandboxClass,
 } from "../../../agent-harness/daytona/workspace.interface";
 import {
   AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
   AgentHarnessSandboxUnavailableError,
+  defaultWorkspaceCommandTimeoutMs,
 } from "../../../agent-harness/daytona/workspace.interface";
 import {
   type PipelineEventLogger,
   type PipelineLogSink,
   createPipelineEventLogger,
 } from "../../logging/pipeline-event-logger";
+import { createPtyCommandPayload } from "../../shell/pty-command-payload";
 import { shellQuote } from "../../shell/shell-quote";
+import {
+  type DaytonaControlPlaneEnvelope,
+  classifyDaytonaControlPlaneError,
+  createDaytonaControlPlaneEnvelope,
+  defaultDaytonaAttemptTimeoutMs,
+  formatErrorDiagnostic,
+} from "./daytona-control-plane";
 
 type DaytonaSdkClient = {
   create(
@@ -110,6 +121,10 @@ type DaytonaSdkSandbox = {
   }): Promise<void>;
 };
 
+type RecreateSubmittedCodeSandbox = (
+  staleSandbox: DaytonaSdkSandbox,
+) => Promise<DaytonaSdkSandbox>;
+
 type DaytonaSdkPty = Awaited<
   ReturnType<DaytonaSdkSandbox["process"]["createPty"]>
 >;
@@ -126,7 +141,18 @@ type ManagedSubmittedCodeApp = {
 
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
+  /** Waits between artifact-transfer retries; its length bounds the retries. */
+  artifactTransferBackoffMs?: number[];
   client?: DaytonaSdkClient;
+  /** Overrides the classify-and-retry envelope; tests inject an instant one. */
+  controlPlane?: DaytonaControlPlaneEnvelope;
+  /**
+   * Structured logger for the default envelope's `daytona.<operation>.*`
+   * attribution events — the pipeline passes its own so control-plane
+   * waits land in the run's pipeline log. Ignored when `controlPlane` is
+   * given; without either, events fall back to `sandboxLogSinks`.
+   */
+  controlPlaneLogger?: Pick<PipelineEventLogger, "error" | "info" | "warn">;
   commandTimeoutMs?: number;
   diskGB?: number;
   logWriteTimeoutMs?: number;
@@ -136,26 +162,31 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   secrets?: Record<string, string>;
   snapshot?: string;
   submittedCodeSnapshot?: string;
+  /**
+   * Snapshot for heavyweight-class submitted-code sandboxes (N147). Sandboxes
+   * created from a snapshot inherit its resource spec — Daytona rejects a
+   * `resources` override on snapshot creation — so capacity classes are
+   * snapshot variants. Unset, heavyweight requests fall back to
+   * `submittedCodeSnapshot` with a logged warning.
+   */
+  submittedCodeSnapshotHeavyweight?: string;
 };
 
 const defaultSandboxDiskGB = 3;
-/**
- * The submitted-code sandbox holds the repo, its dependency tree, the
- * package-manager cache, and build outputs — twenty alone installs 3.14GiB
- * of packages and filled its disk twice (ENOSPC, 2026-08-07/08). 10GB is
- * the Daytona org's per-sandbox maximum (a 20GB request is rejected with
- * "exceeds maximum allowed per sandbox", measured 2026-08-08); further
- * headroom must come from cache pruning, not disk.
- */
-const submittedCodeSandboxDiskGB = 10;
-const defaultCommandTimeoutMs = 10 * 60_000;
+// Submitted-code sandbox sizing lives in the snapshot definitions, not here:
+// a snapshot-created sandbox inherits the snapshot's cpu/memory/disk spec.
+// When building those snapshots, note 10GB is the Daytona org's per-sandbox
+// disk maximum (a 20GB request is rejected with "exceeds maximum allowed per
+// sandbox", measured 2026-08-08); disk headroom must come from cache pruning.
+// The omitted-timeoutMs bound is the seam contract's, not this provider's:
+// the deadline cap (N156) substitutes the same value before clamping.
+const defaultCommandTimeoutMs = defaultWorkspaceCommandTimeoutMs;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
 const defaultPtyDisconnectTimeoutMs = 5_000;
 const defaultManagedProcessControlTimeoutMs = 30_000;
 const defaultArtifactTransferTimeoutSeconds = 60;
 const defaultSandboxCreateTimeoutSeconds = 300;
-const sandboxCreateConnectionRetryLimit = 2;
 /**
  * Server-side reaper for agent sandboxes: an hour past the 90-minute job
  * deadline, so it never cuts a live pipeline short while keeping a killed
@@ -164,7 +195,27 @@ const sandboxCreateConnectionRetryLimit = 2;
  */
 const agentSandboxAutoDeleteMinutes = 150;
 const ptyStartupRetryLimit = 2;
-const artifactTransferRetryLimit = 2;
+/** Teardown conflict polls (~30s): brief, because the backstop reaps leftovers. */
+const teardownConflictPollLimit = 6;
+/**
+ * PTY creation is re-issuable until input is sent, so transient transport
+ * loss gets a short absorption window. Conflicts and everything else stay
+ * raw: the startup loop owns stale-id recovery and sandbox restart.
+ */
+const ptyCreateTransientBackoffMs = [1_000, 4_000];
+/**
+ * Artifact transfers are idempotent by design and have no outer retry loop
+ * above them — when this ladder exhausts, the run dies. So unlike pty.create
+ * above (whose short ladder is budgeted by the startup loop's fresh-id and
+ * restart recovery), transfers must ride out a control-plane incident on
+ * their own. A 2026-08-09 blip ladder of [1s, 4s] survived single 502s but
+ * lost directus (2026-08-12T20:40) to a minutes-long 502 storm; this ladder
+ * mirrors the control-plane ladder (~3.8 min coverage) so a transfer only
+ * fails once Daytona has been down longer than any observed incident window.
+ */
+const defaultArtifactTransferBackoffMs = [
+  2_000, 5_000, 10_000, 20_000, 40_000, 60_000, 90_000,
+];
 const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
@@ -197,6 +248,7 @@ export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
   const sandbox = await client.get(input.sandboxId);
 
   return createPreparationWorkspaceHandle({
+    artifactTransferBackoffMs: defaultArtifactTransferBackoffMs,
     client,
     commandTimeoutMs: input.commandTimeoutMs ?? defaultCommandTimeoutMs,
     id: input.sandboxId,
@@ -211,8 +263,10 @@ export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
 export class DaytonaSdkPreparationWorkspaceProvider
   implements AgentHarnessWorkspaceProvider
 {
+  private readonly artifactTransferBackoffMs: number[];
   private readonly client: DaytonaSdkClient;
   private readonly commandTimeoutMs: number;
+  private readonly controlPlane: DaytonaControlPlaneEnvelope;
   private readonly diskGB: number;
   private readonly logWriteTimeoutMs: number;
   private readonly ptyConnectionTimeoutMs: number;
@@ -221,6 +275,11 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly secrets: Record<string, string> | undefined;
   private readonly snapshot: string | undefined;
   private readonly submittedCodeSnapshot: string | undefined;
+  private readonly submittedCodeSnapshotHeavyweight: string | undefined;
+  private readonly providerLogger: Pick<
+    PipelineEventLogger,
+    "error" | "info" | "warn"
+  >;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
     this.client =
@@ -228,10 +287,14 @@ export class DaytonaSdkPreparationWorkspaceProvider
       (new Daytona(
         options.apiKey === undefined ? undefined : { apiKey: options.apiKey },
       ) as DaytonaSdkClient);
+    this.artifactTransferBackoffMs =
+      options.artifactTransferBackoffMs ?? defaultArtifactTransferBackoffMs;
     this.commandTimeoutMs = options.commandTimeoutMs ?? defaultCommandTimeoutMs;
     this.secrets = options.secrets;
     this.snapshot = options.snapshot;
     this.submittedCodeSnapshot = options.submittedCodeSnapshot;
+    this.submittedCodeSnapshotHeavyweight =
+      options.submittedCodeSnapshotHeavyweight;
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
     this.logWriteTimeoutMs =
       options.logWriteTimeoutMs ?? defaultLogWriteTimeoutMs;
@@ -240,44 +303,62 @@ export class DaytonaSdkPreparationWorkspaceProvider
     this.sandboxCreateTimeoutSeconds =
       options.sandboxCreateTimeoutSeconds ?? defaultSandboxCreateTimeoutSeconds;
     this.sandboxLogSinks = options.sandboxLogSinks ?? [];
+    this.providerLogger =
+      options.controlPlaneLogger ??
+      createPipelineEventLogger({
+        base: { component: "daytona-control-plane" },
+        sinks: this.sandboxLogSinks,
+      });
+    this.controlPlane =
+      options.controlPlane ??
+      (options.controlPlaneLogger === undefined
+        ? createControlPlaneEnvelopeForSinks(this.sandboxLogSinks)
+        : createDaytonaControlPlaneEnvelope({
+            logger: options.controlPlaneLogger,
+          }));
   }
 
-  async create(): Promise<AgentHarnessWorkspaceHandle> {
+  async create(
+    input?: AgentHarnessWorkspaceCreateInput,
+  ): Promise<AgentHarnessWorkspaceHandle> {
     const createOptions = { timeout: this.sandboxCreateTimeoutSeconds };
-    const sandbox = await this.createSandboxWithConnectionRetry(
-      {
-        // Server-side backstop: if the controller dies before destroy(), the
-        // agent sandbox still gets reaped instead of running indefinitely.
-        autoDeleteInterval: agentSandboxAutoDeleteMinutes,
-        autoStopInterval: 0,
-        disk: this.diskGB,
-        ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
-        ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
-      },
-      createOptions,
+    const sandbox = await this.controlPlane.run("agent-sandbox.create", () =>
+      this.client.create(
+        {
+          // Server-side backstop: if the controller dies before destroy(), the
+          // agent sandbox still gets reaped instead of running indefinitely.
+          autoDeleteInterval: agentSandboxAutoDeleteMinutes,
+          autoStopInterval: 0,
+          disk: this.diskGB,
+          ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
+          ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
+        },
+        createOptions,
+      ),
     );
     const id = sandbox.id ?? sandbox.name;
     if (id === undefined || id.trim() === "") {
       throw new Error("Daytona did not return a sandbox id.");
     }
 
+    const submittedCodeSnapshot = await this.resolveSubmittedCodeSnapshot(
+      input?.submittedCodeSandboxClass ?? "standard",
+    );
+    const createSubmittedCodeSandbox =
+      submittedCodeSnapshot === undefined
+        ? undefined
+        : () =>
+            this.createLinkedSubmittedCodeSandbox({
+              createOptions,
+              linkedSandboxId: id,
+              snapshot: submittedCodeSnapshot,
+            });
     let submittedCodeSandbox: DaytonaSdkSandbox | undefined;
     try {
       submittedCodeSandbox =
-        this.submittedCodeSnapshot === undefined
+        createSubmittedCodeSandbox === undefined
           ? undefined
-          : await this.createSandboxWithConnectionRetry(
-              {
-                autoStopInterval: 0,
-                autoDeleteInterval: 0,
-                disk: submittedCodeSandboxDiskGB,
-                ephemeral: true,
-                linkedSandbox: id,
-                networkBlockAll: true,
-                snapshot: this.submittedCodeSnapshot,
-              },
-              createOptions,
-            );
+          : await createSubmittedCodeSandbox();
     } catch (error) {
       // The linked-create failure is the root cause; a failing compensating
       // delete must not replace it. The auto-delete backstop reaps the parent.
@@ -286,15 +367,92 @@ export class DaytonaSdkPreparationWorkspaceProvider
     }
 
     return createPreparationWorkspaceHandle({
+      artifactTransferBackoffMs: this.artifactTransferBackoffMs,
       client: this.client,
       commandTimeoutMs: this.commandTimeoutMs,
+      controlPlane: this.controlPlane,
       id,
       logWriteTimeoutMs: this.logWriteTimeoutMs,
       ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
       sandboxLogSinks: this.sandboxLogSinks,
       sandbox,
+      ...(createSubmittedCodeSandbox === undefined
+        ? {}
+        : {
+            recreateSubmittedCodeSandbox: async (
+              staleSandbox: DaytonaSdkSandbox,
+            ) => {
+              const replacement = await createSubmittedCodeSandbox();
+              // The stale target may also hang on delete. Start best-effort
+              // cleanup, but never make replay against the healthy replacement
+              // wait on another response from the wedged sandbox.
+              void this.deleteSandboxBestEffort(staleSandbox);
+              return replacement;
+            },
+          }),
       ...(submittedCodeSandbox === undefined ? {} : { submittedCodeSandbox }),
     });
+  }
+
+  /**
+   * Creates a network-locked child through the same control-plane path for
+   * both initial provisioning and bounded replacement of a wedged target.
+   */
+  private async createLinkedSubmittedCodeSandbox(input: {
+    createOptions: { timeout: number };
+    linkedSandboxId: string;
+    snapshot: string;
+  }): Promise<DaytonaSdkSandbox> {
+    const sandbox = await this.controlPlane.run(
+      "submitted-code-sandbox.create",
+      () =>
+        this.client.create(
+          {
+            autoStopInterval: 0,
+            autoDeleteInterval: 0,
+            ephemeral: true,
+            linkedSandbox: input.linkedSandboxId,
+            networkBlockAll: true,
+            snapshot: input.snapshot,
+          },
+          input.createOptions,
+        ),
+      { sandboxId: input.linkedSandboxId },
+    );
+    const sandboxId = sandbox.id ?? sandbox.name;
+    if (sandboxId === undefined || sandboxId.trim() === "") {
+      throw new Error("Daytona did not return a submitted-code sandbox id.");
+    }
+    return sandbox;
+  }
+
+  /**
+   * A snapshot-created sandbox inherits the snapshot's resource spec (Daytona
+   * rejects a `resources` override outright — wave-10, 2026-08-14), so the
+   * capacity class picks WHICH snapshot to create from. A heavyweight request
+   * without a configured heavyweight snapshot falls back to the standard one
+   * with a logged warning: an under-sized sandbox that fails with evidence
+   * beats a batch that cannot launch.
+   */
+  private async resolveSubmittedCodeSnapshot(
+    submittedCodeSandboxClass: SubmittedCodeSandboxClass,
+  ): Promise<string | undefined> {
+    if (
+      submittedCodeSandboxClass !== "heavyweight" ||
+      this.submittedCodeSnapshot === undefined
+    ) {
+      return this.submittedCodeSnapshot;
+    }
+    if (this.submittedCodeSnapshotHeavyweight !== undefined) {
+      return this.submittedCodeSnapshotHeavyweight;
+    }
+    await this.providerLogger.warn({
+      event: "daytona.submitted-code-sandbox.heavyweight-fallback",
+      message:
+        "Heavyweight submitted-code sandbox requested but no heavyweight snapshot is configured (MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT); creating from the standard snapshot.",
+      snapshot: this.submittedCodeSnapshot,
+    });
+    return this.submittedCodeSnapshot;
   }
 
   private async deleteSandboxBestEffort(
@@ -321,34 +479,22 @@ export class DaytonaSdkPreparationWorkspaceProvider
       }
     }
   }
+}
 
-  private async createSandboxWithConnectionRetry(
-    input: unknown,
-    options: { timeout: number },
-  ): Promise<DaytonaSdkSandbox> {
-    let lastError: unknown;
-    for (
-      let attempt = 0;
-      attempt <= sandboxCreateConnectionRetryLimit;
-      attempt += 1
-    ) {
-      try {
-        return await this.client.create(input, options);
-      } catch (error) {
-        lastError = error;
-        if (
-          attempt === sandboxCreateConnectionRetryLimit ||
-          !isDaytonaConnectionError(error)
-        ) {
-          throw error;
-        }
-
-        await wait(250 * (attempt + 1));
-      }
-    }
-
-    throw lastError;
-  }
+/**
+ * The provider- and handle-level default envelope. Its events go to the
+ * caller's local sinks only: control-plane observability must never itself
+ * depend on the control plane (or on a sandbox that may not exist yet).
+ */
+function createControlPlaneEnvelopeForSinks(
+  sinks: PipelineLogSink[],
+): DaytonaControlPlaneEnvelope {
+  return createDaytonaControlPlaneEnvelope({
+    logger: createPipelineEventLogger({
+      base: { component: "daytona-control-plane" },
+      sinks,
+    }),
+  });
 }
 
 // Every live handle this process created and has not yet destroyed. The
@@ -377,13 +523,16 @@ export async function destroyAllDaytonaWorkspaces(): Promise<void> {
 }
 
 function createPreparationWorkspaceHandle(input: {
+  artifactTransferBackoffMs: number[];
   client: DaytonaSdkClient;
   commandTimeoutMs: number;
+  controlPlane?: DaytonaControlPlaneEnvelope;
   id: string;
   logWriteTimeoutMs: number;
   ptyConnectionTimeoutMs: number;
   sandboxLogSinks?: PipelineLogSink[];
   sandbox: DaytonaSdkSandbox;
+  recreateSubmittedCodeSandbox?: RecreateSubmittedCodeSandbox;
   submittedCodeSandbox?: DaytonaSdkSandbox;
 }): AgentHarnessWorkspaceHandle {
   const workspace = new DaytonaSdkPreparationWorkspace(
@@ -394,7 +543,11 @@ function createPreparationWorkspaceHandle(input: {
     input.commandTimeoutMs,
     input.logWriteTimeoutMs,
     input.ptyConnectionTimeoutMs,
+    input.artifactTransferBackoffMs,
+    input.controlPlane ??
+      createControlPlaneEnvelopeForSinks(input.sandboxLogSinks ?? []),
     input.sandboxLogSinks ?? [],
+    input.recreateSubmittedCodeSandbox,
   );
 
   const handle: AgentHarnessWorkspaceHandle = {
@@ -417,19 +570,27 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   /** True after org policy rejected a network open, proving the sandbox stayed blocked. */
   private networkOverrideRestricted = false;
   private readonly sandboxLogger: PipelineEventLogger;
-  readonly submittedCodeSandboxId?: string;
+  private submittedCodeSandbox: DaytonaSdkSandbox | undefined;
+  private submittedCodeSandboxRecreationUsed = false;
+  submittedCodeSandboxId?: string;
 
   constructor(
     private readonly sandbox: DaytonaSdkSandbox,
-    private readonly submittedCodeSandbox: DaytonaSdkSandbox | undefined,
+    submittedCodeSandbox: DaytonaSdkSandbox | undefined,
     private readonly client: DaytonaSdkClient,
     private readonly workspaceId: string,
     private readonly commandTimeoutMs: number,
     private readonly logWriteTimeoutMs: number,
     private readonly ptyConnectionTimeoutMs: number,
+    private readonly artifactTransferBackoffMs: number[],
+    private readonly controlPlane: DaytonaControlPlaneEnvelope,
     sandboxLogSinks: PipelineLogSink[],
+    private readonly recreateSubmittedCodeSandbox:
+      | RecreateSubmittedCodeSandbox
+      | undefined,
   ) {
     this.agentSandboxId = workspaceId;
+    this.submittedCodeSandbox = submittedCodeSandbox;
     const submittedCodeSandboxId =
       submittedCodeSandbox?.id ?? submittedCodeSandbox?.name;
     if (submittedCodeSandboxId !== undefined) {
@@ -501,19 +662,22 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }
 
   /**
-   * Deletes a sandbox, retrying once past a state-change conflict. Daytona
-   * reports 409 while a sandbox is still settling, which is transient rather
-   * than a reason to leave the sandbox running.
+   * Deletes a sandbox through the control-plane envelope. Daytona reports
+   * 409 while a sandbox is still settling; teardown polls that window
+   * briefly, then defers to the auto-delete backstop instead of holding a
+   * finished run open for the full conflict budget.
    */
   private async deleteSandboxThroughStateConflict(
     sandbox: DaytonaSdkSandbox,
   ): Promise<void> {
-    try {
-      await this.client.delete(sandbox);
-    } catch (error) {
-      if (!isDaytonaStateConflictError(error)) throw error;
-      await this.client.delete(sandbox);
-    }
+    await this.controlPlane.run(
+      "sandbox.delete",
+      () => this.client.delete(sandbox),
+      {
+        conflictPollLimit: teardownConflictPollLimit,
+        sandboxId: readSandboxId(sandbox),
+      },
+    );
   }
 
   async execute(
@@ -525,22 +689,73 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
 
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
-    const response = await withTimeout(
-      this.sandbox.process.executeCommand(
-        command,
-        undefined,
-        options.env,
-        toSdkTimeoutSeconds(timeoutMs),
-      ),
+    const response = await this.runCommandThroughEnvelope({
+      attempt: () =>
+        this.sandbox.process.executeCommand(
+          command,
+          undefined,
+          options.env,
+          toSdkTimeoutSeconds(timeoutMs),
+        ),
+      operation: "process.execute",
+      // Agent-sandbox commands are harness-authored idempotent bookkeeping
+      // (reads, mkdir -p, rm -f); see AgentHarnessWorkspaceExecuteOptions.
+      retry: options.retry ?? "transient",
+      sandboxId: this.agentSandboxId,
       timeoutMs,
-      () => new AgentHarnessCommandTimeoutError(timeoutMs),
-    );
+    });
 
     return {
       exitCode: response.exitCode ?? 1,
       stderr: response.stderr ?? "",
       stdout: response.stdout ?? response.result ?? "",
     };
+  }
+
+  /**
+   * Runs one non-streaming command request through the control-plane
+   * envelope. Each attempt carries its own deadline, and a deadline is the
+   * command's outcome — classified fatal so the envelope surfaces it raw
+   * instead of re-issuing a possibly-completed command. `retry: "none"`
+   * empties the ladder and the conflict polls, so the command is issued at
+   * most once while its transport loss still wraps as infrastructure.
+   */
+  private runCommandThroughEnvelope<T>(input: {
+    attempt: () => Promise<T>;
+    operation: string;
+    retry: "none" | "transient";
+    sandboxId: string;
+    /** Overrides the deadline error; the default is the command-timeout shape. */
+    timeoutError?: () => Error;
+    timeoutMs: number;
+  }): Promise<T> {
+    const timeoutError =
+      input.timeoutError ??
+      (() => new AgentHarnessCommandTimeoutError(input.timeoutMs));
+    let deadlineError: Error | undefined;
+    return this.controlPlane.run(
+      input.operation,
+      () =>
+        withTimeout(input.attempt(), input.timeoutMs, () => {
+          deadlineError = timeoutError();
+          return deadlineError;
+        }),
+      {
+        // The per-attempt deadline above already bounds every attempt; the
+        // envelope's transport-loss bound would re-issue a long-running
+        // command mid-flight.
+        attemptTimeoutMs: Number.POSITIVE_INFINITY,
+        classify: (error) =>
+          error === deadlineError ||
+          error instanceof AgentHarnessCommandTimeoutError
+            ? "fatal"
+            : classifyDaytonaControlPlaneError(error),
+        ...(input.retry === "none"
+          ? { conflictPollLimit: 0, ladderMs: [] }
+          : {}),
+        sandboxId: input.sandboxId,
+      },
+    );
   }
 
   private async executeStreaming(
@@ -570,16 +785,23 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
 
   async collectSandboxLogs(): Promise<string[]> {
     const collect = () =>
-      withTimeout(
-        this.sandbox.process.executeCommand(
-          `sh -lc ${shellQuote(`test ! -f ${sandboxAuditLogPath} || tail -c ${sandboxLogCollectionByteCap} ${sandboxAuditLogPath}`)}`,
-          undefined,
-          undefined,
-          toSdkTimeoutSeconds(sandboxLogCollectionTimeoutMs),
-        ),
-        sandboxLogCollectionTimeoutMs,
-        `Daytona sandbox log collection did not finish within ${sandboxLogCollectionTimeoutMs}ms.`,
-      );
+      this.runCommandThroughEnvelope({
+        attempt: () =>
+          this.sandbox.process.executeCommand(
+            `sh -lc ${shellQuote(`test ! -f ${sandboxAuditLogPath} || tail -c ${sandboxLogCollectionByteCap} ${sandboxAuditLogPath}`)}`,
+            undefined,
+            undefined,
+            toSdkTimeoutSeconds(sandboxLogCollectionTimeoutMs),
+          ),
+        operation: "process.log-collect",
+        retry: "transient",
+        sandboxId: this.agentSandboxId,
+        timeoutError: () =>
+          new Error(
+            `Daytona sandbox log collection did not finish within ${sandboxLogCollectionTimeoutMs}ms.`,
+          ),
+        timeoutMs: sandboxLogCollectionTimeoutMs,
+      });
     let response: Awaited<ReturnType<typeof collect>>;
     try {
       response = await collect();
@@ -625,13 +847,22 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }
 
   private async writeSandboxLogLine(line: string): Promise<void> {
-    const response = await withTimeout(
-      this.sandbox.process.executeCommand(
-        `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)}`,
-      ),
-      this.logWriteTimeoutMs,
-      `Daytona sandbox log write did not finish within ${this.logWriteTimeoutMs}ms.`,
-    );
+    // Transient retry may duplicate one audit line when a 502 masks a
+    // successful append; that beats losing the run to its own logging.
+    const response = await this.runCommandThroughEnvelope({
+      attempt: () =>
+        this.sandbox.process.executeCommand(
+          `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)}`,
+        ),
+      operation: "process.log-append",
+      retry: "transient",
+      sandboxId: this.agentSandboxId,
+      timeoutError: () =>
+        new Error(
+          `Daytona sandbox log write did not finish within ${this.logWriteTimeoutMs}ms.`,
+        ),
+      timeoutMs: this.logWriteTimeoutMs,
+    });
 
     if ((response.exitCode ?? 1) !== 0) {
       throw new Error("Failed to write Daytona sandbox audit log.");
@@ -642,29 +873,27 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     command: string,
     options: AgentHarnessWorkspaceExecuteOptions = {},
   ): Promise<AgentHarnessWorkspaceCommandResult> {
-    if (this.submittedCodeSandbox === undefined) {
-      throw new Error("Submitted-code Daytona sandbox is not configured.");
-    }
-
+    const sandbox = this.requireSubmittedCodeSandbox();
     if (options.onStdout !== undefined || options.onStderr !== undefined) {
-      return this.executeStreamingInSandbox(
-        this.submittedCodeSandbox,
-        command,
-        options,
-      );
+      return this.executeStreamingInSandbox(sandbox, command, options);
     }
 
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
-    const response = await withTimeout(
-      this.submittedCodeSandbox.process.executeCommand(
-        command,
-        undefined,
-        options.env,
-        toSdkTimeoutSeconds(timeoutMs),
-      ),
+    const response = await this.runCommandThroughEnvelope({
+      attempt: () =>
+        sandbox.process.executeCommand(
+          command,
+          undefined,
+          options.env,
+          toSdkTimeoutSeconds(timeoutMs),
+        ),
+      operation: "submitted-code.process.execute",
+      // Submitted-code commands can drive the app under test; see
+      // AgentHarnessWorkspaceExecuteOptions for why "none" is the default.
+      retry: options.retry ?? "none",
+      sandboxId: readSandboxId(sandbox),
       timeoutMs,
-      () => new AgentHarnessCommandTimeoutError(timeoutMs),
-    );
+    });
 
     return {
       exitCode: response.exitCode ?? 1,
@@ -681,20 +910,36 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
 
     const sessionId = `makeademo-app-${randomUUID()}`;
     try {
-      await withTimeout(
-        sandbox.process.createSession(sessionId),
-        this.managedProcessControlTimeoutMs,
-        `Daytona managed-process session creation did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-      );
-      const response = await withTimeout(
-        sandbox.process.executeSessionCommand(sessionId, {
-          command: createManagedAppCommand(input),
-          runAsync: true,
-          suppressInputEcho: true,
-        }),
-        this.managedProcessControlTimeoutMs,
-        `Daytona managed-process launch did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-      );
+      // Session creation and the launch are at most once: a 502 can mask a
+      // launch that already started the app, and re-issuing it would run
+      // two app processes.
+      await this.runCommandThroughEnvelope({
+        attempt: () => sandbox.process.createSession(sessionId),
+        operation: "app-session.create",
+        retry: "none",
+        sandboxId: readSandboxId(sandbox),
+        timeoutError: () =>
+          new Error(
+            `Daytona managed-process session creation did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+          ),
+        timeoutMs: this.managedProcessControlTimeoutMs,
+      });
+      const response = await this.runCommandThroughEnvelope({
+        attempt: () =>
+          sandbox.process.executeSessionCommand(sessionId, {
+            command: createManagedAppCommand(input),
+            runAsync: true,
+            suppressInputEcho: true,
+          }),
+        operation: "app-session.launch",
+        retry: "none",
+        sandboxId: readSandboxId(sandbox),
+        timeoutError: () =>
+          new Error(
+            `Daytona managed-process launch did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+          ),
+        timeoutMs: this.managedProcessControlTimeoutMs,
+      });
       const commandId = response.cmdId?.trim();
       if (commandId === undefined || commandId.length === 0) {
         throw new Error(
@@ -708,14 +953,32 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       };
     } catch (error) {
       await Promise.allSettled([
-        withTimeout(
-          sandbox.process.deleteSession(sessionId),
-          this.managedProcessControlTimeoutMs,
-          `Daytona managed-process cleanup did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-        ),
+        this.deleteAppSessionThroughEnvelope(sandbox, sessionId),
       ]);
       throw error;
     }
+  }
+
+  /**
+   * Session deletion is at most once: a masked success would make a re-issue
+   * fail on the now-missing session, so its transport loss is classified
+   * without a retry.
+   */
+  private deleteAppSessionThroughEnvelope(
+    sandbox: DaytonaSdkSandbox,
+    sessionId: string,
+  ): Promise<void> {
+    return this.runCommandThroughEnvelope({
+      attempt: () => sandbox.process.deleteSession(sessionId),
+      operation: "app-session.delete",
+      retry: "none",
+      sandboxId: readSandboxId(sandbox),
+      timeoutError: () =>
+        new Error(
+          `Daytona managed-process cleanup did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+        ),
+      timeoutMs: this.managedProcessControlTimeoutMs,
+    });
   }
 
   async readSubmittedCodeAppStatus(): Promise<AgentHarnessSubmittedCodeAppStatus> {
@@ -725,17 +988,33 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       throw new Error("No submitted-code app session is active.");
     }
 
+    // Status and log reads are pure and issued continuously by readiness
+    // polling; they ride the transient ladder.
     const [command, logs] = await Promise.all([
-      withTimeout(
-        sandbox.process.getSessionCommand(app.sessionId, app.commandId),
-        this.managedProcessControlTimeoutMs,
-        `Daytona managed-process status did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-      ),
-      withTimeout(
-        sandbox.process.getSessionCommandLogs(app.sessionId, app.commandId),
-        this.managedProcessControlTimeoutMs,
-        `Daytona managed-process log collection did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-      ),
+      this.runCommandThroughEnvelope({
+        attempt: () =>
+          sandbox.process.getSessionCommand(app.sessionId, app.commandId),
+        operation: "app-session.status",
+        retry: "transient",
+        sandboxId: readSandboxId(sandbox),
+        timeoutError: () =>
+          new Error(
+            `Daytona managed-process status did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+          ),
+        timeoutMs: this.managedProcessControlTimeoutMs,
+      }),
+      this.runCommandThroughEnvelope({
+        attempt: () =>
+          sandbox.process.getSessionCommandLogs(app.sessionId, app.commandId),
+        operation: "app-session.logs",
+        retry: "transient",
+        sandboxId: readSandboxId(sandbox),
+        timeoutError: () =>
+          new Error(
+            `Daytona managed-process log collection did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+          ),
+        timeoutMs: this.managedProcessControlTimeoutMs,
+      }),
     ]);
     const exitCode = command.exitCode;
     if (exitCode !== undefined && app.endedAt === undefined) {
@@ -759,11 +1038,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       return;
     }
     const sandbox = this.requireSubmittedCodeSandbox();
-    await withTimeout(
-      sandbox.process.deleteSession(app.sessionId),
-      this.managedProcessControlTimeoutMs,
-      `Daytona managed-process cleanup did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-    );
+    await this.deleteAppSessionThroughEnvelope(sandbox, app.sessionId);
     if (this.activeSubmittedCodeApp === app) {
       this.activeSubmittedCodeApp = undefined;
     }
@@ -810,6 +1085,61 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }
 
   async syncSubmittedCodeWorkspace(): Promise<void> {
+    // The whole sync is idempotent (fresh archive name per attempt, full
+    // re-extract), so one transport blip anywhere in the archive → download
+    // → upload → extract chain costs a bounded retry, never the run
+    // (cyberchef's reset died on one dropped socket, 2026-08-09).
+    let attempts = 0;
+    await this.runTransferThroughEnvelope({
+      attempt: () => {
+        attempts += 1;
+        return this.syncSubmittedCodeWorkspaceOnce();
+      },
+      onRetry: (error) =>
+        this.writeArtifactTransferLogBestEffort({
+          attempt: attempts,
+          error: formatErrorDiagnostic(error),
+          event: "workspace.sync.retrying",
+          fileCount: 1,
+          level: "warn",
+          sandboxId:
+            this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
+        }),
+      operation: "fs.sync",
+      sandboxId:
+        this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
+    });
+  }
+
+  /**
+   * Runs an idempotent Daytona transfer through the control-plane envelope
+   * with the transfer-sized ladder. Exhaustion and non-retryable failures
+   * rethrow the attempt's own error unchanged, because transfer seams carry
+   * their own infrastructure-family wrapping and error contracts.
+   */
+  private runTransferThroughEnvelope<T>(input: {
+    attempt: () => Promise<T>;
+    attemptTimeoutMs?: number;
+    onTargetWedged?: (error: unknown) => Promise<boolean> | boolean;
+    onRetry?: (error: unknown) => Promise<void> | void;
+    operation: string;
+    sandboxId: string | (() => string | undefined);
+  }): Promise<T> {
+    return this.controlPlane.run(input.operation, input.attempt, {
+      ...(input.attemptTimeoutMs === undefined
+        ? {}
+        : { attemptTimeoutMs: input.attemptTimeoutMs }),
+      ladderMs: this.artifactTransferBackoffMs,
+      ...(input.onTargetWedged === undefined
+        ? {}
+        : { onTargetWedged: input.onTargetWedged }),
+      ...(input.onRetry === undefined ? {} : { onRetry: input.onRetry }),
+      sandboxId: input.sandboxId,
+      wrapExhausted: false,
+    });
+  }
+
+  private async syncSubmittedCodeWorkspaceOnce(): Promise<void> {
     if (this.submittedCodeSandbox === undefined) {
       throw new Error("Submitted-code Daytona sandbox is not configured.");
     }
@@ -941,13 +1271,18 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
           `Failed to download reconciled lockfile ${failed.source}: ${failed.error}`,
         );
       }
-      await this.sandbox.fs.uploadFiles(
-        transfers.map(({ destination, localPath }) => ({
-          destination,
-          source: localPath,
-        })),
-        defaultArtifactTransferTimeoutSeconds,
-      );
+      await this.runTransferThroughEnvelope({
+        attempt: () =>
+          this.sandbox.fs.uploadFiles(
+            transfers.map(({ destination, localPath }) => ({
+              destination,
+              source: localPath,
+            })),
+            defaultArtifactTransferTimeoutSeconds,
+          ),
+        operation: "fs.upload",
+        sandboxId: this.agentSandboxId,
+      });
     } finally {
       await rm(localDirectory, { force: true, recursive: true });
     }
@@ -958,7 +1293,14 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     enabled: boolean,
   ): Promise<void> {
     try {
-      await sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
+      // The toggle is re-issuable: the envelope waits out in-progress-state
+      // conflicts (midday's first-409 death, 2026-08-09) and transport loss,
+      // while policy rejections stay raw for the fail-closed logic below.
+      await this.controlPlane.run(
+        "sandbox.network-update",
+        () => sandbox.updateNetworkSettings({ networkBlockAll: !enabled }),
+        { sandboxId: readSandboxId(sandbox) },
+      );
       this.networkOverrideRestricted = false;
     } catch (error) {
       if (isRestrictedNetworkPolicyError(error)) {
@@ -984,46 +1326,111 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       destination: file.destinationPath,
       source: file.sourcePath,
     }));
-    await this.sandbox.fs.uploadFiles(uploadedFiles);
-    await this.submittedCodeSandbox?.fs.uploadFiles(uploadedFiles);
+    const attemptTimeoutMs = await readUploadAttemptTimeoutMs(
+      files.map((file) => file.sourcePath),
+    );
+    await this.runTransferThroughEnvelope({
+      attempt: () => this.sandbox.fs.uploadFiles(uploadedFiles),
+      ...(attemptTimeoutMs === undefined ? {} : { attemptTimeoutMs }),
+      operation: "fs.upload",
+      sandboxId: this.agentSandboxId,
+    });
+    if (this.submittedCodeSandbox !== undefined) {
+      await this.runTransferThroughEnvelope({
+        attempt: () =>
+          this.requireSubmittedCodeSandbox().fs.uploadFiles(uploadedFiles),
+        ...(attemptTimeoutMs === undefined ? {} : { attemptTimeoutMs }),
+        ...(this.recreateSubmittedCodeSandbox === undefined
+          ? {}
+          : {
+              onTargetWedged: async () => {
+                if (this.submittedCodeSandboxRecreationUsed) {
+                  return false;
+                }
+                this.submittedCodeSandboxRecreationUsed = true;
+                await this.replaceWedgedSubmittedCodeSandbox();
+                return true;
+              },
+            }),
+        operation: "fs.upload",
+        sandboxId: () =>
+          this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
+      });
+    }
+  }
+
+  /**
+   * Replaces the linked child only at the initial screened-workspace upload
+   * seam. That upload is fully replayable; later runtime transfers cannot
+   * recreate safely because a fresh sandbox would discard prepared state.
+   */
+  private async replaceWedgedSubmittedCodeSandbox(): Promise<void> {
+    const recreate = this.recreateSubmittedCodeSandbox;
+    if (recreate === undefined) {
+      throw new Error("Submitted-code Daytona sandbox cannot be recreated.");
+    }
+    const staleSandbox = this.requireSubmittedCodeSandbox();
+    const replacement = await recreate(staleSandbox);
+    const replacementId = replacement.id ?? replacement.name;
+    if (replacementId === undefined || replacementId.trim() === "") {
+      throw new Error("Daytona did not return a submitted-code sandbox id.");
+    }
+    this.submittedCodeSandbox = replacement;
+    this.submittedCodeSandboxId = replacementId;
+    this.submittedCodeSandboxDeleted = false;
+    this.activeSubmittedCodeApp = undefined;
+    this.networkOverrideRestricted = false;
+    this.networkStateTransitions.push({
+      at: new Date().toISOString(),
+      state: "runtime-locked",
+    });
   }
 
   async writeTextFile(path: string, contents: string): Promise<void> {
-    const transferId = randomUUID();
     const localDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-agent-artifact-"),
     );
-    const localPath = join(localDirectory, transferId);
-    const remoteTemporaryPath = `${path}.upload-${transferId}`;
+    const localPath = join(localDirectory, "payload");
     const payloadBytes = Buffer.byteLength(contents);
+    const attemptedRemoteTemporaryPaths: string[] = [];
     try {
       await writeFile(localPath, contents, "utf8");
-      const directoryResult = await this.sandbox.process.executeCommand(
-        `mkdir -p ${shellQuote(dirname(path))}`,
-      );
-      if ((directoryResult.exitCode ?? 0) !== 0) {
-        throw new Error(
-          formatCommandFailure(
-            `Failed to create Daytona artifact directory for ${path}`,
-            directoryResult,
-          ),
-        );
-      }
-      await this.sandbox.fs.uploadFiles(
-        [{ destination: remoteTemporaryPath, source: localPath }],
-        defaultArtifactTransferTimeoutSeconds,
-      );
-      const promotionResult = await this.sandbox.process.executeCommand(
-        `mv -f -- ${shellQuote(remoteTemporaryPath)} ${shellQuote(path)}`,
-      );
-      if ((promotionResult.exitCode ?? 0) !== 0) {
-        throw new Error(
-          formatCommandFailure(
-            `Failed to promote Daytona artifact ${path}`,
-            promotionResult,
-          ),
-        );
-      }
+      await this.runTransferThroughEnvelope({
+        attempt: async () => {
+          // A fresh temp path per attempt keeps a timed-out upload that lands
+          // late from racing the retry's in-flight transfer.
+          const remoteTemporaryPath = `${path}.upload-${randomUUID()}`;
+          attemptedRemoteTemporaryPaths.push(remoteTemporaryPath);
+          const directoryResult = await this.sandbox.process.executeCommand(
+            `mkdir -p ${shellQuote(dirname(path))}`,
+          );
+          if ((directoryResult.exitCode ?? 0) !== 0) {
+            throw new Error(
+              formatCommandFailure(
+                `Failed to create Daytona artifact directory for ${path}`,
+                directoryResult,
+              ),
+            );
+          }
+          await this.sandbox.fs.uploadFiles(
+            [{ destination: remoteTemporaryPath, source: localPath }],
+            defaultArtifactTransferTimeoutSeconds,
+          );
+          const promotionResult = await this.sandbox.process.executeCommand(
+            `mv -f -- ${shellQuote(remoteTemporaryPath)} ${shellQuote(path)}`,
+          );
+          if ((promotionResult.exitCode ?? 0) !== 0) {
+            throw new Error(
+              formatCommandFailure(
+                `Failed to promote Daytona artifact ${path}`,
+                promotionResult,
+              ),
+            );
+          }
+        },
+        operation: "fs.write-text",
+        sandboxId: this.agentSandboxId,
+      });
     } catch (error) {
       throw new Error(
         `Daytona agent artifact filesystem transfer failed for ${path} (${payloadBytes} bytes): ${error instanceof Error ? error.message : String(error)}`,
@@ -1032,9 +1439,11 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     } finally {
       await rm(localDirectory, { force: true, recursive: true });
       try {
-        await this.sandbox.process.executeCommand(
-          `rm -f -- ${shellQuote(remoteTemporaryPath)}`,
-        );
+        if (attemptedRemoteTemporaryPaths.length > 0) {
+          await this.sandbox.process.executeCommand(
+            `rm -f -- ${attemptedRemoteTemporaryPaths.map((remotePath) => shellQuote(remotePath)).join(" ")}`,
+          );
+        }
       } catch {
         // The sandbox is ephemeral and promotion already removed this path on success.
       }
@@ -1090,62 +1499,56 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }): Promise<T> {
     const sandboxId =
       this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox";
-    let lastError: unknown;
-    for (
-      let attempt = 1;
-      attempt <= artifactTransferRetryLimit + 1;
-      attempt += 1
-    ) {
-      await this.writeArtifactTransferLogBestEffort({
-        attempt,
-        event: `artifact.transfer.${input.operation}.started`,
-        fileCount: input.fileCount,
-        level: "info",
-        sandboxId,
-      });
-      try {
-        const result = await input.run();
-        await this.writeArtifactTransferLogBestEffort({
-          attempt,
-          event: `artifact.transfer.${input.operation}.succeeded`,
-          fileCount: input.fileCount,
-          level: "info",
-          sandboxId,
-        });
-        return result;
-      } catch (error) {
-        lastError = error;
-        const willRetry =
-          attempt <= artifactTransferRetryLimit &&
-          isTransientDaytonaArtifactTransferError(error);
-        await this.writeArtifactTransferLogBestEffort({
-          attempt,
-          error: formatErrorDiagnostic(error),
-          event: willRetry
-            ? `artifact.transfer.${input.operation}.retrying`
-            : `artifact.transfer.${input.operation}.failed`,
-          fileCount: input.fileCount,
-          level: willRetry ? "warn" : "error",
-          sandboxId,
-        });
-        if (!willRetry) {
-          throw new AgentHarnessArtifactTransferError({
-            attempts: attempt,
-            cause: error,
-            operation: input.operation,
+    let attempts = 0;
+    try {
+      return await this.runTransferThroughEnvelope({
+        attempt: async () => {
+          attempts += 1;
+          await this.writeArtifactTransferLogBestEffort({
+            attempt: attempts,
+            event: `artifact.transfer.${input.operation}.started`,
+            fileCount: input.fileCount,
+            level: "info",
             sandboxId,
           });
-        }
-        await wait(250 * attempt);
-      }
+          const result = await input.run();
+          await this.writeArtifactTransferLogBestEffort({
+            attempt: attempts,
+            event: `artifact.transfer.${input.operation}.succeeded`,
+            fileCount: input.fileCount,
+            level: "info",
+            sandboxId,
+          });
+          return result;
+        },
+        onRetry: (error) =>
+          this.writeArtifactTransferLogBestEffort({
+            attempt: attempts,
+            error: formatErrorDiagnostic(error),
+            event: `artifact.transfer.${input.operation}.retrying`,
+            fileCount: input.fileCount,
+            level: "warn",
+            sandboxId,
+          }),
+        operation: `fs.${input.operation}`,
+        sandboxId,
+      });
+    } catch (error) {
+      await this.writeArtifactTransferLogBestEffort({
+        attempt: attempts,
+        error: formatErrorDiagnostic(error),
+        event: `artifact.transfer.${input.operation}.failed`,
+        fileCount: input.fileCount,
+        level: "error",
+        sandboxId,
+      });
+      throw new AgentHarnessArtifactTransferError({
+        attempts,
+        cause: error,
+        operation: input.operation,
+        sandboxId,
+      });
     }
-
-    throw new AgentHarnessArtifactTransferError({
-      attempts: artifactTransferRetryLimit + 1,
-      cause: lastError,
-      operation: input.operation,
-      sandboxId,
-    });
   }
 
   private async writeArtifactTransferLogBestEffort(input: {
@@ -1207,9 +1610,10 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
 
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     try {
-      await pty.sendInput(
-        `stty -echo\n${command}\nprintf '\\n${exitSentinel}:%s\\n' $?\nexit\n`,
-      );
+      // The payload is consumed by the shell upfront and the command runs
+      // with stdin sealed, so no queued input (the exit sentinel above all)
+      // survives into the command's lifetime for a child to steal.
+      await pty.sendInput(createPtyCommandPayload({ command, exitSentinel }));
       inactivityDeadline.touch();
       const result = await withTimeout(
         Promise.race([pty.wait(), inactivityDeadline.expired]),
@@ -1217,8 +1621,17 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         () => new AgentHarnessCommandTimeoutError(timeoutMs),
       );
       const stdout = output.join("");
-      const exitCode =
-        readExitCode(stdout, exitSentinel) ?? result.exitCode ?? 0;
+      const exitCode = readExitCode(stdout, exitSentinel);
+      // The trailer is the only channel that carries the command's real
+      // status: the PTY shell's own exit code is bash's, not the command's,
+      // and a session that ends without the trailer proves only that the
+      // transport died — not that anything ran. Defaulting the missing
+      // status reported a large install as exit 0 after ~30 seconds when
+      // the PTY died before running it (ghostfolio, 2026-08-12), so a
+      // trailerless end is transport loss for the caller's retry lane.
+      if (exitCode === undefined) {
+        throw new AgentHarnessCommandTimeoutError(timeoutMs, "transport");
+      }
 
       return {
         exitCode,
@@ -1247,10 +1660,23 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       let pty: ManagedPty | undefined;
 
       try {
-        const rawPty = await sandbox.process.createPty({
-          ...options,
-          id: attempt === 1 ? options.id : `makeademo-${randomUUID()}`,
-        });
+        const rawPty = await this.controlPlane.run(
+          "pty.create",
+          () =>
+            sandbox.process.createPty({
+              ...options,
+              id: attempt === 1 ? options.id : `makeademo-${randomUUID()}`,
+            }),
+          {
+            // Absorb transport loss only; conflicts and stale-id duplicates
+            // rethrow raw so this loop's fresh-id and restart logic still
+            // sees the original error.
+            conflictPollLimit: 0,
+            ladderMs: ptyCreateTransientBackoffMs,
+            sandboxId: readSandboxId(sandbox),
+            wrapExhausted: false,
+          },
+        );
         pty = new ManagedPty(rawPty);
         this.activePtys.add(pty);
         await withTimeout(
@@ -1306,7 +1732,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       return false;
     }
     await sandbox.refreshData?.();
-    await sandbox.start(defaultSandboxCreateTimeoutSeconds);
+    await this.controlPlane.run(
+      "sandbox.start",
+      async () => {
+        await sandbox.start?.(defaultSandboxCreateTimeoutSeconds);
+      },
+      { sandboxId: readSandboxId(sandbox) },
+    );
     return true;
   }
 
@@ -1364,6 +1796,33 @@ class ManagedPty {
   waitForConnection(): Promise<void> {
     return this.pty.waitForConnection();
   }
+}
+
+// The envelope's per-attempt bound polices hangs, but a bulk transfer is a
+// legitimately slow call: twenty's 294MB archive could not finish inside the
+// default 600s bound on a contended uplink, so the envelope abandoned two
+// live transfers as hangs (2026-08-13T23-23 matrix). Above the default the
+// bound scales with the payload at a 256KiB/s worst-case floor plus fixed
+// headroom; a payload the default already covers keeps the default.
+const uploadWorstCaseBytesPerSecond = 256 * 1024;
+const uploadAttemptHeadroomMs = 60_000;
+
+async function readUploadAttemptTimeoutMs(
+  sourcePaths: string[],
+): Promise<number | undefined> {
+  let totalBytes = 0;
+  for (const sourcePath of sourcePaths) {
+    // Best-effort sizing: an unreadable source keeps the default bound and
+    // lets the upload itself report the real failure.
+    totalBytes += await stat(sourcePath).then(
+      (stats) => stats.size,
+      () => 0,
+    );
+  }
+  const transferMs =
+    Math.ceil(totalBytes / uploadWorstCaseBytesPerSecond) * 1000 +
+    uploadAttemptHeadroomMs;
+  return transferMs > defaultDaytonaAttemptTimeoutMs ? transferMs : undefined;
 }
 
 function withTimeout<T>(
@@ -1440,23 +1899,6 @@ function toSdkTimeoutSeconds(timeoutMs: number): number {
   return Math.max(1, Math.ceil(timeoutMs / 1000));
 }
 
-function wait(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-function isDaytonaConnectionError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  return (
-    error.name === "DaytonaConnectionError" ||
-    error.message.includes("ECONNREFUSED") ||
-    error.message.includes("ECONNRESET") ||
-    error.message.includes("ETIMEDOUT")
-  );
-}
-
 function isDaytonaSandboxNotStartedError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -1468,41 +1910,6 @@ function isDaytonaSandboxNotStartedError(error: unknown): boolean {
 
 function readSandboxId(sandbox: DaytonaSdkSandbox): string {
   return sandbox.id ?? sandbox.name ?? "unknown";
-}
-
-function isTransientDaytonaArtifactTransferError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return (
-    /Connection|Timeout/i.test(error.name) ||
-    /ECONNREFUSED|ECONNRESET|ETIMEDOUT|Operation timed out|socket hang up/i.test(
-      error.message,
-    )
-  );
-}
-
-function formatErrorDiagnostic(error: unknown): string {
-  return error instanceof Error
-    ? `${error.name}: ${error.message}`
-    : String(error);
-}
-
-/** Identifies a Daytona conflict raised while a sandbox state change settles. */
-function isDaytonaStateConflictError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as {
-    errorCode?: unknown;
-    message?: unknown;
-    statusCode?: unknown;
-  };
-  return (
-    candidate.statusCode === 409 ||
-    candidate.errorCode === "Conflict" ||
-    /state change in progress|state is changing/i.test(
-      String(candidate.message ?? ""),
-    )
-  );
 }
 
 function isDaytonaNotFoundError(error: unknown): boolean {

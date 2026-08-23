@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CaptureBrowserActionFailureError,
+  readCaptureAppServerError,
   readCaptureRuntimeProtocol,
   readSuccessfulCaptureProtocol,
 } from "./capture-runtime-protocol";
@@ -132,6 +133,38 @@ describe("Capture Runtime Protocol", () => {
     ).toThrow("nested step markers");
   });
 
+  it("names both Browser Action labels when marker spans overlap", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr: "",
+      stdout: [
+        '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+        sceneMarker(10, "started", "scene-one"),
+        actionMarker(
+          11,
+          "started",
+          "scene-one",
+          "page.waitForURL(http://127.0.0.1:3000/roles/new)",
+        ),
+        actionMarker(
+          12,
+          "started",
+          "scene-one",
+          "locator.click(getByRole(button, Create role))",
+        ),
+      ].join("\n"),
+    });
+
+    expect(() =>
+      readSuccessfulCaptureProtocol({
+        protocol,
+        requireVisibleAssertions: false,
+        sceneIds: ["scene-one"],
+      }),
+    ).toThrow(
+      "Capture script emitted nested Browser Action markers: page.waitForURL(http://127.0.0.1:3000/roles/new) was still open when locator.click(getByRole(button, Create role)) started.",
+    );
+  });
+
   it("rejects a Browser Action marker attributed to an undeclared Scene", () => {
     const protocol = readCaptureRuntimeProtocol({
       stderr: "",
@@ -258,6 +291,49 @@ describe("Capture Runtime Protocol", () => {
     expect(readFailure).toThrow(
       "Browser action open-dashboard failed in Scene scene-one. button timed out",
     );
+  });
+
+  it("collects main-document navigation statuses from both streams in order", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr:
+        '[makeademo:navigation] {"status":500,"url":"http://127.0.0.1:3000/booking"}',
+      stdout:
+        '[makeademo:navigation] {"status":200,"url":"http://127.0.0.1:3000/"}',
+    });
+
+    expect(protocol.navigations).toEqual([
+      { status: 200, url: "http://127.0.0.1:3000/" },
+      { status: 500, url: "http://127.0.0.1:3000/booking" },
+    ]);
+  });
+
+  it("reads the first app-origin server error navigation", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr: "",
+      stdout: [
+        '[makeademo:navigation] {"status":200,"url":"http://127.0.0.1:3000/"}',
+        '[makeademo:navigation] {"status":503,"url":"http://127.0.0.1:3000/booking"}',
+        '[makeademo:navigation] {"status":500,"url":"http://127.0.0.1:3000/checkout"}',
+      ].join("\n"),
+    });
+
+    expect(
+      readCaptureAppServerError(protocol, "http://127.0.0.1:3000"),
+    ).toEqual({ status: 503, url: "http://127.0.0.1:3000/booking" });
+  });
+
+  it("ignores a sub-500 status and a cross-origin server error", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr: "",
+      stdout: [
+        '[makeademo:navigation] {"status":404,"url":"http://127.0.0.1:3000/missing"}',
+        '[makeademo:navigation] {"status":500,"url":"https://cdn.example.com/asset"}',
+      ].join("\n"),
+    });
+
+    expect(
+      readCaptureAppServerError(protocol, "http://127.0.0.1:3000"),
+    ).toBeUndefined();
   });
 });
 

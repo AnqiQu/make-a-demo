@@ -1,16 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import {
-  lstat,
-  open,
-  readFile,
-  readdir,
-  readlink,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { lstat, readFile, readdir, readlink, rm, stat } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
+import { createGunzip } from "node:zlib";
 import {
   containsPrivateKeyMaterial,
   isCredentialRegistryConfig,
@@ -28,6 +21,8 @@ export type RepoSourceArchive = {
   commitSha: string;
   path: string;
   sha256: string;
+  /** Exact compressed archive size used for pre-sandbox resource selection. */
+  sizeBytes: number;
 };
 
 export type RepoSnapshot = {
@@ -118,6 +113,12 @@ const readableFileNames = new Set([
   ".env.example",
   "astro.config.mjs",
   "bun.lock",
+  // Compose files carry the data-service declarations servicesRequired
+  // detection reads (N122).
+  "compose.yaml",
+  "compose.yml",
+  "docker-compose.yaml",
+  "docker-compose.yml",
   "package-lock.json",
   "package.json",
   "pnpm-lock.yaml",
@@ -135,6 +136,9 @@ const readableExtensions = new Set([
   ".jsx",
   ".md",
   ".mjs",
+  // Prisma schemas carry the datasource provider servicesRequired detection
+  // reads (N122).
+  ".prisma",
   ".ts",
   ".tsx",
   ".txt",
@@ -166,7 +170,11 @@ export async function readGithubRepoSnapshot(
   const git = dependencies.git ?? defaultRepoSnapshotGit;
   const runDirectory = resolve(input.runDirectory);
   const checkoutPath = join(runDirectory, "repo-snapshot");
-  const archivePath = join(runDirectory, "screened-repo.tar");
+  // Gzip-compressed: the archive crosses the developer uplink to the sandbox,
+  // and source trees compress several-fold — twenty's uncompressed 294MB tar
+  // could not finish inside the upload attempt timeout on a contended uplink
+  // (2026-08-13T23-23 matrix).
+  const archivePath = join(runDirectory, "screened-repo.tar.gz");
   const credential = await createRepoCloneCredential({
     ...(input.githubInstallationId === undefined
       ? {}
@@ -180,11 +188,21 @@ export async function readGithubRepoSnapshot(
   await input.log("repo.clone.started", { checkoutPath });
   let snapshotComplete = false;
   try {
-    await git.clone({
-      checkoutPath,
-      ...(credential === undefined ? {} : { credential }),
-      repoUrl: input.repoUrl,
-    });
+    try {
+      await git.clone({
+        checkoutPath,
+        ...(credential === undefined ? {} : { credential }),
+        repoUrl: input.repoUrl,
+      });
+    } catch (error) {
+      // The report row truncates to one line; the durable log must carry
+      // git's whole stderr, whose trailing fatal: line names the real cause
+      // (calcom and ghostfolio's mid-transfer exit-128s, 2026-08-13T23-23).
+      await input.log("repo.clone.failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     const commitSha = readCommitSha(await git.readHead(checkoutPath));
     await input.log("repo.clone.succeeded", { commitSha });
     const repoFiles = await readRepoFiles(
@@ -208,12 +226,14 @@ export async function readGithubRepoSnapshot(
       commitSha,
       path: archivePath,
       sha256: await sha256File(archivePath),
+      sizeBytes: (await stat(archivePath)).size,
     };
     await input.log("repo.archive.succeeded", {
       commitSha,
       path: archivePath,
       quarantinedFileCount: quarantine.manifest.entries.length,
       sha256: sourceArchive.sha256,
+      sizeBytes: sourceArchive.sizeBytes,
     });
     snapshotComplete = true;
     return {
@@ -255,48 +275,50 @@ async function assertArchiveExcludesQuarantinedPaths(
 }
 
 async function readTarMemberPaths(archivePath: string): Promise<string[]> {
-  const handle = await open(archivePath, "r");
-  try {
-    const members: string[] = [];
-    const header = Buffer.alloc(512);
-    let position = 0;
-    let overrideName: string | undefined;
-    for (;;) {
-      const { bytesRead } = await handle.read(header, 0, 512, position);
-      if (bytesRead < 512 || header.every((byte) => byte === 0)) break;
-      position += 512;
-      const size = Number.parseInt(
-        header.toString("ascii", 124, 136).replaceAll("\0", " ").trim() || "0",
-        8,
-      );
-      const dataBytes = Math.ceil(size / 512) * 512;
-      const typeflag = String.fromCharCode(header[156] ?? 0);
-      if (typeflag === "L" || typeflag === "x" || typeflag === "g") {
-        const data = Buffer.alloc(size);
-        await handle.read(data, 0, size, position);
-        const text = data.toString("utf8");
-        if (typeflag === "L") {
-          overrideName = text.replace(/\0+$/, "");
-        } else if (typeflag === "x") {
-          overrideName =
-            /(?:^|\n)\d+ path=([^\n]+)\n/.exec(text)?.[1] ?? overrideName;
-        }
-      } else {
-        const rawName = header.toString("utf8", 0, 100).split("\0", 1)[0] ?? "";
-        const prefix =
-          header.toString("utf8", 345, 500).split("\0", 1)[0] ?? "";
-        members.push(
-          overrideName ??
-            (prefix.length > 0 ? `${prefix}/${rawName}` : rawName),
-        );
-        overrideName = undefined;
+  // The archive is gzip-compressed, so members are parsed from a sequential
+  // gunzip stream instead of random-access file reads.
+  const tar = Buffer.concat(await readGunzippedChunks(archivePath));
+  const members: string[] = [];
+  let position = 0;
+  let overrideName: string | undefined;
+  for (;;) {
+    const header = tar.subarray(position, position + 512);
+    if (header.length < 512 || header.every((byte) => byte === 0)) break;
+    position += 512;
+    const size = Number.parseInt(
+      header.toString("ascii", 124, 136).replaceAll("\0", " ").trim() || "0",
+      8,
+    );
+    const dataBytes = Math.ceil(size / 512) * 512;
+    const typeflag = String.fromCharCode(header[156] ?? 0);
+    if (typeflag === "L" || typeflag === "x" || typeflag === "g") {
+      const text = tar.subarray(position, position + size).toString("utf8");
+      if (typeflag === "L") {
+        overrideName = text.replace(/\0+$/, "");
+      } else if (typeflag === "x") {
+        overrideName =
+          /(?:^|\n)\d+ path=([^\n]+)\n/.exec(text)?.[1] ?? overrideName;
       }
-      position += dataBytes;
+    } else {
+      const rawName = header.toString("utf8", 0, 100).split("\0", 1)[0] ?? "";
+      const prefix = header.toString("utf8", 345, 500).split("\0", 1)[0] ?? "";
+      members.push(
+        overrideName ?? (prefix.length > 0 ? `${prefix}/${rawName}` : rawName),
+      );
+      overrideName = undefined;
     }
-    return members;
-  } finally {
-    await handle.close();
+    position += dataBytes;
   }
+  return members;
+}
+
+async function readGunzippedChunks(archivePath: string): Promise<Buffer[]> {
+  const chunks: Buffer[] = [];
+  const stream = createReadStream(archivePath).pipe(createGunzip());
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return chunks;
 }
 
 export const defaultRepoSnapshotGit: RepoSnapshotGit = {
@@ -308,7 +330,7 @@ export const defaultRepoSnapshotGit: RepoSnapshotGit = {
       "-C",
       input.checkoutPath,
       "archive",
-      "--format=tar",
+      "--format=tar.gz",
       "--output",
       input.archivePath,
       input.commitSha,

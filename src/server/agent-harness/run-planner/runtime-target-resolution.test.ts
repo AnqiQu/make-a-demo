@@ -5,6 +5,7 @@ import type {
   RunPlan,
 } from "../schemas/artifacts";
 import {
+  createWorkspaceGraphBuildCommand,
   expandPreparationInstallScopeForMissingWorkspace,
   findRuntimeConfigurationIssue,
   resolvePreparationRuntime,
@@ -476,6 +477,40 @@ describe("resolveRuntimeTarget", () => {
     );
   });
 
+  it("expands scoped installation when a workspace package's entry cannot be resolved", () => {
+    // vite and rollup name the package rather than a file when its
+    // package.json entry points at build output that was never produced.
+    const expanded = expandPreparationInstallScopeForMissingWorkspace({
+      failureReport: {
+        ...validationReport(),
+        failureClassification: "build failure",
+        logsSummary:
+          'Failed to resolve entry for package "@acme/design-system". The package may have incorrect main/module/exports specified in its package.json.',
+      },
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { start: "next start" },
+          },
+          {
+            dir: "packages/design-system",
+            name: "@acme/design-system",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(expanded?.installCommandUsed).toContain(
+      "--filter=@acme/design-system",
+    );
+  });
+
   it("expands scoped installation when the failure is classified as a missing dependency", () => {
     const expanded = expandPreparationInstallScopeForMissingWorkspace({
       failureReport: {
@@ -583,6 +618,65 @@ describe("resolveRuntimeTarget", () => {
             name: "@a/web-admin",
             ports: [],
             scripts: { dev: "vite" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
+  });
+
+  it("rejects a root orchestration script that fans out to a package absent from the workspace", () => {
+    // A root "run everything" script whose selectors name packages the
+    // checkout does not contain — a proprietary sibling stripped from an OSS
+    // monorepo — makes the task runner abort at filter resolution before the
+    // real app binds. Such a script must never be chosen over the
+    // workspace-local command whose targets all exist.
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: {
+          "dev:all":
+            'turbo run dev --filter="@a/web" --filter="@a/marketing" --filter="@a/console"',
+        },
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@a/web",
+            ports: [],
+            scripts: { dev: "next dev" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
+  });
+
+  it("rejects a root orchestration script fanning out to an absent unscoped package", () => {
+    // The same abort happens in monorepos whose packages have no @scope: a
+    // plain-named workspace set (turbo/lerna/nx with bare package names) where
+    // the root "run everything" script filters a sibling the checkout lacks.
+    // Detection must not depend on the @scope namespace, or unscoped repos get
+    // no protection and the doomed fan-out script wins over the local command.
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: {
+          "dev:all": "turbo run dev --filter=web --filter=marketing",
+        },
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "web",
+            ports: [],
+            scripts: { dev: "next dev" },
           },
         ],
       }),
@@ -702,6 +796,526 @@ describe("resolveRuntimeTarget", () => {
     });
     expect(resolution.preparationManifest).not.toHaveProperty(
       "buildCommandUsed",
+    );
+  });
+
+  it("keeps a safe repair build when the resolved start consumes production output", () => {
+    // N154 (ghostfolio, 2026-08-15): runtime repair declared the build that
+    // emits dist/apps/api/main, but resolution dropped it because the command
+    // named no workspace. The resulting start-without-build lifecycle was
+    // guaranteed to fail N148's static runtime-configuration check again.
+    const preparationManifest = manifest("apps/api/src/main.ts");
+    preparationManifest.buildCommandUsed = "npm run build:production";
+    preparationManifest.startCommandUsed = "npm run start";
+    const scripts = {
+      "build:production": "nx run api:build",
+      start: "node dist/apps/api/main",
+    };
+    const runPlan: RunPlan = {
+      allowedPorts: [3000],
+      appDir: ".",
+      assumptions: [],
+      env: {},
+      expectedLocalUrl: "http://127.0.0.1:3000",
+      installCommand: "npm ci --no-audit",
+      localServices: [],
+      riskFlags: [],
+      runtime: "node",
+      startCommand: "npm run start",
+      targetSelection: {
+        evidencePaths: ["package.json", "apps/api/src/main.ts"],
+        reason: "The repository exposes one browser runtime.",
+        role: "product",
+        source: "single-candidate",
+        targetId: ".",
+      },
+      validationExpectations: [],
+    };
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        browserRuntimeCandidates: [
+          {
+            dir: ".",
+            evidencePaths: ["package.json", "apps/api/src/main.ts"],
+            frameworks: ["angular"],
+            ports: [],
+            scripts,
+          },
+        ],
+        candidateInstallCommands: ["npm ci --no-audit"],
+        lockfiles: ["package-lock.json"],
+        packageManager: "npm",
+        packageScripts: scripts,
+        workspacePackages: [],
+      }),
+      runPlan,
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "npm run build:production",
+    );
+    expect(resolution.preparationManifest.startCommandUsed).toBe(
+      "npm run start",
+    );
+  });
+
+  it("keeps a declared build when the dev script consumes build output mid-command", () => {
+    // N159 (outline, 2026-08-19): `yarn run dev` resolved to a script running
+    // nodemon over ./build/server/index.js — the N148 classifier demanded the
+    // build every round while resolution stripped every declaration because
+    // the anchored production-entry regex only matches scripts that START
+    // with node/bun. A dev start whose resolved script consumes build output
+    // is production-entry-like and its declared build must be honored.
+    const preparationManifest = manifest("server/index.ts");
+    preparationManifest.buildCommandUsed = "yarn run build";
+    preparationManifest.startCommandUsed = "yarn run dev";
+    const scripts = {
+      build: "vite build && tsc --project tsconfig.server.json",
+      dev: 'concurrently "vite build --watch" "nodemon ./build/server/index.js"',
+    };
+    const runPlan: RunPlan = {
+      allowedPorts: [3000],
+      appDir: ".",
+      assumptions: [],
+      env: {},
+      expectedLocalUrl: "http://127.0.0.1:3000",
+      installCommand: "yarn install --frozen-lockfile",
+      localServices: [],
+      riskFlags: [],
+      runtime: "node",
+      startCommand: "yarn run dev",
+      targetSelection: {
+        evidencePaths: ["package.json", "server/index.ts"],
+        reason: "The repository exposes one browser runtime.",
+        role: "product",
+        source: "single-candidate",
+        targetId: ".",
+      },
+      validationExpectations: [],
+    };
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        browserRuntimeCandidates: [
+          {
+            dir: ".",
+            evidencePaths: ["package.json", "server/index.ts"],
+            frameworks: ["vite"],
+            ports: [],
+            scripts,
+          },
+        ],
+        candidateInstallCommands: ["yarn install --frozen-lockfile"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: scripts,
+        workspacePackages: [],
+      }),
+      runPlan,
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "yarn run build",
+    );
+  });
+
+  it("still rejects an absent workspace build for a production-entry start", () => {
+    const preparationManifest = manifest("apps/api/src/main.ts");
+    preparationManifest.buildCommandUsed =
+      "pnpm --filter=@acme/website run build";
+    const scripts = { start: "node dist/main.js" };
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+        lockfiles: ["pnpm-lock.yaml"],
+        packageManager: "pnpm",
+        packageScripts: {},
+        workspacePackages: [
+          {
+            dir: "apps/api",
+            name: "@acme/api",
+            ports: [],
+            scripts,
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest).not.toHaveProperty(
+      "buildCommandUsed",
+    );
+  });
+
+  it("keeps a repair-set buildCommandUsed that names a real workspace build target", () => {
+    // N131 (directus, 2026-08-13): the unbuilt-workspace hints steer the
+    // agent to "Set buildCommandUsed to build <package>", and resolution
+    // then stripped exactly that for dev-server starts — whose servers
+    // rebuild the app on demand but never a sibling workspace package.
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed = "pnpm --filter=@acme/ui run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@acme/dashboard",
+            ports: [3001],
+            scripts: { dev: "next dev -p 3001" },
+          },
+          {
+            dir: "packages/ui",
+            name: "@acme/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "pnpm --filter=@acme/ui run build",
+    );
+  });
+
+  it("keeps a task-runner buildCommandUsed that names the workspace package directly", () => {
+    const preparationManifest = manifest("packages/twenty-front/src/index.tsx");
+    preparationManifest.buildCommandUsed = "npx nx run twenty-shared:build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "packages/twenty-front",
+            name: "twenty-front",
+            ports: [3001],
+            scripts: { dev: "vite --port 3001" },
+          },
+          {
+            dir: "packages/twenty-shared",
+            name: "twenty-shared",
+            ports: [],
+            scripts: { build: "tsup" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "npx nx run twenty-shared:build",
+    );
+  });
+
+  it("keeps a buildCommandUsed whose app script body names the workspace package", () => {
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed = "bun run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@acme/dashboard",
+            ports: [3001],
+            scripts: {
+              build: "nx build @acme/ui",
+              dev: "next dev -p 3001",
+            },
+          },
+          {
+            dir: "packages/ui",
+            name: "@acme/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "bun run build",
+    );
+  });
+
+  it("keeps a buildCommandUsed that names the workspace by directory path filter", () => {
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed =
+      "pnpm --filter=./packages/ui run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@acme/dashboard",
+            ports: [3001],
+            scripts: { dev: "next dev -p 3001" },
+          },
+          {
+            dir: "packages/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "pnpm --filter=./packages/ui run build",
+    );
+  });
+
+  it("still strips a buildCommandUsed whose selector names an absent package", () => {
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed =
+      "pnpm --filter=@acme/website run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@acme/dashboard",
+            ports: [3001],
+            scripts: { dev: "next dev -p 3001" },
+          },
+          {
+            dir: "packages/ui",
+            name: "@acme/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest).not.toHaveProperty(
+      "buildCommandUsed",
+    );
+  });
+
+  it("builds a selected app's declared workspace dependency graph in topological mode", () => {
+    expect(
+      createWorkspaceGraphBuildCommand({
+        repoProfile: profile({
+          candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+          lockfiles: ["pnpm-lock.yaml"],
+          packageManager: "pnpm",
+          workspacePackages: [
+            {
+              dir: "app",
+              name: "@directus/app",
+              ports: [5173],
+              scripts: { build: "vite build", dev: "vite --host" },
+              workspaceDependencies: [
+                "@directus/extensions",
+                "@directus/constants",
+              ],
+            },
+            {
+              dir: "packages/extensions",
+              name: "@directus/extensions",
+              ports: [],
+              scripts: { build: "tsdown" },
+              workspaceDependencies: ["@directus/constants"],
+            },
+            {
+              dir: "packages/constants",
+              name: "@directus/constants",
+              ports: [],
+              scripts: { build: "tsdown" },
+            },
+          ],
+        }),
+        targetDir: "app",
+      }),
+    ).toBe("pnpm --recursive --filter=@directus/app... run build");
+  });
+
+  it("uses the repository's root build or prepare lifecycle when the app is the root", () => {
+    expect(
+      createWorkspaceGraphBuildCommand({
+        repoProfile: profile({
+          candidateInstallCommands: ["npm ci --no-audit"],
+          lockfiles: ["package-lock.json"],
+          packageManager: "npm",
+          packageScripts: { prepare: "npm run generate" },
+          workspacePackages: [
+            {
+              dir: ".",
+              name: "acme",
+              ports: [3000],
+              scripts: { dev: "vite", prepare: "npm run generate" },
+            },
+          ],
+        }),
+        targetDir: ".",
+      }),
+    ).toBe("npm run prepare");
+  });
+
+  it("uses profiled turbo and nx graph runners without targeting packages that lack the task", () => {
+    const turboPackages = [
+      {
+        dir: "apps/web",
+        name: "@acme/web",
+        ports: [3000],
+        scripts: { build: "vite build", dev: "vite" },
+        workspaceDependencies: ["@acme/ui"],
+      },
+      {
+        dir: "packages/ui",
+        name: "@acme/ui",
+        ports: [],
+        scripts: { build: "tsc" },
+      },
+    ];
+    expect(
+      createWorkspaceGraphBuildCommand({
+        repoProfile: profile({
+          packageManager: "npm",
+          packageScripts: { dev: "turbo run dev --filter=@acme/web" },
+          workspacePackages: turboPackages,
+        }),
+        targetDir: "apps/web",
+      }),
+    ).toBe("npx turbo run build --filter=@acme/ui --filter=@acme/web");
+
+    expect(
+      createWorkspaceGraphBuildCommand({
+        repoProfile: profile({
+          packageManager: "yarn",
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              name: "@acme/web",
+              ports: [3000],
+              scripts: { build: "nx run web:build", dev: "vite" },
+              workspaceDependencies: ["@acme/core", "@acme/ui"],
+            },
+            {
+              dir: "packages/core",
+              name: "@acme/core",
+              ports: [],
+              scripts: { build: "nx run core:build" },
+            },
+            {
+              dir: "packages/ui",
+              name: "@acme/ui",
+              ports: [],
+              scripts: {},
+            },
+          ],
+        }),
+        targetDir: "apps/web",
+      }),
+    ).toBe("npx nx run-many --target=build --projects=@acme/core,@acme/web");
+  });
+
+  it("honors a broad workspace-graph build only after repair escalation", () => {
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed = "pnpm --recursive run build";
+    const repoProfile = profile({
+      candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+      lockfiles: ["pnpm-lock.yaml"],
+      packageManager: "pnpm",
+      workspacePackages: [
+        {
+          dir: "apps/dashboard",
+          name: "@acme/dashboard",
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+        {
+          dir: "packages/ui",
+          name: "@acme/ui",
+          ports: [],
+          scripts: { build: "vite build" },
+        },
+      ],
+    });
+
+    expect(
+      resolvePreparationRuntime({
+        preparationManifest,
+        repoProfile,
+      }).preparationManifest,
+    ).not.toHaveProperty("buildCommandUsed");
+    expect(
+      resolvePreparationRuntime({
+        honorWorkspaceGraphBuild: true,
+        preparationManifest,
+        repoProfile,
+      }).preparationManifest.buildCommandUsed,
+    ).toBe("pnpm --recursive run build");
+  });
+
+  it("does not honor an escalated graph build that selects an absent workspace", () => {
+    const repoProfile = profile({
+      candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+      lockfiles: ["pnpm-lock.yaml"],
+      packageManager: "pnpm",
+      workspacePackages: [
+        {
+          dir: "apps/dashboard",
+          name: "@acme/dashboard",
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+      ],
+    });
+    for (const command of [
+      "npx nx run-many --target=build --projects=@acme/dashboard,@acme/website",
+      "pnpm --recursive --filter=@acme/website... run build",
+    ]) {
+      const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+      preparationManifest.buildCommandUsed = command;
+      expect(
+        resolvePreparationRuntime({
+          honorWorkspaceGraphBuild: true,
+          preparationManifest,
+          repoProfile,
+        }).preparationManifest,
+      ).not.toHaveProperty("buildCommandUsed");
+    }
+  });
+
+  it("prefers the resolved build command over an agent-set one when resolution finds a build", () => {
+    const preparationManifest = manifest("apps/web/src/page.tsx");
+    preparationManifest.buildCommandUsed = "pnpm --filter=@acme/ui run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { build: "vite build", dev: "serve -s dist -l 3000" },
+          },
+          {
+            dir: "packages/ui",
+            name: "@acme/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "bun run build",
     );
   });
 
@@ -829,6 +1443,125 @@ describe("resolveRuntimeTarget", () => {
         repoProfile: profile({ packageScripts: { dev: "vite" } }),
       }),
     ).toContain('script "missing"');
+  });
+
+  it("rejects a run-script start whose resolved entry requires an undeclared build", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed = "npm run start";
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile({
+          packageManager: "npm",
+          packageScripts: { start: "node dist/apps/api/main" },
+        }),
+      }),
+    ).toBe(
+      "Runtime-configuration error: startCommandUsed runs dist/apps/api/main but no declared build produces it — declare the build that emits dist/apps/api/main, or start the dev server instead.",
+    );
+  });
+
+  it("rejects a runtime command that selects a package absent from the workspace", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed =
+      'turbo run dev --filter="@acme/web" --filter="@acme/marketing"';
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile({
+          packageManager: "yarn",
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              name: "@acme/web",
+              ports: [],
+              scripts: { dev: "next dev" },
+            },
+          ],
+        }),
+      }),
+    ).toContain("@acme/marketing");
+  });
+
+  it("rejects a run-script command whose script body selects an absent package", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed = "yarn run dev:all";
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile({
+          packageManager: "yarn",
+          packageScripts: {
+            "dev:all":
+              'turbo run dev --filter="@acme/web" --filter="@acme/website"',
+          },
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              name: "@acme/web",
+              ports: [],
+              scripts: { dev: "next dev" },
+            },
+          ],
+        }),
+      }),
+    ).toContain("@acme/website");
+  });
+
+  it("rejects a runtime command selecting an absent unscoped package", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed =
+      "turbo run dev --filter=web --filter=marketing";
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile({
+          packageManager: "yarn",
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              name: "web",
+              ports: [],
+              scripts: { dev: "next dev" },
+            },
+          ],
+        }),
+      }),
+    ).toContain("marketing");
+  });
+
+  it("accepts selectors that resolve: short names, path filters, and graph patterns", () => {
+    // The unscoped generalization must not fire on selectors that DO resolve.
+    // `--filter=web` short-selects `@a/web`; `./apps/marketing` is a path, not
+    // a name; `web...` is a pnpm relationship pattern. None names a missing
+    // package, so preflight must raise no absent-package issue.
+    const preparationManifest = manifest("apps/web/src/page.tsx");
+    preparationManifest.appDir = "apps/web";
+    preparationManifest.startCommandUsed =
+      "turbo run dev --filter=web --filter=./apps/marketing --filter=web...";
+
+    const issue = findRuntimeConfigurationIssue({
+      preparationManifest,
+      repoProfile: profile({
+        candidateAppDirs: [".", "apps/web"],
+        packageManager: "yarn",
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@a/web",
+            ports: [],
+            scripts: { dev: "next dev" },
+          },
+          { dir: "tools/cli", name: "tools", ports: [], scripts: {} },
+        ],
+      }),
+    });
+
+    expect(issue).toBeUndefined();
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createOfflineLifecycleCommand,
   evaluateDependencyInstallCommand,
+  isOfflineLifecycleNetworkRefusal,
   runDependencyInstallThroughGate,
 } from "./dependency-install-gate";
 
@@ -148,13 +149,110 @@ describe("dependency install gate", () => {
   });
 
   it("keeps the offline yarn rebuild when the repo variant is berry", () => {
+    // N160 (outline/twenty, 2026-08-20): berry's rebuild makes registry
+    // requests (metadata checks, age gates), and the sealed sandbox network
+    // turns each into ~9.5 minutes of ECONNREFUSED retries. Telling the
+    // manager itself the network is off makes the same failure land in
+    // seconds with a named cause.
     expect(
       createOfflineLifecycleCommand({
         installCommand: "yarn install --frozen-lockfile",
         packageScripts: {},
         yarnVariant: "berry",
       }),
-    ).toBe("yarn rebuild");
+    ).toBe("YARN_ENABLE_NETWORK=false yarn rebuild");
+  });
+
+  it("carries the offline enforcement onto every part of the lifecycle chain", () => {
+    expect(
+      createOfflineLifecycleCommand({
+        installCommand: "yarn install --immutable",
+        packageScripts: { postinstall: "yarn patch-package" },
+        yarnVariant: "berry",
+      }),
+    ).toBe(
+      "YARN_ENABLE_NETWORK=false yarn rebuild && YARN_ENABLE_NETWORK=false yarn run postinstall",
+    );
+    expect(
+      createOfflineLifecycleCommand({
+        installCommand: "npm ci",
+        packageScripts: { postinstall: "node scripts/postinstall.js" },
+      }),
+    ).toBe(
+      "npm_config_offline=true npm rebuild && npm_config_offline=true npm run --if-present postinstall",
+    );
+    expect(
+      createOfflineLifecycleCommand({
+        installCommand: "pnpm install --frozen-lockfile",
+        packageScripts: {},
+      }),
+    ).toBe("npm_config_offline=true pnpm rebuild -r");
+  });
+
+  it("skips the offline pass when the repo's own config disables lifecycle scripts", () => {
+    // N160(2), outline: .yarnrc.yml declares enableScripts: false, so a
+    // real install in that repo runs no lifecycle scripts — the gated
+    // install skipped nothing, and there is no work to run offline.
+    expect(
+      createOfflineLifecycleCommand({
+        installCommand: "yarn install --immutable",
+        lifecycleScriptsDisabled: true,
+        packageScripts: { postinstall: "yarn patch-package" },
+        yarnVariant: "berry",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("recognizes the manager's own offline refusal and nothing else", () => {
+    // N160(3): the refusal the harness itself provoked (via the offline
+    // enforcement) is harness-owned and must not be charged to the repair
+    // candidate. A package's real build failure — and a script's own
+    // download attempt against the sealed network — remain agent-repairable
+    // and must not match.
+    expect(
+      isOfflineLifecycleNetworkRefusal(
+        "➤ YN0000: Network access have been disabled by configuration (enableNetwork: false)",
+      ),
+    ).toBe(true);
+    expect(
+      isOfflineLifecycleNetworkRefusal(
+        // Yarn 4's actual refusal wording (outline, wave 17): per-request
+        // YN0080 blocks citing "your configuration settings", not the
+        // enableNetwork flag name.
+        "➤ YN0080: │ es6-error@npm:4.1.1: Request to 'https://registry.yarnpkg.com/es6-error/-/es6-error-4.1.1.tgz' has been blocked because of your configuration settings",
+      ),
+    ).toBe(true);
+    expect(
+      isOfflineLifecycleNetworkRefusal(
+        "npm ERR! code ENOTCACHED\nnpm ERR! request to https://registry.npmjs.org/node-gyp failed: cache mode is 'only-if-cached' but no cached response is available.",
+      ),
+    ).toBe(true);
+    expect(
+      isOfflineLifecycleNetworkRefusal(
+        "ERR_PNPM_NO_OFFLINE_META  Failed to resolve node-gyp@^10 in package mirror",
+      ),
+    ).toBe(true);
+    expect(
+      isOfflineLifecycleNetworkRefusal("gyp ERR! build error better_sqlite3"),
+    ).toBe(false);
+    expect(
+      isOfflineLifecycleNetworkRefusal(
+        "request to https://example.com/binary.tar.gz failed: connect ECONNREFUSED",
+      ),
+    ).toBe(false);
+  });
+
+  it("leaves managers without an offline switch unprefixed", () => {
+    // Classic yarn and bun reach here only for a declared postinstall, and
+    // neither honors a manager-level offline setting; the sealed sandbox
+    // network remains the enforcement for their scripts.
+    expect(
+      createOfflineLifecycleCommand({
+        installCommand: "yarn install --frozen-lockfile",
+        packageScripts: { postinstall: "node scripts/postinstall.js" },
+        yarnVariant: "classic",
+      }),
+    ).toBe("yarn run postinstall");
   });
 
   it("prefetches prisma engines inside the still-open window after a successful install", async () => {

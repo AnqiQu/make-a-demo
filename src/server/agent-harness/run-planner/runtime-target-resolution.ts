@@ -62,23 +62,51 @@ export function findRuntimeConfigurationIssue(input: {
   ) {
     return "Runtime commands must use the manifest working directory instead of a command-level working directory flag.";
   }
+  const knownWorkspaceNames = new Set(
+    (input.repoProfile.workspacePackages ?? []).flatMap(({ name }) =>
+      name === undefined ? [] : [name],
+    ),
+  );
+  const runtimeScripts = readRuntimeScripts(
+    input.preparationManifest.appDir,
+    input.repoProfile,
+  );
+  const productionEntry =
+    input.preparationManifest.buildCommandUsed === undefined &&
+    input.preparationManifest.startCommandUsed !== undefined
+      ? readResolvedProductionEntry(
+          input.preparationManifest.startCommandUsed,
+          runtimeScripts,
+        )
+      : undefined;
+  if (productionEntry !== undefined) {
+    return `Runtime-configuration error: startCommandUsed runs ${productionEntry} but no declared build produces it — declare the build that emits ${productionEntry}, or start the dev server instead.`;
+  }
   for (const command of [
     input.preparationManifest.buildCommandUsed,
     input.preparationManifest.startCommandUsed,
   ]) {
-    const scriptName =
-      command === undefined ? undefined : readScriptName(command);
-    if (scriptName === undefined) {
+    if (command === undefined) {
       continue;
     }
-    const scripts =
-      input.preparationManifest.appDir === "."
-        ? input.repoProfile.packageScripts
-        : input.repoProfile.workspacePackages?.find(
-            ({ dir }) => dir === input.preparationManifest.appDir,
-          )?.scripts;
-    if (scripts?.[scriptName] === undefined) {
+    const scriptName = readScriptName(command);
+    const scripts = runtimeScripts;
+    if (scriptName !== undefined && scripts?.[scriptName] === undefined) {
       return `Runtime script "${scriptName}" is not defined for ${input.preparationManifest.appDir}.`;
+    }
+    // The command may name a workspace directly, or run a script whose body
+    // fans out through the task runner; scan both surfaces for a selector
+    // that targets a package the repository does not contain.
+    const scriptBody =
+      scriptName === undefined ? undefined : scripts?.[scriptName];
+    const absentPackage = readAbsentWorkspacePackage(
+      [command, scriptBody]
+        .filter((value): value is string => value !== undefined)
+        .join(" "),
+      knownWorkspaceNames,
+    );
+    if (absentPackage !== undefined) {
+      return `Runtime command "${command}" selects workspace package ${absentPackage}, which does not exist in this repository. Run only workspace targets the checkout contains.`;
     }
   }
   return undefined;
@@ -88,8 +116,58 @@ function readScriptName(command: string): string | undefined {
   return /^(?:bun|pnpm|yarn|npm)\s+run\s+([^\s]+)/.exec(command.trim())?.[1];
 }
 
+function readRuntimeScripts(
+  appDir: string,
+  repoProfile: RepoProfile,
+): Record<string, string> | undefined {
+  return appDir === "."
+    ? repoProfile.packageScripts
+    : repoProfile.workspacePackages?.find(({ dir }) => dir === appDir)?.scripts;
+}
+
+function readProductionEntry(command: string): string | undefined {
+  return /^\s*(?:node|bun)\s+(?:--\S+\s+)*["']?((?:\.\/)?(?:\.next|\.output|build|dist|out)\/[^"'\s]+)/.exec(
+    command,
+  )?.[1];
+}
+
+function readResolvedProductionEntry(
+  command: string,
+  scripts: Record<string, string> | undefined,
+): string | undefined {
+  const resolvedCommand = resolveScriptCommand(command, scripts);
+  return resolvedCommand === undefined
+    ? undefined
+    : readProductionEntry(resolvedCommand);
+}
+
+function resolveScriptCommand(
+  command: string,
+  scripts: Record<string, string> | undefined,
+): string | undefined {
+  const scriptName = readScriptName(command);
+  return scriptName === undefined ? command : scripts?.[scriptName];
+}
+
+/**
+ * A start whose resolved script references a path inside a conventional
+ * build-output directory is production-entry-like even when the reference
+ * sits mid-command (nodemon, concurrently — outline's `yarn run dev`). The
+ * anchored production-entry regex misses those shapes, but the N148
+ * runtime-configuration classifier resolves them and demands the build every
+ * round — so the honored-build predicate must agree with the classifier or
+ * repair never converges (N159).
+ */
+function consumesBuildOutput(command: string): boolean {
+  return /(?<![\w.@-])(?:\.\/)?(?:\.next|\.output|build|dist|out)\/[^\s"']+/.test(
+    command,
+  );
+}
+
 /** Applies an unambiguous backend-owned target to the auditable manifest. */
 export function resolvePreparationRuntime(input: {
+  /** Authorize a safe graph build only after the repair ledger escalates it. */
+  honorWorkspaceGraphBuild?: boolean;
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
   runPlan?: RunPlan;
@@ -109,22 +187,230 @@ export function resolvePreparationRuntime(input: {
         : { unresolved: outcome.unresolved }),
     };
   }
-  const { buildCommandUsed: _agentBuildCommand, ...manifest } =
+  const { buildCommandUsed: agentBuildCommand, ...manifest } =
     input.preparationManifest;
+  const resolvedStartCommand = resolveScriptCommand(
+    runtimeTarget.start.command,
+    readRuntimeScripts(runtimeTarget.start.cwd, input.repoProfile),
+  );
+  const startsFromProductionEntry =
+    runtimeTarget.build === undefined &&
+    resolvedStartCommand !== undefined &&
+    (readProductionEntry(resolvedStartCommand) !== undefined ||
+      consumesBuildOutput(resolvedStartCommand));
+  const buildCommandUsed =
+    runtimeTarget.build?.command ??
+    readHonoredAgentBuildCommand(
+      agentBuildCommand,
+      input.repoProfile,
+      runtimeTarget.targetId,
+      startsFromProductionEntry,
+      input.honorWorkspaceGraphBuild === true,
+    );
   return {
     preparationManifest: {
       ...manifest,
       appDir: runtimeTarget.start.cwd,
       baseUrl: runtimeTarget.baseUrl,
-      ...(runtimeTarget.build === undefined
-        ? {}
-        : { buildCommandUsed: runtimeTarget.build.command }),
+      ...(buildCommandUsed === undefined ? {} : { buildCommandUsed }),
       installCommandUsed: runtimeTarget.install.command,
       ports: runtimeTarget.ports,
       startCommandUsed: runtimeTarget.start.command,
     },
     runtimeTarget,
   };
+}
+
+/**
+ * The agent-authored runtime field resolution can safely honor instead of
+ * replacing. A build that names a real workspace package supplies a sibling
+ * output a dev server cannot rebuild (N131). A build paired with a resolved
+ * production-entry start is also required: dropping it would emit the exact
+ * start-without-build lifecycle rejected by runtime configuration validation
+ * (N154). After repeated unbuilt-workspace failures, the orchestrator may
+ * also authorize the repository's graph build (N155). Every exception stays
+ * behind the absent-workspace selector check; anything else remains
+ * backend-owned and is dropped.
+ */
+function readHonoredAgentBuildCommand(
+  agentBuildCommand: string | undefined,
+  repoProfile: RepoProfile,
+  targetDir: string,
+  startsFromProductionEntry: boolean,
+  honorWorkspaceGraphBuild: boolean,
+): string | undefined {
+  if (agentBuildCommand === undefined) {
+    return undefined;
+  }
+  const knownWorkspaceNames = new Set(
+    (repoProfile.workspacePackages ?? []).flatMap(({ name }) =>
+      name === undefined ? [] : [name],
+    ),
+  );
+  const scriptName = readScriptName(agentBuildCommand);
+  const scripts =
+    targetDir === "."
+      ? repoProfile.packageScripts
+      : repoProfile.workspacePackages?.find(({ dir }) => dir === targetDir)
+          ?.scripts;
+  const surfaces = [
+    agentBuildCommand,
+    scriptName === undefined ? undefined : scripts?.[scriptName],
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" ");
+  if (readAbsentWorkspacePackage(surfaces, knownWorkspaceNames) !== undefined) {
+    return undefined;
+  }
+  if (startsFromProductionEntry) {
+    return agentBuildCommand;
+  }
+  if (
+    honorWorkspaceGraphBuild &&
+    isWorkspaceGraphBuildCommand(agentBuildCommand, surfaces, {
+      repoProfile,
+      targetDir,
+    })
+  ) {
+    return agentBuildCommand;
+  }
+  // Unnamed workspace packages are hinted by directory, and pnpm-style path
+  // filters spell directories as `./<dir>` — both count as naming a target.
+  const referenceIdentifiers = [
+    ...knownWorkspaceNames,
+    ...(repoProfile.workspacePackages ?? []).flatMap(({ dir }) =>
+      dir === "." ? [] : [dir, `./${dir}`],
+    ),
+  ];
+  return referenceIdentifiers.some((identifier) =>
+    referencesPackageName(surfaces, identifier),
+  )
+    ? agentBuildCommand
+    : undefined;
+}
+
+function isWorkspaceGraphBuildCommand(
+  command: string,
+  resolvedSurfaces: string,
+  input: { repoProfile: RepoProfile; targetDir: string },
+): boolean {
+  const expected = createWorkspaceGraphBuildCommand(input);
+  if (expected !== undefined && command.trim() === expected) {
+    return true;
+  }
+  if (
+    input.targetDir === "." &&
+    ["build", "prepare"].some(
+      (scriptName) =>
+        readScriptName(command) === scriptName &&
+        input.repoProfile.packageScripts[scriptName] !== undefined,
+    )
+  ) {
+    return true;
+  }
+  return (
+    /(?:^|\s)pnpm\s+(?=[^\n]*(?:-r|--recursive)(?:\s|$))(?=[^\n]*(?:run\s+)?(?:build|prepare)(?:\s|$))/.test(
+      resolvedSurfaces,
+    ) ||
+    /(?:^|\s)(?:npx\s+)?turbo\s+(?:run\s+)?(?:build|prepare)(?:\s|$)/.test(
+      resolvedSurfaces,
+    ) ||
+    /(?:^|\s)(?:npx\s+)?nx\s+run-many\b(?=[^\n]*(?:--target(?:=|\s+)|-t\s+)(?:build|prepare)(?:\s|$))/.test(
+      resolvedSurfaces,
+    )
+  );
+}
+
+/**
+ * Returns one repository-backed workspace graph build for a selected app.
+ * The command uses only profiled package identities, scopes to the declared
+ * dependency closure when complete filters exist, and never changes cwd in
+ * the command. Undefined means the profile exposes no safe graph runner.
+ */
+export function createWorkspaceGraphBuildCommand(input: {
+  repoProfile: RepoProfile;
+  targetDir: string;
+}): string | undefined {
+  if (!input.repoProfile.workspaces.isMonorepo) {
+    return undefined;
+  }
+  const target =
+    input.repoProfile.workspacePackages?.find(
+      ({ dir }) => dir === input.targetDir,
+    ) ??
+    input.repoProfile.browserRuntimeCandidates?.find(
+      ({ dir }) => dir === input.targetDir,
+    );
+  if (target === undefined) {
+    return undefined;
+  }
+  if (target.dir === ".") {
+    const rootScript = ["build", "prepare"].find(
+      (scriptName) =>
+        input.repoProfile.packageScripts[scriptName] !== undefined,
+    );
+    if (rootScript !== undefined) {
+      return createRunScriptCommand(
+        input.repoProfile.packageManager,
+        rootScript,
+      );
+    }
+  }
+
+  const graphPackages =
+    target.workspaceDependencies === undefined
+      ? undefined
+      : readWorkspaceDependencyClosure(input.repoProfile, target, []);
+  const graphRunnerScripts = [
+    ...Object.values(input.repoProfile.packageScripts),
+    ...Object.values(target.scripts),
+  ].join("\n");
+  const graphTask = ["build", "prepare"].find((scriptName) =>
+    (graphPackages ?? input.repoProfile.workspacePackages ?? []).some(
+      ({ scripts }) => scripts[scriptName] !== undefined,
+    ),
+  );
+  if (graphTask === undefined) {
+    return undefined;
+  }
+  const graphTaskPackages = graphPackages?.filter(
+    ({ scripts }) => scripts[graphTask] !== undefined,
+  );
+
+  if (/\bturbo(?:\s+run)?\b/.test(graphRunnerScripts)) {
+    const filters = readNamedGraphFilters(graphTaskPackages);
+    return `npx turbo run ${graphTask}${filters
+      .map((filter) => ` --filter=${filter}`)
+      .join("")}`;
+  }
+  if (/\bnx\s+(?:run|run-many)\b/.test(graphRunnerScripts)) {
+    const projects = readNamedGraphFilters(graphTaskPackages);
+    return `npx nx run-many --target=${graphTask}${
+      projects.length === 0 ? " --all" : ` --projects=${projects.join(",")}`
+    }`;
+  }
+  if (input.repoProfile.packageManager === "pnpm") {
+    const targetFilter =
+      target.workspaceDependencies === undefined
+        ? undefined
+        : readWorkspaceFilter(target);
+    return `pnpm --recursive${
+      targetFilter === undefined ? "" : ` --filter=${targetFilter}...`
+    } run ${graphTask}`;
+  }
+  return undefined;
+}
+
+function readNamedGraphFilters(
+  graphPackages: RepoWorkspacePackage[] | undefined,
+): string[] {
+  if (
+    graphPackages === undefined ||
+    graphPackages.some(({ name }) => name === undefined)
+  ) {
+    return [];
+  }
+  return graphPackages.map(({ name }) => name as string).sort();
 }
 
 /**
@@ -162,7 +448,7 @@ export function expandPreparationInstallScopeForMissingWorkspace(input: {
   ].join("\n");
   const missingWorkspaceNames = [
     ...runtimeEvidence.matchAll(
-      /(?:can't resolve|cannot find (?:module|package)|could not resolve|failed to resolve import)[^"'`\r\n]*["'`]([^"'`\r\n]+)["'`]/gi,
+      /(?:can't resolve|cannot find (?:module|package)|could not resolve|failed to resolve (?:import|entry for package))[^"'`\r\n]*["'`]([^"'`\r\n]+)["'`]/gi,
     ),
   ]
     .map((match) => readPackageName(match[1] ?? ""))
@@ -547,18 +833,20 @@ function findScopedRootScript(
   operation: string,
 ): string | undefined {
   const scripts = repoProfile.packageScripts;
-  const otherWorkspaceNames = (repoProfile.workspacePackages ?? [])
-    .map(({ name }) => name)
-    .filter(
-      (name): name is string =>
-        name !== undefined && name !== workspacePackage.name,
-    );
-  const targetsAnotherWorkspace = (command: string) =>
-    otherWorkspaceNames.some((name) => referencesPackageName(command, name));
+  const workspaceNames = (repoProfile.workspacePackages ?? []).flatMap(
+    ({ name }) => (name === undefined ? [] : [name]),
+  );
+  const otherWorkspaceNames = workspaceNames.filter(
+    (name) => name !== workspacePackage.name,
+  );
+  const knownWorkspaceNames = new Set(workspaceNames);
+  const unusableRootScript = (command: string) =>
+    otherWorkspaceNames.some((name) => referencesPackageName(command, name)) ||
+    readAbsentWorkspacePackage(command, knownWorkspaceNames) !== undefined;
   const shortName = posix.basename(workspacePackage.dir);
   const named = `${operation}:${shortName}`;
   const namedCommand = scripts[named];
-  if (namedCommand !== undefined && !targetsAnotherWorkspace(namedCommand)) {
+  if (namedCommand !== undefined && !unusableRootScript(namedCommand)) {
     return named;
   }
   if (workspacePackage.name === undefined) {
@@ -568,8 +856,87 @@ function findScopedRootScript(
     ([name, command]) =>
       (name === operation || name.startsWith(`${operation}:`)) &&
       referencesPackageName(command, workspacePackage.name as string) &&
-      !targetsAnotherWorkspace(command),
+      !unusableRootScript(command),
   )?.[0];
+}
+
+/**
+ * Whether a command selects a workspace package the repository does not
+ * contain. Task-runner fan-out scripts (turbo/pnpm `--filter`, lerna
+ * `--scope`, nx `--project`) validate every selector before launching, so a
+ * script naming a package absent from the workspace set — a proprietary
+ * sibling stripped from an OSS checkout, as with cal.com's `dev:all` reaching
+ * for `@calcom/website` — aborts before the real app can bind. Returns the
+ * first offending package name so callers can name it in a repair message.
+ *
+ * A selector is judged absent only when it names the repository's own
+ * namespace yet matches no workspace: a scoped name is judged when it shares a
+ * scope with a known workspace, an unscoped name only when the repo actually
+ * uses unscoped workspace names and the name matches neither a full workspace
+ * name nor a workspace's short name (so `--filter=web` still resolves to
+ * `@a/web`). Pnpm relationship markers are stripped before that check, while
+ * registry dependencies of a foreign scope, path filters (`./pkg`), and
+ * globs (`@a/*`) are never judged, so only a genuinely missing target trips
+ * this.
+ */
+function readAbsentWorkspacePackage(
+  command: string,
+  knownWorkspaceNames: ReadonlySet<string>,
+): string | undefined {
+  const readScope = (name: string) => /^(@[A-Za-z0-9._-]+)\//.exec(name)?.[1];
+  const shortNameOf = (name: string) =>
+    name.includes("/") ? name.slice(name.lastIndexOf("/") + 1) : name;
+  const knownScopes = new Set(
+    [...knownWorkspaceNames].flatMap((name) => {
+      const scope = readScope(name);
+      return scope === undefined ? [] : [scope];
+    }),
+  );
+  const knownShortNames = new Set([...knownWorkspaceNames].map(shortNameOf));
+  const repoUsesUnscopedNames = [...knownWorkspaceNames].some(
+    (name) => !name.startsWith("@"),
+  );
+  for (const match of command.matchAll(
+    /--(?:filter|workspace|scope|projects?)[=\s]+["']?([^"'\s]+)["']?/g,
+  )) {
+    // Nx accepts a comma-delimited --projects list. Every project remains an
+    // independent selector for the same absent-workspace safety invariant.
+    for (const rawSelector of (match[1] ?? "").split(",")) {
+      // Pnpm relationship markers (`web...`, `...web`) change graph breadth;
+      // their base remains a literal selector and must still resolve.
+      const selector = rawSelector
+        .replace(/^\.\.\./, "")
+        .replace(/\.\.\.$/, "");
+      if (selector.length === 0 || selector.includes("...")) {
+        continue;
+      }
+      const scope = readScope(selector);
+      if (scope !== undefined) {
+        // A clean scoped name only; a scoped glob (`@a/*`) or extra segment is
+        // not a literal package selector.
+        if (!/^@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(selector)) {
+          continue;
+        }
+        if (knownScopes.has(scope) && !knownWorkspaceNames.has(selector)) {
+          return selector;
+        }
+        continue;
+      }
+      // A bare identifier only; anything with a slash is a path filter and
+      // anything with glob/pattern punctuation is not a literal name.
+      if (!/^[A-Za-z0-9._-]+$/.test(selector)) {
+        continue;
+      }
+      if (
+        repoUsesUnscopedNames &&
+        !knownWorkspaceNames.has(selector) &&
+        !knownShortNames.has(selector)
+      ) {
+        return selector;
+      }
+    }
+  }
+  return undefined;
 }
 
 /**

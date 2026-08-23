@@ -71,7 +71,10 @@ describe("OpenCode harness seam", () => {
         workingDirectory: "/workspace/repo",
         workspace: createFakeAgentHarnessWorkspace({
           async execute(command, options) {
-            if (!command.startsWith("mkdir -p '/tmp/makeademo/opencode' && ")) {
+            const mkdirAt = command.indexOf(
+              "mkdir -p '/tmp/makeademo/opencode' && ",
+            );
+            if (mkdirAt === -1 || command.indexOf("opencode run") < mkdirAt) {
               return {
                 exitCode: 1,
                 stderr:
@@ -92,6 +95,74 @@ describe("OpenCode harness seam", () => {
       exitCode: 0,
       stdout: "/tmp/makeademo/opencode",
     });
+  });
+
+  it("keeps a silent working OpenCode run alive with CPU heartbeats", async () => {
+    // The no-output watchdog killed working agents 43 times in one matrix
+    // (2026-08-09): a long tool call streams nothing while it works. The
+    // runner brackets OpenCode with the CPU-liveness sampler so silence
+    // with progress stays alive and silence without progress still dies.
+    const runner = new DefaultOpenCodeHarnessRunner();
+    const commands: string[] = [];
+
+    await runner.run({
+      availableTools: ["read", "write"],
+      configDir: "/tmp/makeademo/opencode",
+      model: "openai/gpt-5",
+      prompt: "Prepare the repo.",
+      stage: "repo-preparation",
+      timeoutMs: 1000,
+      workingDirectory: "/workspace/repo",
+      workspace: createFakeAgentHarnessWorkspace({
+        async execute(command) {
+          commands.push(command);
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      }),
+    });
+
+    const command = commands.find((entry) => entry.includes("opencode run"));
+    expect(command).toContain("[makeademo:alive] cpu");
+    // The heartbeat wrapper must preserve OpenCode's own exit status.
+    expect(command).toContain('sh -c "exit $makeademo_alive_status"');
+  });
+
+  it("installs the agent-liveness plugin in the config dir before launching", async () => {
+    // A model can stream tokens for longer than the inactivity window
+    // without touching the terminal (silent tool calls, long thinking);
+    // the plugin turns event-bus activity into throttled stderr beats the
+    // PTY watchdog can hear. OpenCode auto-loads `<configDir>/plugin/`.
+    const events: string[] = [];
+    const writes: Array<{ contents: string; path: string }> = [];
+
+    await new DefaultOpenCodeHarnessRunner().run({
+      availableTools: ["read", "write"],
+      configDir: "/tmp/makeademo/opencode",
+      model: "openai/gpt-5",
+      prompt: "Prepare the repo.",
+      stage: "repo-preparation",
+      timeoutMs: 1000,
+      workingDirectory: "/workspace/repo",
+      workspace: createFakeAgentHarnessWorkspace({
+        async execute() {
+          events.push("execute");
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async writeTextFile(path, contents) {
+          events.push("write");
+          writes.push({ contents, path });
+        },
+      }),
+    });
+
+    const pluginWrite = writes.find(
+      (write) =>
+        write.path === "/tmp/makeademo/opencode/plugin/agent-liveness.js",
+    );
+    expect(pluginWrite?.contents).toContain("[makeademo:agent-alive]");
+    expect(events.indexOf("execute")).toBeGreaterThan(
+      events.lastIndexOf("write"),
+    );
   });
 
   it("applies stage deadlines and streams OpenCode output to the caller", async () => {
@@ -380,6 +451,10 @@ describe("OpenCode harness seam", () => {
       {
         artifacts: ["../.makeademo/preparation-manifest.json"],
         stage: "repo-preparation-repair",
+      },
+      {
+        artifacts: ["../.makeademo/repair-advice.json"],
+        stage: "repair-strategy",
       },
       {
         artifacts: ["../.makeademo/runtime-target-selection.json"],

@@ -519,6 +519,58 @@ describe("DemoScriptContract", () => {
     ).toMatchObject({ status: "passed" });
   });
 
+  it("prints both locators when a script locator differs from its verified candidate", () => {
+    // N125(4): "does not match" without the two locators forces the repair
+    // agent to guess which side drifted; naming expected and actual makes a
+    // genuine drafting slip fixable in one round.
+    const catalog = readActionCatalog(actionCatalog());
+    const sourceAction = catalog.actions[0];
+    if (sourceAction === undefined) {
+      throw new Error("Expected the dashboard action fixture");
+    }
+    sourceAction.locatorCandidates = [
+      {
+        id: "open-dashboard-locator-1",
+        locator: {
+          exact: false,
+          name: "Open dashboard",
+          role: "button",
+          strategy: "role",
+        },
+        verification: { matchCount: 1, route: "/", visible: true },
+      },
+    ];
+    sourceAction.preferredLocatorCandidateId = "open-dashboard-locator-1";
+    const script = structuredClone(validDemoScript()) as unknown as {
+      scenes: Array<{ actions: BrowserAction[] }>;
+    };
+    const firstAction = script.scenes[0]?.actions[0];
+    if (firstAction === undefined || !("locator" in firstAction)) {
+      throw new Error("Expected the dashboard click fixture");
+    }
+    firstAction.locator = {
+      exact: false,
+      name: "Open dashboards",
+      role: "button",
+      strategy: "role",
+    };
+    firstAction.locatorCandidateId = "open-dashboard-locator-1";
+
+    const validation = validateDemoScriptCandidateContract({
+      actionCatalog: catalog,
+      flowSpec: flowSpec(),
+      preparationManifest: preparationManifest(),
+      scriptCandidate: scriptCandidate(script),
+    });
+
+    expect(validation).toMatchObject({ status: "failed" });
+    expect(validation.logsSummary).toContain(
+      "locator does not match browser-verified candidate open-dashboard-locator-1",
+    );
+    expect(validation.logsSummary).toContain('"Open dashboards"');
+    expect(validation.logsSummary).toContain('"Open dashboard"');
+  });
+
   it("accepts a navigate-grounded goto without requiring FlowSpec selection", () => {
     const catalog = readActionCatalog({
       ...actionCatalog(),
@@ -542,6 +594,166 @@ describe("DemoScriptContract", () => {
         scriptCandidate: scriptCandidate(script),
       }),
     ).toMatchObject({ status: "passed" });
+  });
+
+  it("derives click navigation settlement from structured catalog evidence", () => {
+    // N141 (calcom, 2026-08-14): clicking New redirects to /auth/login and
+    // the immediately following goto must wait for that navigation. The
+    // destination is structured browser evidence; prose is deliberately
+    // uninformative so this cannot regress to expectedResult parsing.
+    const catalog = readActionCatalog({
+      ...actionCatalog(),
+      actions: [
+        ...actionCatalog().actions.map((action) =>
+          action.id === "open-dashboard"
+            ? {
+                ...action,
+                expectedResult: "The next surface opened",
+                navigationDestination: "/auth/login",
+              }
+            : action,
+        ),
+        navigateAction(),
+      ],
+    });
+    const script = structuredClone(validDemoScript()) as unknown as {
+      scenes: Array<{ actions: BrowserAction[] }>;
+    };
+    script.scenes[0]?.actions.splice(1, 0, {
+      id: "return-dashboard",
+      path: "/",
+      sourceActionId: "navigate-dashboard",
+      type: "goto",
+    });
+
+    const augmented = ensureSceneNavigation({
+      actionCatalog: catalog,
+      scriptCandidate: readScriptCandidate(scriptCandidate(script)),
+    });
+    const augmentedActions = (
+      augmented.scriptJsonContent as {
+        scenes: Array<{ actions: BrowserAction[] }>;
+      }
+    ).scenes[0]?.actions;
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: augmented,
+      }),
+    ).toMatchObject({ status: "passed" });
+    expect(
+      augmentedActions?.find((action) => action.id === "open-dashboard"),
+    ).toMatchObject({ navigationDestination: "/auth/login", type: "click" });
+  });
+
+  it("rejects a click navigation destination that is not a valid local path", () => {
+    // N158 (excalidraw): the compiled script waited forever on
+    // "/undefined/plus?utm_source=..." — the app interpolated a missing
+    // value into its own URL and the catalog agreed with it. Catalog
+    // agreement is no defense; the contract must reject any destination
+    // that is not a navigable local path.
+    const catalog = readActionCatalog({
+      ...actionCatalog(),
+      actions: [
+        ...actionCatalog().actions.map((action) =>
+          action.id === "open-dashboard"
+            ? {
+                ...action,
+                navigationDestination: "/undefined/plus?utm_source=excalidraw",
+              }
+            : action,
+        ),
+        navigateAction(),
+      ],
+    });
+    const script = structuredClone(validDemoScript()) as unknown as {
+      scenes: Array<{ actions: Array<Record<string, unknown>> }>;
+    };
+    const clickAction = script.scenes[0]?.actions.find(
+      (action) => action.type === "click",
+    );
+    if (clickAction === undefined) {
+      throw new Error("Expected a click action fixture");
+    }
+    clickAction.navigationDestination = "/undefined/plus?utm_source=excalidraw";
+
+    const report = validateDemoScriptCandidateContract({
+      actionCatalog: catalog,
+      flowSpec: flowSpec(),
+      preparationManifest: preparationManifest(),
+      scriptCandidate: scriptCandidate(script),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("missing-value interpolation");
+  });
+
+  it("never injects a catalog destination carrying a missing-value interpolation", () => {
+    // N158: enrichment must strip the unreachable destination rather than
+    // copy it into the script, where the reject above would trap the repair
+    // loop on evidence no repair round can change.
+    const catalog = readActionCatalog({
+      ...actionCatalog(),
+      actions: [
+        ...actionCatalog().actions.map((action) =>
+          action.id === "open-dashboard"
+            ? {
+                ...action,
+                navigationDestination: "/undefined/plus?utm_source=excalidraw",
+              }
+            : action,
+        ),
+        navigateAction(),
+      ],
+    });
+
+    const augmented = ensureSceneNavigation({
+      actionCatalog: catalog,
+      scriptCandidate: readScriptCandidate(scriptCandidate(validDemoScript())),
+    });
+
+    const actions = (
+      augmented.scriptJsonContent as {
+        scenes: Array<{ actions: Array<Record<string, unknown>> }>;
+      }
+    ).scenes[0]?.actions;
+    expect(
+      actions?.find((action) => action.type === "click"),
+    ).not.toHaveProperty("navigationDestination");
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: augmented,
+      }),
+    ).toMatchObject({ status: "passed" });
+  });
+
+  it("rejects a click navigation destination pointing off the app", () => {
+    const script = structuredClone(validDemoScript()) as unknown as {
+      scenes: Array<{ actions: Array<Record<string, unknown>> }>;
+    };
+    const clickAction = script.scenes[0]?.actions.find(
+      (action) => action.type === "click",
+    );
+    if (clickAction === undefined) {
+      throw new Error("Expected a click action fixture");
+    }
+    clickAction.navigationDestination = "https://plus.excalidraw.com/plus";
+
+    const report = validateDemoScriptCandidateContract({
+      actionCatalog: readActionCatalog(actionCatalog()),
+      flowSpec: flowSpec(),
+      preparationManifest: preparationManifest(),
+      scriptCandidate: scriptCandidate(script),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("local app path");
   });
 
   it("derives the missing Scene navigation from the catalog route", () => {
@@ -806,7 +1018,7 @@ describe("DemoScriptContract", () => {
           ...scriptCandidate(validDemoScript()),
           browserActionCompilerVersion: "stale",
         },
-        "browserActionCompilerVersion must be 2026-07-18.1",
+        "browserActionCompilerVersion must be 2026-08-14.1",
       ],
       [
         "agent-authored Playwright source",
@@ -927,7 +1139,7 @@ function scriptCandidate(scriptJsonContent: unknown) {
       stdoutExcerpts: [],
       suggestedRepairHints: [],
     },
-    browserActionCompilerVersion: "2026-07-18.1",
+    browserActionCompilerVersion: "2026-08-14.1",
     bunRuntimeVersion: "1.3.14",
     captureSdkVersion: "2026-07-18.1",
     contractVersion: "2026-07-12.1",

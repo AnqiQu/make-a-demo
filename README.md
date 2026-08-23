@@ -125,6 +125,10 @@ FINAL_VIDEO_EMAILS_ENABLED=false
 RESEND_API_KEY=re_...
 RESEND_FROM_EMAIL="MakeADemo <demo@your-domain.com>"
 PUBLIC_APP_BASE_URL=https://your-app-domain.com
+
+# Email yourself the matrix pass/fail report when `bun run pipeline:matrix` finishes.
+TEXTME=false
+TEXTME_EMAIL=you@example.com
 ```
 
 Apply the Drizzle schema after creating or changing the database:
@@ -141,7 +145,7 @@ Cloudflare R2 stores Supporting Documents and final demo videos. Supporting Docu
 
 The GitHub App needs repository metadata and contents read permissions. Public repos can be submitted by URL; private repos use the GitHub App installation flow.
 
-Resend is optional. Email notifications are disabled unless `FINAL_VIDEO_EMAILS_ENABLED=true` or `FINAL_VIDEO_EMAILS_ENABLED=1`.
+Resend is optional. Email notifications are disabled unless `FINAL_VIDEO_EMAILS_ENABLED=true` or `FINAL_VIDEO_EMAILS_ENABLED=1`. Setting `TEXTME=true` with a `TEXTME_EMAIL` recipient reuses the same Resend credentials to email you the pass/fail report when a `bun run pipeline:matrix` batch finishes; a delivery failure is logged without failing the batch.
 
 ## Railway Deployment
 

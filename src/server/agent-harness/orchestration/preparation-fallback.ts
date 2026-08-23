@@ -1,10 +1,15 @@
-import type { ValidationReport } from "../schemas/artifacts";
+import { readStderrErrorSignal } from "../app-explorer/stderr-error-signal";
+import type { FeatureVerdict, ValidationReport } from "../schemas/artifacts";
 
-const PREPARATION_FALLBACK_SCHEMA_VERSION = "2026-07-11";
+const PREPARATION_FALLBACK_SCHEMA_VERSION = "2026-08-10";
 
 export type PreparationFallbackArtifact = {
   blockers: Array<{
     failureClassification?: string;
+    /** The last exploration's per-feature verdict ledger (N106), when one exists. */
+    featureVerdicts?: FeatureVerdict[];
+    /** Error-class stderr lines from the failed run, warning noise removed. */
+    stderrErrorSignal?: string;
     suggestedRepairHints: string[];
     summary: string;
   }>;
@@ -60,17 +65,62 @@ export function createPreparationFallbackArtifact(input: {
             summary: readErrorMessage(input.error),
           },
         ]
-      : failedReports.map((report) => ({
-          ...(report.failureClassification === undefined
-            ? {}
-            : { failureClassification: report.failureClassification }),
-          suggestedRepairHints: report.suggestedRepairHints,
-          summary: report.logsSummary,
-        }));
+      : failedReports.map((report) => {
+          const stderrErrorSignal = readStderrErrorSignal(
+            report.stderrExcerpts.join("\n"),
+          );
+          return {
+            ...(report.failureClassification === undefined
+              ? {}
+              : { failureClassification: report.failureClassification }),
+            ...(report.featureVerdicts === undefined ||
+            report.featureVerdicts.length === 0
+              ? {}
+              : { featureVerdicts: report.featureVerdicts }),
+            ...(stderrErrorSignal === undefined ? {} : { stderrErrorSignal }),
+            suggestedRepairHints: report.suggestedRepairHints,
+            summary: report.logsSummary,
+          };
+        });
   const revision = input.commitSha ?? "the submitted revision";
   const blockerText = blockers
     .map((blocker, index) => `${index + 1}. ${blocker.summary}`)
     .join("\n");
+  // The failed run already paid for this evidence: the ledger names each
+  // feature's exact blocker, the hints name the repairs the gate wants, and
+  // the stderr signal names the server-side fault. A fallback prompt that
+  // rendered only logsSummary would restart the outside coding agent from
+  // less knowledge than the run it replaces (N106).
+  const evidenceSections = blockers.flatMap((blocker) => [
+    ...(blocker.featureVerdicts === undefined
+      ? []
+      : [
+          [
+            "Per-feature browser verdicts from the failed run:",
+            ...blocker.featureVerdicts.map((verdict) =>
+              verdict.verdict === "grounded"
+                ? `- ${verdict.featureId}: grounded (${verdict.groundedBy})${verdict.detail === undefined ? "" : ` — ${verdict.detail}`}`
+                : `- ${verdict.featureId}: failed (${verdict.failedBecause})${verdict.detail === undefined ? "" : ` — ${verdict.detail}`}`,
+            ),
+          ].join("\n"),
+        ]),
+    ...(blocker.suggestedRepairHints.length === 0
+      ? []
+      : [
+          [
+            "Apply these repair hints from the failed run:",
+            ...blocker.suggestedRepairHints.map((hint) => `- ${hint}`),
+          ].join("\n"),
+        ]),
+    ...(blocker.stderrErrorSignal === undefined
+      ? []
+      : [
+          [
+            "Decisive app stderr lines observed while routes rendered:",
+            blocker.stderrErrorSignal,
+          ].join("\n"),
+        ]),
+  ]);
 
   return {
     blockers,
@@ -80,6 +130,7 @@ export function createPreparationFallbackArtifact(input: {
       `Prepare ${input.repoUrl} at ${revision} for a deterministic, local-only MakeADemo run.`,
       "Resolve these observed blockers:",
       blockerText,
+      ...evidenceSections,
       "Keep production behavior intact. Add only the local fixtures, mocks, commands, and documented assumptions needed for a repeatable browser demo with runtime network disabled.",
       "Return the exact install, build, start, local URL, fixture, and reset instructions, plus the files changed.",
     ].join("\n\n"),

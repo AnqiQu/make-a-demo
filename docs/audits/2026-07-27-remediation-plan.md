@@ -3701,3 +3701,5762 @@ trailers, conduit's flow rejection must echo its own referenced
 ids, twenty's disk markers must prove or retire N87 prong 3, and
 cyberchef-class tool UIs now have the revealed-evidence lane to
 ground and script against.
+
+## Addendum (2026-08-13, remotion delayRender smoke flake root-caused: display sleep, not host load)
+
+The recurring `remotion-video-renderer` smoke failure (`delayRender
+"Waiting for root component to load" not cleared`, 28s on 2026-08-02
+and 118s in the 2026-08-08 and 2026-08-12 windows, previously
+attributed to machine load / a memory-starved host) is
+display-coupled, not load-coupled. The test pinned Playwright's
+full-Chrome build (Chrome for Testing 148); a full-Chrome page keeps
+executing JS and timers while the macOS display sleeps but produces
+no frames, so the requestAnimationFrame that clears the
+root-component handle never runs. Evidence: every failing launch on
+2026-08-12 (20:20-21:16) and 2026-08-13 (10:22-10:27) started while
+`pmset -g log` shows the display off, and every pass ran display-on;
+in a single failing window, full Chrome failed 5/5 across
+gl=default/swangle and --headless=old/new while Remotion's managed
+chrome-headless-shell passed in the same window. The prior
+load/memory correlation was coincidental: away-from-keyboard windows
+are both when matrix sessions run and when the display sleeps. Fix:
+the smoke test now uses the Remotion-managed chrome-headless-shell
+with no `browserExecutable`, exactly like production compositing
+(`createDefaultRenderer`), and the now-unused `@playwright/test`
+devDependency is removed; verified 5/5 green with the display asleep.
+Raising `timeoutInMilliseconds` can never fix this class — an asleep
+display stalls frames indefinitely.
+
+## Addendum (2026-08-09, tenth 11-repo matrix — conduit and cyberchef first videos; the fidelity false-veto class; N92–N97)
+
+Run `matrix-2026-08-09T04-38-20-486Z` / report
+`matrix-report-2026-08-09T05-39-40-016Z.json`. Two passed, both
+**first-ever videos**: conduit (41min) and cyberchef (45min —
+grounded through N89's revealed-evidence lane, exactly its
+acceptance gate). Nine failed. Batch scorecard: N89 validated
+end-to-end, N90's bonus round observed live (excalidraw's sixth
+attempt after its failing-feature set shrank 2→1), N84/N88
+validated by conduit's clean pass, N87's twenty question left
+unanswered (twenty died before install). Two acceptance gates
+failed in instructive ways: calcom's lifecycle verdict is still
+illegible (the trailer exists but nothing excerpts around it), and
+outline failed at exploration for the right reason but with its
+repair budget already spent upstream. The frontier this cycle is
+not a new capability: it is precision. The preparation-fidelity
+gate's false vetoes are now the dominant run-killer (four runs),
+and one-shot infrastructure fragility (a single 502, a dropped
+PTY tail, a 20-minute hang) killed or blinded four more.
+
+### Diagnoses
+
+**The fidelity false-veto class (directus killed; excalidraw
+killed; outline 2/5 budget; ghost 2/5 budget).** The gate answers
+semantic questions with syntactic proxies, and every proxy failed
+on a real repo this run. Directus's preparation was textbook — a
+fixture axios adapter (`demo-api.ts`) selected by `if (isDemo)` in
+`api.ts`/`hydrate.ts`, original UI untouched — and was vetoed
+because `app/src/utils/is-demo.ts`, a one-line boolean gate,
+"creates replacement product UI": `isProductPresentationPath`
+treats every path under a directory named `app/` as presentation
+(directus's whole frontend package is named `app/`), and
+`isDemoSeamPath`'s vocabulary has no `demo` token, so MakeADemo's
+own gate file is not a seam to MakeADemo's own checker. The
+repeated wrong verdict then hit the fidelity fingerprint cap of 1
+→ dead run. Excalidraw's last two repairs seeded a demo canvas
+scene — precisely what its failing undo/redo feature needed — and
+attempt 7 gated it canonically (`const isMakeADemoDemo =
+import.meta.env.VITE_MAKEADEMO_DEMO === "true"` … `if
+(isMakeADemoDemo) { return { scene: getMakeADemoScene(), … } }`);
+`readDemoGateIdentifiers`' lookbehind `(?<![A-Za-z0-9_])` rejects
+the flag inside `VITE_MAKEADEMO_DEMO` (always preceded by `_`), so
+the Vite-required prefix made the gate invisible and the "does not
+conditionally use the demo gate" veto fired; attempt 6's
+`__MAKEADEMO_DEMO__` define-constant hit the same underscore blind
+spot. Outline lost two rounds to `app/utils/demo.ts`,
+`demoFixtures.ts`, `isDemoMode.ts` (frontend dir also named
+`app/`; camelCase `demoFixtures` cannot match the `fixtures` token
+through the `[./_-]` delimiter requirement). Ghost lost two:
+neutralizing `gravatar.js` — a genuine external-service
+integration — was vetoed "outside a seam" because neither path nor
+diff wording matches the seam vocabulary, and one veto fired on a
+unit-test file. The deepest defect is not any single regex: the
+created-file rule lets a path prior override content evidence — a
+file with zero presentation content was vetoed without its content
+mattering.
+
+**homer, twenty (Daytona 502, no retry).** Both died on a single
+transient 502 during artifact upload (`writeTextFile` →
+`sandbox.fs.uploadFiles`), milliseconds after successful writes,
+inside the 11-way parallel launch window. homer lost a run 3
+minutes in over a 2.4KB file. One HTTP request, no retry, whole
+run.
+
+**calcom (offline lifecycle, evidence lost).** `yarn rebuild &&
+yarn run postinstall` exited 1 three times. The captured PTY
+stream ends at YN0007 "must be built"; yarn's actual failure
+report (YN0009 + the `build.log` path) never appears, though later
+shell output (disk marker, command-end trailer) does — the stream
+dropped the tail. The N69 harvest keys on seeing the `build.log`
+path in output, so it never fired, and all three repairs ran blind
+with empty hints. Compounding: the failure summary is the full raw
+PTY transcript, head-first, ANSI intact — every surface shows
+`stty -echo` preamble garbage instead of the tail.
+
+**ghostfolio (offline lifecycle, lingering hang).** Attempts 1 and
+3 show `prisma generate` succeeding in ~200ms — then the command
+hangs to the 20-minute hard deadline (exit 124), consistent with a
+post-generate phone-home child holding stdio open against the
+sealed network. No inactivity timer exists on the lifecycle
+execute path, so two hangs burned ~40 minutes. Attempt 2 was the
+repair agent mangling the prisma invocation.
+
+**midday (exploration, OOM).** `bun run dev` runs a Next.js/
+Turbopack dev server over a ~30-package monorepo; walking routes
+OOM-killed it under the 4096MiB ceiling (1 cgroup OOM kill). The
+sandbox-capacity classification landed and is correctly terminal —
+only an operator can add memory.
+
+**outline, ghost (hollow data, budget starvation).** Both
+classifications correct, and the evidence reached the repair
+prompts (pageErrors/consoleErrors interpolate). Outline's content
+routes crash with `Cannot read properties of undefined (reading
+'node')` — fixture documents that do not match the ProseMirror
+schema — and the failure was evolving (attempt 1 empty, attempt 2
+the specific crash) exactly when the budget died, pre-spent on two
+preflight repairs and two false fidelity vetoes. Ghost's admin
+shell renders but every API call 400/500s server-side; three
+preflight repairs plus two false vetoes consumed the entire global
+budget of 5 before exploration ever got a repair round — the
+data-path steering never reached an agent.
+
+### The anti-overfit contract
+
+Every item below follows five principles, adopted as standing
+design constraints for validation gates: (1) **content decides,
+path suggests** — a naming convention may nominate a candidate but
+never carry a veto alone; (2) **parse, don't pattern-match** —
+syntactic questions about code get an AST, not a regex window;
+(3) **semantic verdicts require a judge with verifiable
+evidence** — when a gate must decide meaning, an LLM adjudicates
+and its verdict only stands if its quoted evidence literally
+exists in the diff; (4) **evidence comes from the source of
+truth** — files the tool itself wrote, not a PTY stream that can
+drop chunks; (5) **precision failures must not be fatal** —
+budgets reserve room for the terminal stage, and a wrong veto
+costs a round, never the run.
+
+### N92 (Critical, feature) — fidelity: content decides, AST detects, a judge confirms
+
+The gate keeps its genuinely structural rules (entrypoint
+redirection, workspace removal, `readUnpreservedRemovedLine`
+deletion preservation, standalone replacement runtime — zero false
+vetoes to date) and rebuilds the three failing families.
+
+**a. Content over path for created files.** A created file may be
+vetoed as replacement UI only on positive presentation evidence in
+its own content: markup/JSX/styling per `addsProductPresentation`
+(or presentation by file type — .css/.html/.svelte/.vue/images
+are presentation by nature). The directory prior
+(`app|components|pages|routes|screens|views`) and the seam
+vocabulary may nominate candidates and shape messages, never veto
+a content-negative file. This kills the directus/outline class for
+any repo regardless of directory naming, and loses no recall:
+replacement UI must render something, so it must contain markup.
+
+**b. AST gate detection.** New pure module (e.g.
+`src/server/agent-harness/repo-preparation/demo-gate-analysis.ts`)
+replacing `readsDemoFlag`/`readDemoGateIdentifiers`/
+`isConditionalUse`/`isBoundInFile`. Parse changed files with the
+TypeScript compiler API (handles .js/.jsx/.ts/.tsx/.mjs/.cjs; for
+.vue/.svelte extract `<script>` blocks first). A **gate name** is
+any identifier or env/define property whose name contains
+`MAKEADEMO_DEMO` case-insensitively — substring, not
+delimiter-bound, because this is the one token the pipeline itself
+owns and instructs agents to use; `VITE_`/`NEXT_PUBLIC_` prefixes
+and `__…__` define-constants are then automatically gate names. A
+**gate binding** is any const/let/var/function whose initializer
+references a gate name (followed transitively through local
+bindings). An added statement is **gated** when an AST ancestor
+if/ternary/`&&`/`||`/early-return condition references a gate name
+or binding. Unparseable or non-JS-family files fail open for gate
+detection (no veto on "no gate found" without a parse) — the judge
+in (c) still sees them. Exported with a docstring; direct unit
+tests: prefixed env reads, define constants, multi-hop bindings,
+ternary/guard-clause/if forms, unparseable input → undefined.
+
+**c. Judged vetoes.** `validatePreparationFidelity` stays pure and
+becomes the candidate generator. When it proposes ≥1 violation,
+the caller in `default-harness-dependencies.ts` runs one
+adjudication agent command in the preparation sandbox (existing
+OpenCode machinery and provider secret; no new infra seam). Input:
+the candidate violations, the flagged files' diff hunks (bounded
+per file), created files' content (bounded), the manifest's
+declared adaptations (`localDemoModeChanges`,
+`mocksAndFixturesAdded`, `authBypassOrDemoIdentity`, `envUsed`),
+and the fidelity rules. Output artifact
+(`fidelity-adjudication.json`, schema-validated): per candidate
+`confirm`/`overturn` + quoted evidence lines + a steering message.
+Code verifies every `confirm`'s quotes literally appear in the
+named file's diff; a confirm with unverifiable quotes downgrades
+to overturn (a hallucinated veto cannot survive). Overturned
+candidates are dropped; confirmed ones veto with the judge's
+steering (repairs finally get told *what* to change instead of
+"creates replacement product UI" pointed at a one-line boolean).
+Guards: `patchSha256` compared before/after adjudication — a
+changed diff discards the adjudication and keeps the candidate
+verdict; an adjudication agent failure keeps the candidate verdict
+and marks the report unadjudicated (the judge can only rescue from
+false vetoes — its absence is exactly today's behavior, never
+weaker). Cost lands only on the veto path. Adjudication outcomes
+(per-candidate verdicts and whether quotes verified) are recorded
+in the fidelity report artifact so future diagnoses can audit the
+judge. Tests through the caller seam with a fake agent runner:
+confirm-with-real-quotes → veto stands with judge steering;
+confirm-with-fabricated-quotes → overturned; agent failure → veto
+stands, unadjudicated marker; diff mutated during adjudication →
+adjudication discarded. One integration-style test runs the real
+artifact plumbing.
+
+**d. Vocabulary demotion.** `isDemoSeamPath` and the term lists
+survive only as candidate-classifiers (choosing which message a
+candidate gets) — with (a) and (c) their gaps cost a judge call,
+not a run. One addition, owned-convention not vocab-chasing: any
+path segment containing `demo` (case-insensitive, substring)
+counts as a demo seam, because the pipeline's own prompts tell
+agents to build demo-gated adaptations under exactly such names.
+
+**e. Regression fixtures from this run.** Directus-shaped (created
+one-line gate file under `app/`), excalidraw-shaped (gated scene
+seeding with `VITE_`-prefixed flag), outline-shaped (camelCase
+`demoFixtures.ts`), ghost-shaped (external-service neutralization
+with non-vocab wording) — all must pass candidate generation
+without a veto or be overturned by the judge; plus a true-positive
+fixture (created `.tsx` with JSX replacing an original import,
+ungated) that must still veto.
+
+### N93 (High, feature) — exploration repair reserve
+
+One global budget across all stages means early-stage churn
+starves the terminal stage; ghost reached exploration with zero
+rounds left. At the `repairPreparationManifest` call site
+(agent-harness.ts), failures whose `stage === "app-exploration"`
+may consume up to 2 repair rounds beyond the global limit when the
+budget was exhausted before exploration's first failure — hard cap
+`repoPreparationRepairLimit + 2` total, fingerprint caps and the
+N90 bonus unchanged (worst case 5+2+2 rounds, bounded). No
+reservation for earlier stages: they already run first and their
+classes are covered by fingerprint caps. Orchestration tests
+through `runAgentHarnessPipeline`: budget spent to the limit
+pre-exploration still yields 2 exploration repairs; the +2 cap
+holds; a run that never reaches exploration is unchanged.
+
+### N94 (High, bugfix) — retry transient Daytona artifact transfers
+
+`writeTextFile`, `uploadFiles`, and the submitted-code artifact
+transfer paths in
+`daytona-sdk-preparation-workspace-provider.ts` wrap their body in
+a shared bounded retry: 3 attempts, backoff (~1s/4s), retrying
+only transport-transient failures (HTTP 5xx status codes,
+ECONNRESET/ETIMEDOUT-class errors). The temp-path + `mv` promotion
+design is already idempotent; each retry uses a fresh transferId.
+Agent command execution is deliberately out of scope (not
+idempotent). Provider tests with a fake sandbox: one 502 then
+success → succeeds with one retry and a single promoted file;
+persistent 502 → fails after 3 with the original message
+preserved; non-transient error → no retry.
+
+### N95 (High, bugfix) — lifecycle evidence from files, legible tails
+
+Three parts, one principle: the report must carry causes, and must
+survive a lossy stream. (1) **Tee to a file.** The
+`withDiskMarkers` lifecycle/install wrapper also tees combined
+output to a sandbox file (`/tmp/makeademo/lifecycle-<uuid>.log`,
+preserving the command's exit code via PIPESTATUS); on failure the
+harness reads the file's bounded tail — deterministic evidence
+currency even when the PTY drops chunks (calcom's missing YN0009).
+(2) **Harvest the manager's own logs.** On lifecycle/install
+failure, harvest bounded tails of the package manager's standard
+failure logs regardless of whether the stream referenced them:
+newest `$TMPDIR/xfs-*/build.log` globs (yarn berry's documented
+build-log location), newest `/root/.npm/_logs/*-debug-0.log`
+(npm always writes one). This is manager-convention knowledge, not
+repo-specific. (3) **Tail-biased, clean summaries.** The
+`Network-closed lifecycle scripts failed…` summary (and install
+failures generally) leads with an ANSI-stripped excerpt of the
+*last* ~4KB up to and including the `[makeademo:command-end]`
+trailer plus the disk-marker lines, never the raw head; a shared
+`stripAnsi` is applied at excerpt construction so no surface shows
+escape-sequence garbage again. Full raw output stays in the
+stdout/stderr fields. Tests with a fake workspace: stream missing
+the failure tail + file tail present → summary carries the file
+tail; build.log/npm-log harvest fires without an output reference;
+summary head is legible prose, no ESC bytes.
+
+### N96 (Medium, feature) — lifecycle inactivity deadline + standard telemetry opt-outs
+
+(1) `executeSubmittedWithDeadlineEvidence` gains an
+inactivity deadline (default 300s, matching the agent-command
+no-output policy): a lifecycle command producing no output for the
+window is killed with a
+`[makeademo:timeout] no output for …ms` marker distinguishing
+hang-after-quiet from deadline-overrun — ghostfolio's class costs
+5 minutes and reports itself instead of costing 20 and reporting
+nothing. Builds that legitimately go quiet longer than 300s can
+raise it per call. (2) The sealed-runtime environment declares the
+ecosystem-standard telemetry opt-outs (`DO_NOT_TRACK=1`,
+`CHECKPOINT_DISABLE=1`, `NEXT_TELEMETRY_DISABLED=1`) so
+post-success phone-home children never hold stdio open against
+the sealed network in the first place. These are industry
+conventions honored across tools, not per-repo patches. Tests: a
+fake command that emits then stalls → killed at the inactivity
+window with the marker; the env rider carries the opt-outs.
+
+### N97 (Medium, infra) — submitted-code sandbox memory + memory marker
+
+Rebuild the submitted-code snapshot at 8GB memory (CPU 2 and disk
+10 unchanged): midday's dev-server class needs headroom no repo
+change can provide, and quota math still clears the 11-way matrix.
+Alongside the disk markers, `withDiskMarkers` also emits a
+`[makeademo:mem]` line reading `memory.peak` from the cgroup after
+lifecycle and start commands, so the next capacity diagnosis reads
+peaks from the transcript instead of inferring them. Rollout via
+the existing rotation: `bunx daytona snapshot create … --memory
+8`, `.env` repoint, `bun run verify:daytona-image`.
+
+### Rejected as non-general
+
+Expanding the seam vocabulary token-by-token (the treadmill this
+batch retires); demanding envUsed spell every prefixed variant of
+the gate flag (the code owns the semantic: substring on our one
+reserved token); a full-LLM fidelity judge on every validation
+attempt (cost on the happy path; heuristics stay as free candidate
+generators); behavioral fidelity verification via exploration
+(replacement UI renders fine — only diff-level judgment can tell
+an adaptation from a substitute); `CI=1` as a telemetry opt-out
+(changes real build behavior in CRA-class tooling); banning dev
+servers for monorepos (production builds can OOM too and cost
+minutes; capacity is the honest fix); chasing the Daytona PTY
+chunk-loss bug upstream (file-based evidence makes the stream
+non-load-bearing); retrying agent commands (not idempotent).
+
+### Recommended order
+
+N94 → N95 → N96 (small, independent, stop losing runs and
+evidence to infrastructure) → N92 (the batch's core, in order
+a→b→d→c→e so the pure logic lands before the judge) → N93 →
+N97 rollout last (snapshot rebuild + verify). TDD per item with
+the failing test verified red first; full gauntlet per commit.
+Eleventh matrix is the acceptance gate: directus/excalidraw/
+outline-class preparations must survive fidelity (or die only on
+judge-confirmed evidence), calcom's failure must name the actual
+failing build with a legible tail, ghostfolio must fail fast with
+the inactivity marker or pass outright, homer/twenty must survive
+a 502 blip, midday must explore under 8GB, and ghost/outline must
+spend ≥2 repair rounds on their real data bugs.
+
+### Landed (2026-08-09, same day)
+
+`2b1a96c` N94: `writeTextFile`, `uploadFiles`, and the
+submitted-code artifact transfer share one bounded retry (3
+attempts, ~1s/4s backoff) that fires only on transport-transient
+failures — HTTP 5xx read from `statusCode`/`status`/
+`response.status` or a `status code 5xx` message, plus the
+ECONNRESET/ETIMEDOUT class. Every `writeTextFile` attempt uses a
+fresh remote temp path and all attempted temp paths are cleaned;
+non-transient errors and agent commands never retry, and the
+original error message survives exhaustion. `f51b78f` N95:
+`withDiskMarkers` tees each heavy command's combined output to
+`/tmp/makeademo/<label>-<uuid>.log` (exit code preserved through
+PIPESTATUS); failed lifecycle/install/build summaries lead with an
+ANSI-stripped, tail-biased ~4KB excerpt read back from that file,
+ending at the `[makeademo:command-end] exit=N` trailer, and the
+manager's own logs (newest `$TMPDIR/xfs-*/build.log` globs, newest
+`/root/.npm/_logs/*-debug-0.log`) are harvested whether or not the
+stream referenced them. Shared `shared/text/strip-ansi.ts` strips
+escapes at every excerpt seam. `22ac201` N96:
+`executeSubmittedWithDeadlineEvidence` now defaults a 300s
+inactivity deadline — a quiet lifecycle command is killed with
+`[makeademo:timeout] no output for …ms` instead of burning the
+20-minute hard deadline — and the sealed runtime env declares
+`DO_NOT_TRACK=1`, `CHECKPOINT_DISABLE=1`,
+`NEXT_TELEMETRY_DISABLED=1` so phone-home children never hold
+stdio open against the sealed network.
+
+N92 in five commits. `9c84d68` a: a created file can be vetoed as
+replacement UI only on positive presentation evidence in its own
+content — presentation-by-file-type (.css/.html/.svelte/.vue/
+images; deliberately not .jsx/.tsx) or `addsProductPresentation`
+markup in its diff; the directory prior only nominates. `7990257`
+b: new pure `repo-preparation/demo-gate-analysis.ts` parses
+changed files with the TypeScript compiler API — a gate name is
+any identifier/env-property/define-constant containing
+`makeademo_demo` (substring, case-insensitive; `VITE_`/
+`NEXT_PUBLIC_`/`__…__` variants come free), gate bindings follow
+initializers transitively, gatedness climbs AST ancestors
+(if/ternary/&&/||/guard clauses), `.vue`/`.svelte` script blocks
+are extracted first, and unparseable or non-JS input fails open.
+A textual env-accessor-shaped fallback keeps comment mentions
+validating configured flags while bare string literals do not
+(typescript moved to runtime dependencies). `7bce9a0` d: the seam
+vocabulary survives only as a candidate classifier, plus one owned
+convention — any path segment containing `demo` is a demo seam.
+`c643ad4` c: `validatePreparationFidelity` is now a pure candidate
+generator; when candidates exist the harness runs one adjudication
+agent in the preparation sandbox (stage
+`preparation-fidelity-adjudication`, artifact
+`fidelity-adjudication.json`, fresh session, 10-minute timeout).
+A confirm verdict must quote verbatim lines that mechanically
+verify against the named file's diff section — hallucinated quotes
+downgrade to `overturned-unverifiable` and drop the veto; overturn
+drops it with the judge's steering recorded; judge failure or a
+`patchSha256` change during adjudication keeps every candidate and
+records `unadjudicated`/`discarded-diff-changed`. Outcomes land in
+the fidelity report for future judge audits, and confirmed vetoes
+finally carry steering that says what to change. `1e8e0d9` e:
+regression fixtures — the ghost-shaped gated gravatar
+neutralization generates its candidate and is cleared by an
+overturn verdict, and the plan-shaped true positive (ungated
+created .tsx whose export takes over an original import) still
+vetoes even under a demo-named path.
+
+`0111de5` N93: app-exploration failures may spend up to 2 repair
+rounds beyond the global limit (`explorationRepairReserveRounds`,
+stacking with the N90 bonus; fingerprint caps unchanged; earlier
+stages get no reservation). The three existing budget tests were
+re-pinned to the widened arithmetic. `50f7ecb` N97 code half:
+`withDiskMarkers` also emits `[makeademo:mem] <label> peak-bytes`
+from the cgroup's `memory.peak` (v2, with the v1
+`memory.max_usage_in_bytes` fallback) after each wrapped command.
+`02dc0d7` regenerated dependency graphs for the new modules.
+
+Verification: TDD per item, failing test verified red first; lint,
+typecheck, test, knip green per commit. Tests 935→976 (+41). The
+remotion-video-renderer delayRender smoke test failed on every
+full run this window; a stash-and-run control on clean HEAD
+reproduced it on this memory-starved host (~34MB free RAM), so it
+is environment-bound, not a regression — tracked as its own
+hardening task.
+
+**N97 operational rollout executed (2026-08-09).**
+`makeademo-submitted-code-browser-ca-20260809-mem8` built via
+`daytona snapshot create` (CPU 2, memory 8GB, disk 10GB) from the
+unchanged Dockerfile; `.env` repointed;
+`bun run verify:daytona-image` passed (one retry after a transient
+sandbox DNS failure on the first attempt). The eleventh matrix
+remains the acceptance gate and awaits an explicit go-ahead.
+
+## Addendum (2026-08-09, eleventh 11-repo matrix — the silence-is-death class; the in-code fixture contract; N98–N101)
+
+Run `matrix-2026-08-09T16-11-15-533Z` / report
+`matrix-report-2026-08-09T17-35-26-992Z.json`. Three passed:
+homer (23min), conduit (33min), excalidraw (49min — its
+preparation survived the rebuilt fidelity gate end-to-end,
+N92's acceptance expectation). Eight failed. Scorecard against
+the N92–N97 gates: no run died at fidelity (the judge lane ran
+repeatedly across five entries without killing anything);
+calcom's failure names its actual broken start target; midday
+explored under 8GB and failed at the data gate for the right
+reason; N97's memory marker was immediately load-bearing
+(twenty's build peaked at exactly 8589934592 bytes — the
+ceiling; ghostfolio 3.25GB; cyberchef 1.35GB). Two gates
+failed instructively: ghost's repair rounds were spent against
+a phantom "install failure" manufactured by a false inactivity
+kill, and outline spent its rounds on its real data bug only
+for the run to die on an unclassified exploration timeout. The
+frontier this cycle: the harness reads silence as death — 43
+five-minute agent inactivity kills across all 11 entries
+(including every pass) plus ghost's sandbox-side false kill —
+and two Daytona seams still convert one transient into a dead
+run. Beneath the infrastructure noise, the recurring
+prep-quality failure is data that never reaches the UI.
+
+### Diagnoses
+
+**The silence-is-death class (≈3.5h wall-clock; ghost
+killed).** Agent commands were killed 43 times by the 300s
+no-output watchdog (midday and excalidraw 7 each; the three
+passes 12 between them). Each kill is ~5 minutes of stall plus
+a burned validation attempt before relaunch; agents running a
+long silent tool call — a build, an install, a slow
+adjudication read — exceed the window while working correctly.
+Ghost is the terminal case, sandbox-side: the N96 lifecycle
+inactivity deadline killed `pnpm rebuild -r` at exit 124
+mid-run — the evidence tail proves everything prior was
+healthy (sqlite3 compiled, re2 rebuilt "info ok") — because
+pnpm buffers each package's script output until the package
+finishes, so one long native compile emits nothing for
+minutes. The verdict was then classified "install failure",
+and all repair attempts chased that phantom until the global
+budget of 5 died. The N95/N96 evidence chain itself worked:
+the `[makeademo:timeout]` marker and legible tail are in the
+attempt file.
+
+**Daytona transients and timeouts outside N94's cover
+(cyberchef killed; outline killed).** Cyberchef died after 71
+minutes when the control-plane socket closed during a
+submitted-code workspace reset — classified "not
+agent-repairable", no retry, though N94 retries the same class
+of failure one seam over. Outline first failed exploration for
+the right reason (`Cannot read properties of undefined
+(reading 'forEach')` on every content route — fixture shape
+mismatch) and spent repair rounds on it per N93; then the
+final exploration attempt hung for the full 420s protocol
+deadline and `AgentHarnessCommandTimeoutError` escaped
+unclassified as a raw pipeline kill — bypassing
+exploration-failure classification and forfeiting the reserve
+rounds that remained.
+
+**midday (data surface stuck loading — a third cause the
+classifier cannot name).** Exploration correctly failed the
+transactions feature, but the aria evidence shows the true
+state: the table mounted rows whose every cell is textless —
+loading skeletons for a query that never resolves. The
+classifier offers exactly two causes (query resolved empty;
+virtualized zero-height body), so both repair rounds steered
+at fixture shape and default filters while the actual defect
+was the wiring between fixture and UI. Two same-fingerprint
+attempts exhausted the lane.
+
+**directus (served at the wrong base; API dead).** The
+screenshots show a login page; `auth/refresh` 404s under
+`/settings/…`; and the app's own relative links resolved
+against the current page into concatenated 404 routes
+(`/settings/admin/settings/data-model`,
+`/content/tasks/admin/content/tasks`) that exploration then
+tagged as the features' routes. The prepared serving
+arrangement put the admin SPA at a base it does not expect
+with no working API behind it; the chrome-only verdict was
+correct and repair never addressed the arrangement.
+
+**calcom, ghostfolio (start commands reference missing
+outputs — legible, unfixed).** Calcom's managed app output
+names it: `turbo … No package found with name '@calcom/
+website' in workspace`. Ghostfolio's start ran without its
+build product: `Cannot find module /workspace/repo/dist/apps/
+api/main`. Both are agent-quality failures with clean
+evidence; both exhausted their repeated-failure lanes.
+
+**twenty (memory ceiling plus missing prerequisite).** The
+build died on `EvalError: Cannot find module
+'twenty-ui/dist/theme-constants.cjs'` — the workspace
+prerequisite was never built, the exact shape N67 steers for,
+but N67's matcher does not recognize the
+`Cannot find module '<pkg>/dist/…'` form. The mem marker
+recorded the build pinned at the 8GB cgroup ceiling, so even a
+correct build order may not fit. Global budget exhausted after
+5 attempts.
+
+**Matrix report truncation.** `readFailureDetail` keeps a
+failure's first line; for multiline lifecycle evidence that
+line is mid-word tail garbage (`ite3 install: …`) while the
+pipeline log holds the legible story. Diagnosis this run
+required the JSONL every time.
+
+### N98 (Critical, feature) — progress-aware liveness: silence plus idle CPU, not silence alone
+
+One primitive retires the class: liveness = output OR CPU-time
+advance. A small wrapper samples the wrapped command's
+process-tree CPU jiffies from `/proc` and prints
+`[makeademo:alive] cpu <n>` at most once a minute, only when
+jiffies advanced since the last sample. The line feeds the
+existing client-side inactivity watchdog unchanged: a silent
+compile burns CPU → heartbeats flow → no kill; a process
+wedged on a blocked syscall goes idle → heartbeats stop → the
+5-minute kill fires exactly as designed. Wrap both seams: the
+OpenCode agent invocation and the sealed
+install/lifecycle/build commands. Two required details:
+`isAgentLaunchFailure`'s only-PTY-bootstrap check and the
+evidence excerpts must filter `[makeademo:alive]` lines (a
+dead agent must not look alive; tails stay legible), and an
+exit-124 verdict whose output carries the `[makeademo:timeout]`
+marker must classify as an inactivity kill ("everything above
+is healthy partial output"), never as "install failure" —
+ghost's five wasted rounds are the cost of that mislabel.
+
+### N99 (High, bugfix) — Daytona transient and timeout cover at the two uncovered seams
+
+Extend N94's transient classifier (socket closed, ECONNRESET
+class, HTTP 5xx) with the same bounded retry to the
+submitted-code workspace reset and the remaining control-plane
+calls it guards nothing of today. At the exploration seam,
+catch `AgentHarnessCommandTimeoutError` from the protocol
+command and convert it into a classified exploration failure
+carrying whatever partial evidence exists ("the protocol did
+not complete; the app likely wedged mid-navigation"), so it
+routes into repo-preparation-repair with N93's reserve intact
+instead of escaping as a raw unclassified pipeline kill.
+
+### N100 (Critical, feature) — the in-code fixture contract: demo data lives in code, in the shape the function declares
+
+The standing directive, stated plainly in the prep contract:
+for each demoed feature, find the exact function the UI calls
+for its data — server query function, API route handler, or
+client fetch hook — and under the demo gate return an in-code
+fixture literal satisfying that function's declared return
+type, resolved immediately. Making the database optional is
+explicitly forbidden: no transport left in the demo path, no
+empty-on-missing fallback. The fixture is the data; nothing is
+fetched. Four coordinated pieces give it teeth:
+
+1. **Manifest declaration (checkable).** Each feature declares
+its data seams — the file/function replaced and the fixture
+module supplying the shape. The validator verifies
+referentially that the declared files appear in the workspace
+diff; no prose reconciliation.
+
+2. **Exploration names the third cause.** The zero-row
+classifier adds the state midday actually presented: rows
+mounted whose cells contain no text — a stuck-loading
+skeleton, detectable from the aria shape alone. Its steering
+quotes the feature's declared data seam: "the fixture in
+`<module>` never reaches `<function>` — return it in code from
+that function; do not gate on database availability." A
+correctly named cause changes the repair fingerprint, so the
+lane earns fresh budget instead of dying on repetition.
+
+3. **The fixture-shape probe (verifier tool, not a
+generator).** After wiring a seam, the agent writes a probe —
+`const _check: Awaited<ReturnType<typeof getTransactions>> =
+fixtures;` — and a small helper runs the repo's own
+`tsc --noEmit` on it, returning the diagnostics. Shape truth
+moves from LLM guesswork to the submitted repo's compiler;
+outline's `forEach` crash dies at authoring time instead of 40
+minutes later at exploration. TypeScript repos only; the probe
+is steered and its result recorded, never a hard veto — a
+probe that cannot run must never kill a legitimate
+preparation. The browser-evidence gate remains the truth for
+every stack.
+
+4. **The data-fixture playbook (skill rider).** The method as
+a checklist in the prep and repair riders: locate the function
+the UI calls; author the fixture as an in-code literal typed
+by its return type; wire it under the demo gate to resolve
+immediately; run the shape probe and record the result; then
+check what no compiler can — fixture dates inside the default
+visible range, status/enum values that survive default
+filters, relations between fixture entities consistent. That
+last step is the trap that likely kept midday's table empty
+across ten runs.
+
+### N101 (Medium, mixed) — legibility and steering follow-through
+
+`readFailureDetail` in the matrix runner prefers a
+`[makeademo:…]` marker or `exit=` line over a blind first line
+for multiline failures. N67's prerequisite matcher learns the
+`Cannot find module '<pkg>/dist/…'` shape (twenty). Exploration
+adds wrong-base steering when followed in-app links 404
+alongside auth-endpoint 404s (directus: "the app's base path
+or API base does not match the prepared serving arrangement").
+Twenty's memory policy: build steering first — bounded
+`NODE_OPTIONS` old-space and sourcemaps off under demo prep —
+and a 16GB snapshot only if steering fails, since doubling
+memory halves matrix parallelism headroom under the Daytona
+quota.
+
+### Rejected as non-general
+
+A type-driven fixture generator (demo data quality is product
+quality and the agent already authors it better than a faker;
+types cannot carry the value semantics — default filters, date
+ranges, relations — that actually break runs; per-schema
+adapters are a treadmill: the tool verifies, the agent
+generates); blindly raising inactivity windows (slows true-hang
+detection — the CPU signal distinguishes work from wedge);
+hard-gating the shape probe (non-TS repos cannot run it, and a
+probe that cannot run must never veto); a 16GB snapshot as the
+first response to twenty (quota cost before cheaper steering is
+tried); detecting skeleton rows by CSS class names (styling-
+specific; the aria shape is the general signal); retrying agent
+commands wholesale (unchanged: not idempotent).
+
+### Recommended order
+
+N98 → N99 (stop losing runs and budget to misread
+infrastructure) → N100 (the batch's core: manifest seams,
+classifier, probe helper, and playbook rider land together) →
+N101. TDD per item with the failing test verified red first;
+full gauntlet per commit. Twelfth matrix is the acceptance
+gate: agent inactivity kills drop from 43 to near zero and no
+run dies from a false one; a control-plane socket blip costs a
+bounded retry, not a run; an exploration hang becomes a
+classified failure that spends its reserve rounds; midday
+either renders fixture rows with real text or fails naming the
+stuck-loading cause with seam-level steering; ghost's rounds
+target its actual lifecycle behavior instead of a phantom
+install failure; twenty either builds under memory steering or
+its verdict cites the marker's ceiling reading.
+
+### Landed (2026-08-09, same day)
+
+`1637dfe` N98 liveness: new `shared/shell/cpu-liveness.ts`
+wraps a bash command with a background sampler that reads its
+own process group's live utime+stime from /proc once a minute
+and prints `[makeademo:alive] cpu <n>` only when the total
+changed — silence with CPU progress stays alive, silence
+without it still dies at the inactivity deadline. Wrapped at
+both seams: the OpenCode run command and the
+`withDiskMarkers` install/lifecycle/build bracket (heartbeats
+feed the PTY watchdog but never enter the teed evidence file).
+`hasOnlyPtyBootstrapOutput` treats alive lines as bootstrap so
+a dead-at-launch agent cannot look alive, and
+`legibleFailureExcerpt` filters them from evidence. Dead
+children are deliberately excluded from the sum: counting
+cutime would count the sampler's own short-lived awk/cat
+children and neutralize the watchdog. `ff35e45` N98
+classification: an exit-124 lifecycle kill now classifies as
+`lifecycle timeout` — routed to preparation repair with full
+repo latitude (never dependency-only edits), its summary leads
+with the kill and states that everything above the marker
+completed, and the N58 install-reuse list treats it as
+at-install so the unfinished lifecycle always re-runs.
+
+`b3232d5` N99 transports: `syncSubmittedCodeWorkspace` runs
+under the N94 transient retry (the whole archive → download →
+upload → extract chain is idempotent per attempt), and the
+transient signature learns Bun's "socket connection was
+closed" message. `a0c44c3` N99 exploration: a protocol
+timeout with the app still running returns a classified
+`render timeout` repairable failure instead of escaping as a
+raw Daytona error; unreadable app status still preserves the
+infrastructure timeout.
+
+N100 in three commits. `6384a7e` seams: `PreparedDemoFeature`
+gains optional `dataSeams` ({path, functionName,
+fixtureModule, shapeProbe?}), parsed with repo-relative path
+validation, described in the agent-facing contract (with an
+invariant) and the template, and checked referentially by the
+fidelity candidate generator — a declared fixture module
+absent from the diff, or a seam file existing nowhere, is a
+truthful-manifest candidate for the adjudication lane.
+`431e3d5` gate: the browser harvest counts textless body rows
+(`skeletonRows`), and the zero-row evidence names the third
+cause the two-cause message could not — rows mounted with no
+cell text mean the query never resolved — steering at the
+feature's declared seam by name. `2e8914c` playbook:
+`dataFixturePlaybookInstruction` (find the function the UI
+calls; author the fixture literal typed by its return type;
+return it immediately under the gate — never
+database-optional, never empty-on-missing; declare dataSeams;
+prove the shape with the repo's own tsc via a temporary probe
+file and record shapeProbe; then check dates, default filters,
+and relations no compiler can) interpolated into preparation,
+contract repair, and — for the empty-app class only, per the
+N65 prompt diet — runtime repair.
+
+N101 in four commits. `97f0b67` matrix report rows bound a
+runaway first line to 240 chars and append the message's last
+`[makeademo:…]` marker line. `10b45c9` chrome-only failures
+with same-origin 404s (page errors or failed-resource console
+errors against the local origin) append wrong-base steering —
+evidence-driven, hint-only. `1f07dd4` the N67
+unbuilt-workspace matcher reads the teed build evidence file,
+not just the lossy stream that dropped twenty's EvalError.
+`ccf92ee` world rule (8): the ~8GB ceiling kills what crosses
+it — bound old-space, disable sourcemaps, narrow the build
+target. `458974a` regenerated dependency graphs.
+
+Verification: TDD per item with each failing test verified red
+first; lint, typecheck, test, knip green per commit. Tests
+976→997 (+21; the remotion delayRender smoke test passed on
+every full run this window). The twelfth matrix remains the
+acceptance gate and awaits an explicit go-ahead.
+
+## Addendum (2026-08-09, twelfth 11-repo matrix — the false-kill and wording-lottery classes; verification learns behavior; N102–N111)
+
+Run `matrix-2026-08-09T23-40-32-270Z` / report
+`matrix-report-2026-08-10T00-41-35-405Z.json`. Two passed:
+homer (21min), cyberchef (58min — its first pass since the
+reset-socket death; the one N94/N99-covered seam held under
+load). Nine failed. Scorecard against the N98–N101 gates:
+agent inactivity kills fell 43 → 11 but not to near zero, and
+ghostfolio died from three false ones of a shape N98 never
+suspected; the control-plane gate failed at two new seams
+(midday 409, outline 502); the exploration-hang gate went
+untested; midday never reached its data gate — its
+preparation passed fidelity with an empty workspace diff;
+ghost's gate passed (preparation cleared in ~20min and the
+frontier moved to exploration); twenty's memory steering
+landed and worked, exposing the disk wall behind the memory
+wall. N101's report-row marker rider worked — calcom,
+directus, and ghostfolio rows carried their `[makeademo:…]`
+markers. The frontier this cycle: the harness's own transport
+and envelope still manufacture failures (a stolen PTY
+sentinel, an unclassified 409, a silent 27-minute
+provisioning gap), and beneath them feature verification is a
+wording lottery — grounded when the agent's naming happens to
+collide with on-screen text, failed (or vacuously passed)
+when it does not.
+
+### Diagnoses
+
+**The false-kill class (ghostfolio killed; the sentinel was
+stolen, not the CPU stalled).** All three preflight attempts
+died identically: lifecycle `npm rebuild && npm run
+--if-present postinstall`, exit 124, "5 minutes of silence
+with no CPU progress." The teed evidence proves the command
+finished ~50s in: npm's debug log records `17 verbose exit 0`
+/ `18 info ok`, the `[makeademo:disk] lifecycle after` and
+`[makeademo:mem]` markers printed (they print only after the
+wrapped command completes), and the last real bytes are a
+fresh interactive `root@…:/workspace#` prompt. Mechanism:
+`executeStreamingInSandbox` pre-queues the exit-sentinel and
+`exit` lines into the tty input buffer for the command's
+whole duration, nothing detaches the command's stdin, and a
+stdin-draining child (prisma's ora spinner, `discardStdin:
+true`; a prior run's tail carries a live spinner frame `⠙`)
+ate the queued lines — bash printed its prompt and waited
+forever for input that no longer exists. The pre-N98 run has
+a byte-identical tail classified "install failure": N98
+renamed this failure; it did not change it. Both repair
+rounds chased repo phantoms (a husky shim for a hook the
+lifecycle never invokes) and round 2 silently dropped
+`buildCommandUsed` — re-arming the previous run's missing
+`dist/apps/api/main` defect behind the transport bug. Two
+aggravations: the kill message's "with no CPU progress" is
+unearned (`timeoutSummary` never consults alive lines), and
+`[makeademo:alive]` appears zero times across the entire
+11-entry batch — with a concrete suspect: the sampler
+captures its pgid via command substitution, which under an
+interactive job-controlled bash inherits the login shell's
+process group while the foreground pipeline gets its own, and
+`cpu-liveness.test.ts` asserts only on the generated string,
+never executing it. N98's sampler may never have fired.
+
+**Daytona envelope gaps (midday killed; outline killed).**
+Midday died at `pipeline.failed: "An operation is already in
+progress for this resource"` — a 409 thrown in the 79-second
+preflight window between the fidelity report and death (the
+sync → network-toggle sequence; no agent command in flight).
+`setSandboxNetworkAccess` carries no retry; the conflict
+class is handled only at sandbox delete, and even there the
+message regex (`state change in progress|state is changing`)
+does not match this text. The raw 409 was then laundered into
+a maker-facing fallback prompt: "Resolve these observed
+blockers: 1. An operation is already in progress for this
+resource." Outline died at `"Request failed with status code
+502"` after a 27-minute completely silent gap at the
+provisioning/repo-upload seam — `/workspace/repo` never came
+to exist (`cd: /workspace/repo: No such file or directory`
+from the failure-path diff capture). Three compounding gaps:
+`createSandboxWithConnectionRetry` retries only
+ECONNREFUSED/RESET/TIMEDOUT (a 502 during create is instantly
+fatal); the transfer ladder is `[1_000, 4_000]` — three
+attempts over five seconds, blip-scale against a bad window;
+and no control-plane call emits a pipeline-log event, so the
+27 minutes are unattributable dead air and the terminal error
+names no seam. Both deaths sit inside the batch's own
+thundering herd: 22 sandbox creates plus 11 archive uploads
+launched in the same millisecond.
+
+**The agent-seam kill residue (11 kills; ~66 minutes).** Six
+of eleven entries lost their first `repo-preparation` command
+to the 300s watchdog (midday mid-file-write — the partial
+stdout ends inside a TSX table cell); homer ate three and
+still passed. The mechanism is structural: an OpenCode
+process blocked on a long model-stream wait burns no local
+CPU and prints nothing, so the N98 jiffies heartbeat is blind
+to remote work by construction. Each kill costs ~6 minutes
+plus a repair-resume round.
+
+**The wording lottery (conduit and excalidraw regressed on
+luck, not preparation).** Grounding is a lexical bridge:
+observed = an exercised interaction OR an assert sharing ≥1
+semantic token (lowercase, ≥4 chars, stopword-filtered,
+5-char-truncated) with the feature's wording. Conduit's
+`/#/profile/ada-lovelace` rendered exactly the feature's
+evidence ("My Articles", "Favorited Articles") but the
+`route.headings.length === 0` gate disables all text asserts
+on any route with headings, and the two headings present are
+article titles sharing zero tokens with `view-author-articles`.
+Its Follow/Favorite clicks were exercised and then discarded:
+the click renames the control (`Follow ada-lovelace ( 42 )` →
+`Unfollow … ( 43 )` in the aria — the state demonstrably
+advanced) so the exact-name re-proof found nothing and
+`interactions: []` shipped. Both prior conduit passes were
+lexical accidents (a feature named after an on-screen
+headline; a `condu` token collision). Excalidraw put all
+three features on `/`; winner-take-all tagging gave the one
+shared heading ("Canvas actions") to `theme-and-image-export`
+2–1, starving the requested undo/redo feature; "Undo"/"Redo"
+exist only as aria-labels on icon buttons past the 16-button
+harvest cap; and Undo was `[disabled]` anyway — the
+manifest's "Undo is enabled immediately" claim is contradicted
+by the harvested aria, and fidelity accepted `shapeProbe:
+"not-run"` behind it. Its prior pass proved nothing about
+undo/redo either: the ≤1-feature-per-route short-circuit
+grounded it on a route whose Undo was also disabled. Steering
+compounded both lanes: "Server-side runtime errors were
+observed" fires on any non-empty stderr (npm warnings;
+ESLint's literal `Found 0 errors`), and conduit's
+default-demo branch told repair to "reselect entryPaths onto"
+a route list already containing the failing route — the
+wording-alignment message is gated to maker-requested
+features.
+
+**ghost (past preparation at last; three stacked faults;
+verification called them wording).** Preparation cleared in
+~20 minutes and exploration ran six attempts — the N98-cycle
+acceptance expectation met. The faults, in series: the Ember
+admin client was never built (the install filter excluded it
+and the harness itself steered the agent away —
+`apps/ember-admin/app/router.js belongs to non-selected
+browser application` — while its build output is the selected
+app's `adminAssets`; every `/ghost/` route 400d on the missing
+template); a fixture used `uuid: 'demo-post-uuid'` (422 →
+crash); the injected demo-session middleware required
+`'../../../services/auth'` — one level too deep — turning
+every admin route into a raw stack-trace 500. Preflight had
+gone green the whole time because the agent patched the
+maintenance page `503 → isMakeADemoDemo ? 200 : 503` and the
+probe checks status only — a reward-hack shape, not an app
+fix. The harvester read the stack-trace pages as `headings:
+[], text: []` (raw `<pre>` bodies match no `main p`/heading
+selector), the not-found probe rendered the same broken page
+as `/` so error suppression disabled itself, and the
+classifier's headline told six repair rounds to "align the
+featureInventory wording" with "We'll be right back." The run
+died on the attempt that finally surfaced the decisive
+`Cannot find module` stderr, and the cross-run fallback
+prompt renders only `logsSummary` — the hints and stderr
+excerpts never reach the next session.
+
+**calcom, directus (lanes killed while converging).**
+Calcom: attempts 1–2 repeated the known `'@calcom/website'`
+missing-workspace failure — repair 1 was a no-op
+(`changedPaths: []`) accepted as a success and charged a
+budget slot — and attempt 3 failed on a new cause,
+`NEXTAUTH_SECRET` unset, which `repo-profile.json`'s
+`requiredEnvHints` had predicted and nothing surfaced. The
+run-planner had chosen `apps/web` + `yarn run dev`; the
+preparation agent escalated to root `dev:all` and dragged the
+missing workspace in. Directus: attempts 1–2 failed on
+`Failed to resolve entry for package "@directus/extensions"`
+— the N67 matcher's regex misses Vite's phrasing though the
+function's own comment names this exact directus case;
+repair 2 fixed it (a demo-gated predev build) and the server
+came up; attempt 3 was the wrong-base failure (SPA served at
+`/admin`, probe at `/`, proxy to an API that was never
+planned — `localServices: []` against a manifest assumption
+that requires one); repair 3 made the right multi-file fix
+and left a stray closing brace (`vite.config.js:93:6`), and
+the parse error's fingerprint collapsed back onto the generic
+first line — `curl: (7) Failed to connect…` — so the
+repeated-failure limiter killed the lane on its first
+genuinely novel, trivially fixable cause. The N101 wrong-base
+steering was structurally unreachable: it lives in the
+exploration stage (directus died in preflight) and its
+trigger requires a 404 (the proxy emitted 502). Recorded
+repair candidates also diverge from the executed manifest on
+exactly `appDir`/`startCommandUsed`, making the attempt
+artifacts misleading for diagnosis.
+
+**twenty (the disk wall behind the memory wall).** The
+N101/N67 steering landed in the accepted diff (nx
+prerequisite build, `--max-old-space-size=6144`,
+`VITE_BUILD_SOURCEMAP=false`) and the build stopped dying at
+the ceiling — so the run paid four preflight attempts and ≥4
+yarn passes into a 10GiB overlay (the org per-sandbox
+maximum; `/tmp` shares the filesystem, so yarn's `xfs-*` zip
+staging competes with the repo). Three copies of the
+dependency tree coexisted: the 3.14GiB global cache, the
+unpacked `node_modules`, and the stale `node_modules` the
+workspace reset deliberately preserves. The only cache prune
+runs on the success path, so failing attempts got no
+headroom; attempt 4 re-fetched everything from a pruned cache
+and died ENOSPC in fetch/zip-convert. At repair round 1 the
+agent found the correct halving fix — `nodeLinker: pnp` — and
+the fidelity `mutatesManagerIdentity` rule vetoed it. The
+`[makeademo:disk]` markers recorded the whole arc and reached
+no repair hint; the `before` marker never survives the
+tail-biased excerpt.
+
+**midday's manifest passed fidelity empty.** The accepted
+preparation carries an empty workspace diff (the patch hashes
+to the empty string), `localDemoModeChanges: []`,
+`mocksAndFixturesAdded: []`, `dataSeams: []`, two features
+(the gate later needs three), and `authStrategy: "none"` on
+surfaces its own descriptions call authenticated. Fidelity
+passed it — "Prepared runtime preserves the screened product
+application," trivially true of a preparation that changed
+nothing. The N100 referential check verifies declared seams
+appear in the diff; it is silent when nothing is declared.
+The 409 killed the run before preflight could expose the
+sham.
+
+### N102 (Critical, bugfix) — PTY transport truth: sealed stdin, one-line sentinel, completed-means-harness-fault
+
+Four coordinated pieces. (1) Detach stdin on every sealed
+install/lifecycle/build command — `{ command; } </dev/null` in
+the `withDiskMarkers` bracket and the install path, and on
+`withCpuLivenessHeartbeat`'s wrapped payload — so no child
+spinner (ora/inquirer/prisma) can drain the tty. (2) Stop
+pre-queueing the sentinel as separate tty lines: send one
+line carrying the command and its own `printf` trailer, so no
+unconsumed input sits in the buffer across a multi-minute
+command. (3) Classify "completed but sentinel lost" as a
+harness fault: when the teed evidence file ends with the
+wrapper's own after-markers, the command demonstrably
+finished — re-run it; never charge a repair round or the
+fingerprint budget, and never blame the repo. The timeout
+summary says "with no CPU progress" only when the alive-line
+record actually supports it. (4) Give `cpu-liveness` a
+Linux-only execution test — the wrapper around a ~2-minute
+CPU burner under an interactive pty, asserting at least one
+heartbeat — settling the pgid-capture suspicion; fix the
+capture if it sums the wrong group. Ghostfolio's three false
+kills and both wasted repair rounds are the cost basis; the
+prior-run byte-identical tail says this class predates N98.
+
+### N103 (Critical, bugfix + infra) — one Daytona envelope: classify, wait, retry, attribute
+
+Every control-plane touch (create, delete, start/stop,
+network update, fs transfer, command transport) goes through
+one wrapper with one classifier. The classifier extends the
+N94 transient signature with the conflict class — HTTP 409,
+`errorCode: Conflict`, and the message shapes `state change
+in progress` / `An operation is already in progress` —
+handled as wait-and-poll for settlement (an in-progress
+operation means wait for it, not blindly re-issue: a
+retry-after-timeout can itself manufacture the 409). 5xx gets
+an escalating jittered ladder sized for windows, not blips
+(the current five-second total budget dies against any
+multi-minute control-plane event). Every attempt emits a
+seam-attributed pipeline-log event
+(`daytona.<operation>.attempt/retrying/failed` with sandbox
+id), so a 27-minute gap can never again be unattributable and
+`pipeline.failed` names its seam. Infrastructure-classified
+errors never become Preparation Fallback Prompts — they fail
+as infrastructure with retry-the-job semantics; midday's
+maker-facing 409 prompt is the forbidden shape. Rider: the
+matrix runner staggers entry launches by 30–60s jitter to
+stop self-inflicting a 22-create herd in one millisecond.
+
+### N104 (High, feature, infra) — agent liveness from the model stream, not the CPU
+
+The jiffies heartbeat cannot attest remote work: an OpenCode
+process awaiting a long model generation is silent and idle
+by design, and that state is the agent seam's normal working
+condition, not a wedge. Feed the existing PTY watchdog from
+OpenCode's own event stream instead — a minimal plugin (or
+event-bus tap) that prints a `[makeademo:agent-alive]` marker
+on any streamed session/message-part event, filtered from
+evidence and bootstrap detection exactly like
+`[makeademo:alive]`. A provider stream that ticks keeps the
+command alive through silent tool-argument generation; a
+session that has genuinely stopped emitting events still dies
+at the deadline. Fallback only if the event tap proves
+impractical: a longer inactivity window scoped to agent
+commands alone, documented as a stopgap (the blanket-raise
+rejection stands for lifecycle commands). Cost basis: 11
+kills this run, six of them the first preparation command,
+~66 minutes plus repair-resume rounds.
+
+### N105 (Critical, feature, largest) — verification believes behavior: aria-first harvest, transition evidence, floors not gates
+
+The grounding currency changes from "the agent's words
+collided with the screen's words" to "typed evidence
+observed on the accessibility tree." Seven coordinated
+pieces. (1) Harvest from the accessibility tree as the
+canonical source — roles plus accessible names, the same
+name-space Playwright locators resolve — with the CSS
+selector harvest demoted to fallback; this admits icon-button
+labels (excalidraw's Undo/Redo), unstyled error bodies
+(ghost's stack traces), and is framework-agnostic. (2) Admit
+behavioral evidence: an exercised action whose observed delta
+is recorded — control rename, counter change,
+disabled→enabled, element appearing, row-count change,
+URL/hash change, dialog open. The interaction re-proof falls
+back to the stored locator evidence when the exact-name
+lookup returns zero matches, and a self-renaming control is
+recorded as a state transition, never discarded — a toggle
+that renames itself is proof of behavior, wording-free and
+stack-free. (3) Disabled-state evidence is admissible
+(`Undo [disabled] → [enabled]` is the canonical
+history/save/submit demo beat). (4) The
+`route.headings.length === 0` gate is lifted: headings stay
+the primary assert candidates, and the per-feature text
+top-up runs unconditionally so a tagged feature can take one
+verified text assert when no heading token-matches it. (5)
+Winner-take-all tagging gains a per-feature floor: after
+scoring, every route-tagged feature with a non-zero score
+keeps at least one assert; ties multi-tag instead of
+zero-sum. (6) Control harvesting stays bounded but becomes
+feature-aware: within the existing budget, controls whose
+accessible names token-match any tagged feature are always
+included, then positional fill — no magic-number cap raise.
+(7) Error-state detection runs before wording logic and is
+probe-independent: a 4xx/5xx document response routes to
+error-state evidence unconditionally with a "runtime fault,
+not a wording fault" summary, and a route harvesting zero
+headings and zero text with a non-empty body captures a
+bounded `innerText` sample so a bare stack trace carries its
+own diagnosis. Stability rider: harvest waits for
+network-quiet plus a short DOM-stable window, and a feature
+about to be declared unobserved earns one fresh-navigation
+re-harvest of its routes first — flaky misses become
+confirmed misses for seconds, not rounds.
+
+### N106 (High, feature) — the verdict ledger: verification explains itself
+
+The gate emits a structured per-feature verdict, not prose:
+`grounded-by: interaction | state-transition | assert |
+declared-proof` with evidence references, or `failed-because:
+error-state-route | no-assert-candidates | token-mismatch
+(best score, best string) | route-shared-with-winners |
+auth-wall | skeleton-rows | app-unreachable`, one enum per
+feature per attempt, persisted in the validation report.
+Steering is derived from the enum: `route-shared` says "give
+this feature an entry route no other feature claims";
+`error-state-route` says the runtime is broken and wording
+cannot help; the wording-alignment message extends to
+default-demo features (conduit's branch currently falls to a
+generic reselect message pointing at a list containing the
+failing route). The false hint dies: "Server-side runtime
+errors were observed" only when stderr carries an error-class
+line after filtering warning-only and `Found 0 errors`-shape
+content. The cross-run fallback prompt carries the ledger,
+the suggested hints, and the decisive stderr excerpt — the
+current prompt renders `logsSummary` alone and hands the next
+session the misleading half. The ledger is also the output
+format of N108's probe and the input to N109's fingerprints —
+it lands first so every later change in this batch is
+measurable per feature across matrix runs instead of by
+re-mining attempt JSONs.
+
+### N107 (High, feature) — declared proof obligations: the feature says how to prove it
+
+The N100 move applied to observability. Each prepared feature
+may declare `expectedProof` — a typed expected outcome in
+Action Catalog vocabulary (`expectVisibleText`,
+`expectStateTransition {locator, from, to}`,
+`expectElementAppears`) — and for maker-requested features
+the declaration is required. The validator checks
+referentially: each feature's entry route is claimed by no
+other feature; obligations are present where required; a
+declared locator uses the same accessible-name space the
+harvest produces. The gate executes declared proofs as
+first-class grounding (they subsume the wording bridge where
+present; the token match remains the default for undeclared
+read-only features), which closes the vacuous-pass hole from
+both prior excalidraw runs — "undo/redo" must pass its
+declared transition, not ride a nearby heading. The same
+typed outcome is the currency Browser Scenes already require,
+so Script Generation and Capture Path Validation consume the
+proofs verification already executed — one assertion language
+across three stages instead of three heuristics.
+
+### N108 (High, feature) — the feature-verification skill and its probe
+
+The user-facing task of this batch: teach the preparation
+agent the rules it currently learns by dying. Two pieces,
+tool first. (1) `verify-features`, a harness tool exposed in
+the workspace (the Runtime Network Lockdown iterative-check
+precedent): it runs the gate's own harvest and grounding code
+against the agent's running prepared app and returns the N106
+ledger. Because it executes the same code as the gate,
+iterating against it is legitimate convergence — failures die
+at authoring time, minutes in, instead of 40 minutes later at
+exploration. (2) The `feature-verification` skill, pinned via
+`skills-lock.json` and restored into the OpenCode sandbox
+like the existing repo skills: a thin authoring playbook in
+the N100 rider style — name features in on-screen vocabulary;
+give each feature an entry route no other feature claims;
+declare `expectedProof` per feature; design for behavioral
+evidence (seed state so a demonstrable transition exists on
+camera: history pre-populated so Undo starts enabled, a
+followable author whose control will rename, a row to add to
+a visibly non-empty table); then run `verify-features`, read
+the ledger, fix, resubmit. Two stated guards: drift — the
+skill is a client of the contract, thin on rules, sourcing
+any stated rule from the gate's own constants, letting the
+probe's ledger do the teaching; gaming — the authoritative
+gate still reruns from fresh deterministic state in the
+sealed sandbox, and content legitimacy stays with the
+fidelity lane (error-state quarantine, the N92 judge), so the
+probe narrows the loop without weakening the boundary.
+Loading the skill on demand respects the N65 prompt diet
+better than growing the preparation prompt again.
+
+### N109 (High, bugfix) — repair lanes converge: cause fingerprints, no-op rejection, patch checks, wider prerequisite evidence
+
+Five pieces. (1) `preparationFailureFingerprint` hashes the
+decisive cause line extracted from the managed output (the
+last error-class line: `Error:` / `x No package found` /
+`[PARSE_ERROR]` / ENOSPC family), falling back to today's
+normalized summary line when none exists — calcom's new
+`NEXTAUTH_SECRET` cause and directus's novel parse error must
+not collapse onto the invariant `curl: (7)` symptom that
+killed both lanes mid-convergence. (2) A repair whose
+workspace diff has `changedPaths.length === 0` is a
+non-attempt: it charges no budget and fails fast with
+"repair produced no change" (two of five repairs across
+calcom/directus changed zero bytes and were accepted). (3)
+After a repair patch lands, changed files get a cheap parse
+check with the repo's own loader where one exists (`node
+--check`, the config loader) — steering on failure, routed
+back to the same session as an in-session correction, never a
+hard veto where no parser applies (the N100 probe
+philosophy); directus's stray brace must not cost a preflight
+cycle again. (4) The N67 prerequisite matcher learns the
+`Failed to resolve entry for package "<pkg>"` shape
+cross-checked against `workspacePackages`, and the closure
+evidence category widens from missing-module to
+missing-asset: when the selected app's runtime error names a
+file under a path a sibling workspace's build produces
+(ghost's `adminAssets` template), that sibling enters the
+build closure — the same sanctioned evidence family, one
+notch wider, no app-shape special case. (5)
+`requiredEnvHints` surfaces at preflight: a hinted variable
+absent from `envUsed` is stated before the app starts —
+calcom's attempt-3 failure was predictable from inputs the
+harness already held.
+
+### N110 (High, feature) — disk headroom is managed, not hoped for
+
+Six pieces, all inside the fixed 10GiB org maximum. (1) The
+package-manager cache prune runs before every install, not
+only after a successful one — the attempts that need headroom
+are the failing ones. (2) When an install is not reusing a
+prior attempt's tree, the preserved `node_modules` is dead
+weight and is dropped first. (3) Package-manager staging
+moves off `/tmp`'s shared overlay onto the cache volume
+(TMPDIR / the manager's own staging setting) so fetch churn
+cannot race the repo for the same blocks. (4) An ENOSPC
+classifier joins the failure readers, and the
+`[makeademo:disk]` markers reach `suggestedRepairHints` on
+install and build failures — this run they reached nothing
+across five rounds; the `before` marker must survive the
+tail-biased excerpt (filter markers explicitly, not
+positionally). (5) World rule (9), mirroring the memory rule:
+~10GB holds the repo, the cache, and `node_modules` at once;
+prune dev-only weight rather than adding it. (6) For Yarn
+Berry repos that ENOSPC at install, the harness itself may
+apply the storage-halving linker fallback under the demo gate
+— harness-owned, so `mutatesManagerIdentity` fidelity stays
+intact; the agent still may not mutate manager identity.
+Raising disk stays rejected: 10GiB is the measured org
+ceiling, and doubling per-sandbox resources would halve
+matrix parallelism for a repo that doubles its footprint on
+the next reinstall.
+
+### N111 (Medium, feature) — fidelity rejects vacuity and status games
+
+Four adjudication candidates, all evidence-shaped. (1) An
+accepted preparation whose workspace diff is empty while its
+manifest claims demoable features with empty
+`dataSeams`/`mocksAndFixturesAdded` is a truthful-manifest
+candidate — midday's sham must reach the judge, not pass
+trivially. (2) A `shapeProbe: "not-run"` cannot back a
+feature whose manifest claims an observable state (excalidraw
+claimed "Undo enabled immediately" against harvested
+`[disabled]`). (3) Exploration observing an auth wall on a
+route whose feature declares `authStrategy: "none"` is a
+candidate — evidence-driven, no prose grepping. (4) An agent
+edit that rewrites an HTTP status code on a harness-probed
+path is a rejected-adaptation candidate (ghost's maintenance
+page 503→200 is the shape: it converts a probe into a lie
+while fixing nothing).
+
+### Rejected as non-general
+
+Preflight body fingerprinting (SPAs legitimately serve one
+identical shell for every route; the general forms are
+N111's status-edit candidate and N105's document-status
+error detection); raising the button-harvest cap by constant
+(a magic number tuned to excalidraw — feature-aware selection
+within the existing budget instead); an admin-app carve-out
+for ghost (app-shape special case — the missing-asset closure
+evidence in N109 is the general form); grepping descriptions
+for "authenticated" (wording-dependent — the auth-wall
+observation in N111 is the evidence-driven form); the LLM
+judge as a primary grounder (confirm-only on near-misses at
+most; the deterministic gate stays the truth for every
+stack); pixel-delta evidence (deferred, corroborating-only if
+ever: once N105 transitions and N107 declared proofs exist,
+excalidraw's class grounds on DOM-visible outcomes — revisit
+only if a canvas feature genuinely cannot declare one);
+blanket inactivity-window raises (unchanged for lifecycle
+commands; N104's scoped agent-seam window is a documented
+stopgap behind the event tap); retrying agent commands
+wholesale (unchanged: not idempotent).
+
+### Recommended order
+
+N102 → N103 → N104 (stop the harness manufacturing failures:
+transport truth, envelope, agent liveness — mechanical,
+independently testable, and every later measurement is noise
+until they land) → N106 (the ledger: the shared output format
+of gate and probe, the input to fingerprints, and the
+instrument that makes the rest of the batch measurable) →
+N105 (the evidence core) → N107 (proof obligations) → N108
+(the probe and the skill teach the finished contract, so they
+land after the contract exists) → N109 (economics; its
+fingerprints consume N106's enums) → N110 → N111. TDD per
+item with the failing test verified red first; full gauntlet
+per commit. The thirteenth matrix is the acceptance gate:
+zero exit-124 verdicts whose evidence tail carries the
+wrapper's own completion markers, and ghostfolio reaches its
+real build/start frontier; no run dies on an unretried
+control-plane error, conflict and 5xx windows cost logged,
+seam-attributed waits, and no infrastructure text appears in
+any fallback prompt; total inactivity kills at or under
+three with the agent seam near zero; conduit and excalidraw
+ground on transition or aria evidence — or fail with
+enum-named causes — and no lane sees a "server-side runtime
+errors" hint without an error line; a 5xx document can never
+be diagnosed as a wording problem; no budget slot is charged
+to an empty-diff repair and no lane dies while its cause
+line is changing; twenty completes two sequential installs
+inside 10GiB or fails citing ENOSPC with disk hints present;
+no fidelity pass on an empty-diff manifest claiming demoable
+features; and preparation transcripts show `verify-features`
+runs before submission with exploration attempt counts
+falling.
+
+### Landed (2026-08-10, wave 1: the instruments)
+
+N102 in seven commits. `06595d1` seal: the CPU-liveness
+bracket runs its wrapped command as `{ command; } </dev/null`
+so a stdin-draining child (prisma's ora spinner, any
+readline prompt) inherits /dev/null instead of the PTY's
+queued input — the exit sentinel can no longer be stolen.
+`8b1a93d` makes the sampler interval injectable for the
+execution proof. `c37c902` transport: the provider ships
+every streamed command as one `exec bash -s <<'nonce' ||
+exit` heredoc payload — the interactive shell consumes all
+input up front (an empty tty buffer defeats /dev/tty
+openers), and the exec'd bash is non-interactive with job
+control off, so the whole pipeline shares one process group
+and the CPU sampler finally watches the command instead of
+an idle shell (why `[makeademo:alive]` was silent
+batch-wide). `5146ad6` recovery: the teed
+`[makeademo:command-end] exit=N` beacon lets a lost sentinel
+resolve to the recorded true exit code — a completed command
+killed as exit-124 becomes its real verdict with zero budget
+charged; a recovered 124 stays ambiguous (the command may
+run `timeout` itself) and is not recovered over. `a6c2392`
+honesty: "with no CPU progress" appears in a timeout summary
+only when heartbeat lines are actually on the record.
+`5dc8ae3` proof: a Linux-gated real-PTY execution test
+(stdin/tty drains survive; a busy loop heartbeats at 1s
+sampling), plus the bootstrap pattern widened for heredoc
+continuation echo.
+
+N103 in four commits. `e62a580` the forbidden shape:
+`AgentHarnessControlPlaneError` joins the infrastructure
+family, so a control-plane failure rethrows at the reset
+seam instead of becoming a maker-facing preparation fallback
+prompt (midday's 409). `3f1cdf9` the envelope:
+`daytona-control-plane.ts` classifies every failure conflict
+(409 / errorCode Conflict / the in-progress message shapes —
+wait 5s and re-issue, up to 24 polls) | transient (5xx,
+connection loss — jittered 2s→90s ladder sized for
+control-plane windows, not blips) | fatal (everything else,
+always rethrown raw so the policy/not-found/not-started
+matchers keep firing), with seam-attributed
+`daytona.<op>.attempt/retrying/failed` events to local sinks
+only. `c80c2ea` the wiring: sandbox create/delete/start,
+network updates, PTY creation, and all filesystem transfers
+run through it (transfers keep their own
+infrastructure wrapping via `wrapExhausted: false`; PTY
+creation absorbs transients only, leaving conflicts raw for
+the stale-id loop; command execution stays excluded by
+design — re-issue could double side effects). The bespoke
+per-seam retry helpers are deleted. `b4061b4` the rider:
+matrix entries launch 30–60s apart (cumulative jitter,
+opt-in, enabled by the CLI) so one batch stops being its own
+control-plane herd.
+
+N104 in two commits. `c1b906c` the plugin: every stage
+config dir gets an auto-loaded OpenCode plugin that turns
+model event-bus activity into throttled (25s)
+`[makeademo:agent-alive]` beats on stderr; the PTY merges
+them into the stream, so a thinking-but-terminal-silent
+agent feeds the inactivity watchdog and a truly wedged
+OpenCode still dies at the deadline. `0bfbe92` the filters:
+beats join the CPU heartbeat in bootstrap-noise
+classification (a beat-then-crash OpenCode stays a launch
+failure, never an artifact-repair burn) and in
+failure-evidence excerpts. `a6a0453` regenerates the
+dependency graphs for the three new modules.
+
+### Mini-matrix checkpoint (2026-08-10, ghostfolio + homer, wave-1 gate)
+
+Homer: passed end-to-end in 13.5 minutes — final video, zero
+warnings, zero kills, six stages without a repair round.
+
+Ghostfolio: preparation now completes in 11.5 minutes where
+the twelfth run died on false exit-124 kills — the app
+builds, starts, and gets browsed. Nine routes harvested with
+aria + screenshots (including /en/portfolio and
+/en/portfolio/allocations, with "portfolio", "allocation",
+and "performance" present in the aria text), yet exploration
+still failed the run with "no browser evidence for requested
+features" after seven runtime-repair rounds (36 minutes).
+The frontier moved exactly to the wave-2 boundary: the
+evidence exists and the verifier cannot ground it — N105's
+aria-first crediting, N106's ledger, and N107's declared
+proof obligations are the fix, not another harness pass.
+
+Instrument readings: zero exit-124 verdicts anywhere in
+either run (N102 holds); zero inactivity kills (N104
+consistent — beats are filtered from durable logs by
+design, so their proof is the absence of false kills); the
+launch stagger held ghostfolio 37s behind homer (N103 rider
+fired); no control-plane deaths. One wave-1 gap surfaced and
+closed the same day: every `daytona.<operation>.*`
+attribution event ran dark because the harness never carried
+its logger into the provider — `7a78f7f` threads a
+`controlPlaneLogger` through so envelope events land in
+`pipeline-log.jsonl`. Wave 2 (N106 → N105 → N107 → N108) is
+unblocked.
+
+### Landed (2026-08-10, wave 2: verification learns behavior)
+
+N106 in four commits. `d0296e2` schema: the FeatureVerdict
+ledger parses on validation reports (one verdict per
+feature, grounded-by or failed-because, evidence ids,
+decisive detail). `e9265c0` the ledger becomes the
+grounding computation itself: `readFeatureVerdicts` walks
+auth-wall → grounded (transition > interaction > assert) →
+app-unreachable → stuck-overlay → skeleton-rows →
+route-shared-with-winners → token-mismatch →
+error-state-route → no-assert-candidates, and the failure
+message is derived per-feature from the verdicts instead of
+recomputed prose; suppressed routes blank their content so
+error evidence outranks wording. `c9c5002` the stderr
+runtime-error hint fires only when an error-class line
+survives the warning and zero-errors filters — watch-mode
+toolchains narrate success on stderr. `dd566e3` the
+preparation fallback prompt renders the ledger and hints
+generically (`- id: failed (enum) — detail`), so every
+later enum flows through without renderer edits.
+
+N105 in seven commits. `b9960fe` control transitions
+(self-renames, disabled→enabled) become exercised evidence
+with stored-locator re-proof. `8b72856` the accessibility
+tree is the canonical assert-candidate source on every
+route — cross-route repetition, not nav position, marks
+chrome, so single-shell products keep their product
+content. `6147d7e` text asserts emit on every route, not
+only heading-free ones. `61c9e43` the assert floor: a
+route-tagged feature the winners out-scored keeps its
+best-scoring assert instead of losing the wording lottery
+(floors, not gates). `947ebf7` the control budget spends
+its slots on feature-token-matching names first, so a dense
+toolbar cannot crowd out the feature's own control.
+`1e5e83a` error-state outranks wording: 4xx/5xx document
+responses (401/403 exempt on auth-wall routes) and
+error-shaped bare bodies suppress wording verdicts and
+carry their own diagnosis; the stderr signal now matches
+compound error-class names (TypeError) the way rendered
+error bodies spell them. `eef83f2` the stability rider: a
+bounded network-quiet wait per navigation plus one fresh
+re-harvest for any feature route about to be reported thin,
+so streaming-SSR content stops reading as absence.
+
+N107 in four commits. `9fac748` schema: PreparedDemoFeature
+gains a typed `expectedProof` (visible-text |
+element-appears | state-transition) and the verdict
+vocabulary gains declared-proof-failed. `05eeb14` the
+manifest contract and template teach the declaration —
+per-kind required fields, accessible-name-space invariants,
+seeding guidance. `46783cb` preparation validates declared
+proofs referentially with batched steering: template
+values, selector-shaped names, disabled-start transitions,
+and indistinguishable proofs each die at authoring time
+with the fix in the message; requiredness is checked after
+coverage so agents prepare the right features before
+declaring proofs. `f06494d` exploration executes each
+declared proof from a fresh navigation of the feature's
+entry route and the ledger treats results as first-class:
+a passed proof grounds the feature regardless of wording, a
+failed proof fails it even when wording would ground, and
+an absent result (deadline, unreachable route) is missing
+evidence — the wording chain still applies.
+
+Deviation from plan (N107): the drafted hard check "entry
+route claimed by no other feature" is contract guidance
+rather than a validation gate. Single-page tools would be
+unpreparable — cyberchef's every feature enters "/" — so
+the hard checks are proof requiredness for maker-requested
+features, per-kind proof validity, and cross-feature proof
+distinctness; route uniqueness stays advice in the contract
+invariants.
+
+N108 in three commits. `9381992` exploration gains a
+feature-entries crawl scope: entry routes plus the base URL
+only, no link or navigation discovery, everything else —
+harvest, interactions, declared proofs, ledger — identical
+to the gate. `c885cdc` validatePreparation runs that probe
+against the still-running app after the runtime curl
+passes: a feature the gate would fail now fails preparation
+minutes in with the gate's own classification, ledger, and
+steering; a crashed or hung explorer passes through as
+inconclusive (weather, not evidence) so the probe can never
+fail a preparation the gate has not judged, and probe
+evidence persists under feature-probe-evidence/ so the
+later gate run does not overwrite it. `a1ebb91` the
+feature-verification playbook ships as a harness-written
+workspace artifact generated from the gate's own exported
+vocabulary (featureVerdictFailureCauses, expectedProofKinds
+— a new cause cannot compile without its agent-facing
+explanation), and every preparation prompt names its path.
+
+Deviation from plan (N108): the drafted verify-features
+workspace tool and skills-lock pinned skill assumed the
+sandbox agent could run a CLI. It cannot — availableTools
+stays ["read","write"] with bash denied (a security seam
+the probe must not weaken), and skills are never restored
+inside the Daytona sandbox. The adaptation keeps the plan's
+intent through the harness: the probe runs harness-side in
+the preparation loop (same gate code, so iterating against
+it is legitimate convergence), and the playbook arrives as
+a workspace artifact referenced by path from prompts (the
+N65 pattern) instead of an installable skill.
+
+`028819b` regenerates the dependency graphs for the wave-2
+modules. Full suite at wave end: 1092 tests green, lint,
+typecheck, and knip clean. Suggested gate before wave 3
+(N109–N111): rerun the ghostfolio + homer mini-matrix —
+ghostfolio's "evidence exists, verifier cannot ground it"
+frontier is exactly what N105–N108 exist to move.
+
+### Mini-matrix checkpoint (2026-08-10, ghostfolio + homer, wave-2 gate)
+
+Both passed with final videos. Homer 9.2 minutes;
+ghostfolio 20.7 minutes — the repo that failed the twelfth
+run after seven fruitless repair rounds now ships a video.
+Both pipeline logs are 100% info-level: zero warnings, zero
+errors, zero exit-124 verdicts, zero inactivity kills, zero
+Daytona retries, zero OOM lines, zero preparation
+fallbacks. Exploration, capture, and composite all passed
+on their first attempt in both runs.
+
+Wave-2 machinery readings, all firing as designed:
+ghostfolio's three features grounded via **declared-proof**
+with proofs drawn from seeded data ("Vanguard Total Stock
+Market ETF", "Add activity", "By ETF Provider") — the N107
+path is the grounding path, wording lottery not involved.
+The N108 probe reported "Feature probe grounded all 3
+prepared feature(s) on their entry routes" inside
+preparation-preflight on both repos, and no probe was ever
+inconclusive. Homer's single error-level event is the N107
+identical-proof rejection doing its job: the first manifest
+declared indistinguishable proofs for two features, the
+batched steering named both, one retry fixed it. The N106
+listen-failure hint steered ghostfolio's two runtime
+repairs to real causes: round 1 moved the client serve to
+port 3000 after the cold Angular build outlived the
+readiness budget; round 2 bound it to 0.0.0.0 after the
+server sat on localhost while the probe curled 127.0.0.1
+(refused for a full 3-minute window with the server
+claiming readiness — the binding, not the boot, was the
+wall).
+
+Two findings for the backlog, neither gating:
+
+1. **Listen-failure first attempts are the remaining tax**
+(ghostfolio two rounds ≈ 8 minutes, homer one). Both
+sub-causes are now legible: cold first builds outliving the
+~3.3-minute readiness budget, and localhost/IPv6-only
+binds refusing the 127.0.0.1 probe. Candidate (small):
+preparation-prompt steering to bind dev servers explicitly
+to 127.0.0.1/0.0.0.0, and/or probing localhost as a
+fallback before classifying listen failure.
+
+2. **The allocations scene ships empty charts (N112
+candidate).** Ghostfolio's portfolio-allocations scene
+shows gray placeholder donuts and a masked "Proportion of
+Net Worth ***** %" through its final frame, while the
+overview scene shows real seeded values ($14,240, +14.80%)
+and the add-activity scene shows a real dialog. Every gate
+passed: the declared proof was `visible-text "By ETF
+Provider"` — a static section label that renders with zero
+data — and chart canvases are invisible to the DOM
+emptiness checks (skeleton-rows sees table rows; a gray
+donut ring is just a canvas; the route even had aria text
+"100.00 % Developed Markets", so it was not content-empty).
+This is the predicted "passes every gate, video shows an
+empty surface" class, now narrowed to canvas/chart data
+surfaces grounded by static-label proofs. Sketch: a
+proof-quality floor (reject visible-text proofs that
+exactly match a section heading harvested on the same
+route with no data siblings), or chart-placeholder
+evidence (canvas-only cards with no numeric/legend text
+join skeleton-rows), or a capture-time flag for scenes
+whose route carried masked values so the run report sends
+a human to the clip. Evidence:
+`matrix-2026-08-10T21-05-49-340Z-ghostfolio/capture/scene-clips/portfolio-allocations.webm`.
+
+Cosmetic, watch only: ghostfolio serves 500 for
+/assets/ghost.svg and for /api/v1/logo/YAHOO/VTI (sealed
+upstream logo proxy) on demo routes — neither visibly mars
+the captured frames; /en/portfolio/x-ray and /en/fire
+throw on unfixtured surfaces, but neither is a demo
+feature route. Wave 3 (N109 → N110 → N111) is unblocked.
+
+### Landed (2026-08-10, wave 3: repair converges, disk survives, fidelity reads evidence)
+
+N109 in five commits. `69dff98` failure fingerprints hash
+the decisive cause line instead of the whole symptom, so a
+drifting curl exit code or a timestamped npm debug-log path
+cannot make the same wall look new to the repeated-failure
+limit. `683e6a6` a repair round that changes nothing in the
+workspace is a rejected non-attempt — steered back with the
+unchanged evidence, never a budget charge. `016a8f4`
+repaired files get a soft parse probe (node --check class)
+with one in-session correction pass, so a syntax-broken
+repair dies at write time instead of one failed preflight
+later. `c090b36` prerequisite evidence widens to
+entry-resolution failures and sibling-asset shapes, so
+"module not found" repairs see the neighboring files that
+disprove a bad path guess. `9571538` a failed preflight
+states the requiredEnvHints gap against the manifest's
+actual envUsed, naming the variables the preparation never
+set.
+
+N110 in six commits. `24a92cf` the package-manager caches
+(yarn berry, npm, pnpm, and the staging directory) prune
+before every install, not only after lifecycle — headroom
+is created where the footprint peaks, with df markers
+bracketing the pruning. `9886bd4` preserved node_modules
+trees carried across a workspace reset drop before install
+when their in-tree manager state marker
+(.package-lock.json, .modules.yaml, .yarn-integrity,
+.yarn-state.yml) does not match the current manager — a
+foreign tree is dead weight the resolver will rebuild
+anyway; bun (no marker) conservatively never drops.
+`d3410f1` package-manager staging moves off /tmp: TMPDIR
+points at /root/.makeademo-staging for install and
+lifecycle commands, the pre-install prune clears it, and
+the build-log harvest follows the staging path. `217607c`
+ENOSPC evidence reaches verdicts: a disk-exhaustion
+classifier plus the [makeademo:disk]/[makeademo:mem]
+markers feed install, build, and lifecycle failure reports,
+and the repair hint names the 10GB budget with per-manager
+workspace-scoped install commands. `eddfdd3` world rule 9
+tells the agent the same thing up front: the disk is a hard
+ceiling shared with /tmp, and a footprint that grows to it
+dies with ENOSPC on every retry. `2a48f27` the yarn berry
+PnP fallback is harness-owned: after an ENOSPC-signed berry
+install failure, the harness switches the workspace to
+nodeLinker pnp (loose) with enableGlobalCache false — zips
+park in the project .yarn/cache both prunes preserve —
+drops the dead node_modules trees, retries once, and
+records the decision as a /root sentinel that survives
+workspace resets so every later round reapplies the config
+before installing; the repair hint tells the agent to leave
+the linker alone.
+
+N111 in four commits, all candidates through the
+judge-on-veto lane, none hard vetoes. `603dc88` the vacuity
+candidate: an empty workspace diff under a manifest that
+claims demoable features while declaring no demo machinery
+at all (no localDemoModeChanges, fixtures, or data seams)
+is midday's sham restated as evidence; a repo that
+genuinely demos unchanged survives adjudication by saying
+so. `6fc034b` an unverified fixture shape cannot back a
+declared observable state: a data seam whose shapeProbe
+records not-run or failed under a feature with an
+expectedProof reaches the judge (excalidraw's "Undo
+enabled" over a not-run probe). `e6f40b9` error-status
+rewrites on probed responses reach the judge: a diff that
+removes an HTTP error-status write and adds a success-status
+write on the same file is treated as falsifying the probe
+rather than repairing the feature — demo-gated flips
+included, because the probe runs with the gate on.
+`bd3b5b1` observed auth walls contradict declared no-auth
+features: the failure report that dispatched the active
+repair now threads its feature verdicts into the next
+fidelity check, so a prior round's auth-wall verdict
+against a feature whose manifest still declares
+authStrategy "none" is a disproven claim, not prose the
+judge never sees.
+
+Deviation from plan (N111): the orchestration test stubs
+needed one fixture correction, not a rule exception — the
+stub manifest's empty-diff rounds were an accidental
+replica of midday's sham, so the fixture now declares an
+honest localDemoModeChanges entry instead of the rule
+learning to excuse it.
+
+Deviation from practice (wave discipline): the final three
+commits were verified with targeted suites plus
+fmt/lint/typecheck per commit under a token budget, with
+knip and the full suite deferred to a single wave-end
+gauntlet — recorded here: full suite 1131 tests green,
+lint, typecheck, and knip clean. `5157dff` regenerates the
+dependency graphs (one new edge: the orchestrator's N109
+import of the stderr error signal). N112 (empty
+chart-surface class) remains recorded, deliberately not
+implemented.
+
+Suggested gate before closing the plan: rerun the
+mini-matrix with a disk-pressure repo (twenty, calcom, or
+directus class) alongside a control — the acceptance
+criteria read "twenty completes two sequential installs
+inside 10GiB or fails citing ENOSPC with disk hints
+present" and "no fidelity pass on an empty-diff manifest
+claiming demoable features."
+
+## Addendum (2026-08-11, wave-3 acceptance matrix — the disk-pressure five: twenty, directus, calcom, ghostfolio, homer)
+
+The wave-3 gate ran the disk-pressure class (twenty,
+directus, calcom) against two controls (ghostfolio,
+homer). Both controls passed; all three heavy repos
+failed — but none on raw ENOSPC. N110's disk work held:
+twenty's install fit inside 10GiB (final disk 47%), and
+no other entry showed a disk signature. Each failure sits
+at a different stage, and two of the three share one
+weakness — a retry that re-does work instead of building
+on the last.
+
+### Diagnoses
+
+twenty — preparation-preflight (build), a cost N110's own
+PnP fallback introduced. The install exhausted the 10GiB
+disk in node-modules mode; the N110 berry PnP fallback
+fired (sandbox event `install.disk-pressure.berry-pnp-fallback`)
+and the install then fit under PnP. But twenty's build
+and start are npx-driven (`npx nx run-many`, `npx
+concurrently`, `npx wait-on`), and npm/npx cannot resolve
+through PnP — there is no node_modules — so `yarn run
+build` reached for `vite` from registry.npmjs.org and
+died ECONNREFUSED on the sealed network, identically
+across all five attempts. The fallback traded an honest
+install ENOSPC for an opaque build-time network failure.
+
+calcom — preparation-preflight (start), the resolver
+overriding a good repair. The resolved start command was
+`yarn run dev:all` → `turbo run dev --filter=@calcom/web
+--filter=@calcom/website --filter=@calcom/console`;
+`@calcom/website` and `@calcom/console` are proprietary,
+absent from the OSS checkout. Turbo validates every filter
+target up front and aborts exit 1 before `@calcom/web`
+binds, so the readiness probe to :3000 got httpStatus 000.
+The repair produced the correct fix — `startCommandUsed:
+yarn run dev`, `appDir: apps/web`, passed on both
+attempts — but `resolvePreparationRuntime` overrode it
+back to `dev:all`/root every round: `findScopedRootScript`'s
+`!targetsAnotherWorkspace` guard only rejects a root
+script referencing other existing workspaces, so a script
+fanning out to absent packages passed the guard and
+clobbered the repair. Same fingerprint every round →
+budget exhausted after 2.
+
+directus — flow-planning, stateless-retry oscillation.
+Not a crash, timeout, liveness kill, or resource failure —
+exploration was rich (8 routes, 109 actions, all three
+requested features grounded, no auth wall). The
+flow-planning agent ran three times (the cap), each
+writing valid JSON, each rejected by the FlowSpec contract
+on one feature (`data-model-fields`) that carries two
+rules: the interaction must come from the allowed set, and
+the visible assert must target route-distinct content, not
+globally-repeated navigation text. It oscillated — attempt
+2 fixed the assert, attempt 3 fixed the interaction but
+regressed the assert — never holding both, though the
+validator named a working pair each time. Each retry ran
+in a fresh opencode session and saw only the latest error,
+with no memory of the prior fix.
+
+Unifying theme: calcom and directus are the same weakness
+one level apart — a retry that does not carry forward what
+the last attempt got right. The resolver re-derives a
+command that discards the repair; the flow planner
+re-derives a spec that discards its own earlier
+correction. N109's fingerprint/no-op machinery detects the
+stuck loop but only ends the run; it does not make the
+next attempt smarter. ghostfolio and homer passed as
+controls, confirming the fixes below do not disturb the
+working path.
+
+### N113 (High, bugfix) — the disk fallback preserves module resolution
+
+The yarn-berry disk fallback no longer switches to PnP,
+which removes node_modules and breaks any npm/npx-based
+build or start tooling (twenty). After an ENOSPC-signed
+berry install failure it now switches to the node-modules
+linker with `nmMode: hardlinks-global` — a real
+node_modules tree with files deduped onto a global
+content-addressable store — drops the copy-mode tree,
+retries once, and records the decision as a `/root`
+sentinel (`berry-hardlink-fallback`) that survives
+workspace resets. A real node_modules keeps every
+toolchain resolving; if the hardlinked tree still will not
+fit, the install fails honestly with the existing ENOSPC
+disk hint. The strategy never changes the module-resolution
+contract, so it keys off nothing repo-specific.
+
+### N114 (High, bugfix) — a runtime command may not select a package absent from the workspace
+
+A shared `readAbsentWorkspacePackage` reads scoped package
+selectors from a command and returns any that share a
+known workspace's scope but are not themselves a workspace
+package — quote- and tool-agnostic, keyed to the repo's
+own workspace set. It guards two seams: `findScopedRootScript`
+no longer selects a root orchestration script that fans
+out to an absent package (so calcom's `dev:all` is skipped
+for the workspace-local `yarn run dev`, matching the
+repair), and `findRuntimeConfigurationIssue` rejects any
+build or start command that references one (defense-in-depth
+for an agent-authored command that bypasses resolution).
+The diagnosis corrected the proposal: calcom's root cause
+was the resolver overriding the repair, not a missing
+persistence write, so the fix stops the override rather
+than re-plumbing the manifest.
+
+### N115 (Medium, feature) — artifact-stage retries accumulate their rejections
+
+The shared artifact-stage retry loop now folds the distinct
+rejection reasons a stage has accumulated into the next
+attempt's prompt ("Each earlier attempt was rejected for a
+different reason. A valid artifact must satisfy ALL of
+these constraints at once — correcting one must not
+reintroduce another:"), so a stage that fixes rule A can no
+longer silently regress rule B (directus). It lives in the
+retry loop, not in flow-planning, so it applies to every
+artifact stage and any multi-rule contract.
+
+### Landed (2026-08-11, wave 4: retries carry their evidence, disk keeps its node_modules)
+
+`2bd90f5` N114 — the absent-workspace-package guard at both
+the selection and validation seams. `a03e813` N113 — the
+hardlinked node-modules disk fallback replacing PnP.
+`c10435a` N115 — cumulative rejections folded into the next
+artifact-stage prompt. All three TDD red-first with
+synthetic fixtures (`@a/*` and `@acme/*` monorepos, a
+three-attempt oscillation), never a twenty/calcom/directus-shaped
+one, so no fix overfits the repos that motivated it. Full
+suite 1135 tests green; lint, typecheck, and knip clean.
+Dependency graphs unchanged (no module-structure change),
+so no `generated:` commit. N112 (empty chart-surface class)
+remains recorded, deliberately not implemented.
+
+Suggested gate: rerun the same disk-pressure set — twenty
+completes both installs inside 10GiB via the hardlinked
+tree and builds (or fails honestly with ENOSPC and the
+disk hint), calcom runs `yarn run dev` in apps/web and
+binds :3000, and directus's flow planner converges instead
+of oscillating.
+
+## Addendum (2026-08-11, wave-4 rerun — the loopback family and the pre-capture gate: N116, N117)
+
+The gate rerun (2026-08-11T20-47-14Z) validated N113 and
+N114: twenty's hardlink fallback fired, both installs fit
+at 43-45% disk, the build succeeded with no ECONNREFUSED,
+and Vite bound — advancing from a build failure to a
+readiness-probe miss; calcom booted on `yarn run dev` in
+apps/web and reached footage capture (12 stages). Neither
+of the two new failure classes below is caused by wave-4
+code — both are older seams the rerun simply reached for
+the first time. directus (a cosmetic `packageManager`
+edit instead of the `predev` build it produced the prior
+run) and ghostfolio (a prep-agent inactivity kill, then an
+unreachable sandbox) were stochastic, passed other runs,
+and are not code regressions.
+
+### Diagnoses
+
+twenty — preparation-preflight (readiness), a loopback
+address-family mismatch. The build now succeeds and Vite
+binds, printing `➜ Local: http://localhost:PORT/`, but the
+readiness probe curled the IPv4 literal `127.0.0.1` and
+was refused "after 0 ms" for the full budget while the
+process stayed `running: true`. Under Node 24 the DNS
+result order no longer prefers IPv4, so a dev server that
+binds `localhost` (Vite's default) takes IPv6 `::1` first
+and never listens on `127.0.0.1`. The probe is not the
+only IPv4-literal consumer: the in-sandbox browser
+explorer and capture both navigate `manifest.baseUrl`,
+also `http://127.0.0.1:PORT`, so a probe-only localhost
+retry would pass preflight and then fail exploration
+against the same unreachable literal — the fault would
+move downstream, not clear.
+
+calcom — footage-capture, two pre-capture-gate gaps the
+booted app exposed. (1) `capture-runtime-reset` restarts
+the app for a clean take, then confirms health by probing
+a single route — `preparationProbeUrl`, the first feature
+`entryPath` — not the scene `goto` routes it is about to
+film. A scene route that reverted to failing after the
+reset is greenlit because it is never re-probed. (2) The
+external-resource broker retries a capture-path pass to
+hydrate blocked external resources and returns the latest
+pass keyed only on remaining external attempts; a pass
+that fails on an app-origin route 5xx while also carrying
+an uncached CDN resource is retried after hydration, and a
+byte-identical later pass with a lucky 2xx overwrites the
+failure. Playwright's `page.goto` resolves on a 500, so
+the 5xx surfaces only as a downstream assertion failure —
+by classification alone indistinguishable from a
+blocked-image assertion failure, so the broker cannot tell
+a flaky app route from the external resource it is there
+to hydrate. (calcom's underlying block is a genuine
+Postgres gap the prep never provisioned — a separate
+open decision — but the gates above must not greenlight a
+route the capture will re-hit.)
+
+### N116 (High, bugfix) — the dev server binds the loopback the pipeline dials
+
+The root cause is Node's DNS order, not the probe, so fix
+the bind rather than every consumer. Node 17+ defaults
+`dns.lookup` to verbatim order (IPv6 first), which is why
+a `localhost`-binding dev server takes `::1`. Pin the
+app's own Node to `--dns-result-order=ipv4first` by
+merging it into the `NODE_OPTIONS` the harness already
+assembles for the submitted-code build and start
+environment (`guardedRuntimeEnv`, alongside the runtime
+network-guard `--require`, preserving any NODE_OPTIONS the
+repo set). `localhost` then resolves to `127.0.0.1` first,
+so the dev server binds the family the whole pipeline
+dials — probe, in-sandbox browser explorer, and capture,
+all through the unchanged `127.0.0.1` `baseUrl`. This is
+the complete fix a probe-only localhost retry is not (that
+would clear preflight and then fail exploration against
+the same literal), and it is minimal: one flag on the env
+already threaded through build, start, and every restart
+(so capture, which films the app the reset left running,
+inherits it too), with no `baseUrl` change and no
+127.0.0.1 test churn. It targets the exact class that has
+the bug — Node dev servers resolving `localhost` — while a
+server that already binds `0.0.0.0` or an IP literal is
+unaffected because the flag only reorders name
+resolution. A genuine listen failure — nothing on any
+loopback family — still refuses and classifies unchanged.
+The `--host 127.0.0.1` fallback start command stays as a
+second belt for the case where the harness supplies the
+command outright.
+
+### N117 (High, mixed) — the pre-capture gate re-probes what it films, and an app-origin server error sticks
+
+Gap 1 (re-probe the scene routes). Thread the demo
+script's distinct playwright-recording scene `goto` paths
+into `resetCaptureRuntime`. After the readiness probe
+confirms the app binds, probe each scene route once — the
+app is already up, so no cold-render budget is spent — and
+fail the reset naming any route that does not serve (a
+refuse, a >=400, or a render timeout). The routes are
+derived from the script the stage is about to film, never
+a hardcoded path, so the gate generalizes to any repo. A
+run with no scene routes falls back to the current single
+readiness probe unchanged.
+
+Gap 2 (an app-origin 5xx is a hard, sticky failure).
+Instrument the capture-path script to record each scene's
+main-document navigation status for same-origin (app)
+responses, and classify an app-origin status >=500 as a
+hard capture failure. Hydrating an external resource can
+never fix the app's own route returning a server error, so
+this verdict is sticky: the external-resource broker never
+overwrites it with a later pass's success, and the
+orchestrator never retries it as transient infrastructure.
+The discriminator is origin, not classification, so
+legitimate external-resource retries — always a different
+origin — are untouched and keep their fail-then-hydrate-
+then-succeed path. A route that 5xx's on any validation
+pass is thus never greenlit for filming, even if a
+byte-identical retry gets lucky.
+
+Recommended order: N116 first (unblocks twenty and every
+localhost-binding Node dev server, a single DNS-order flag
+on the app env), then N117 gap 1 (re-probe scene routes),
+then N117 gap 2 (the app-origin nav-status instrumentation
+and its sticky verdict). N112 (empty chart-surface class)
+remains recorded, deliberately not implemented.
+
+### N118 (Medium, mixed) — post-landing review hardening for N114, N115, and N117
+
+A full review of the landed wave-3/wave-4 range
+(`e6f40b9..4dd8367`, 2026-08-11) confirmed every fix
+behaves as designed and generalizes — lint, typecheck,
+the 1148-test suite, and knip all pass — and surfaced
+five residual gaps. None is a regression; each tightens
+a landed fix. One task, five sub-items, in value order.
+
+(1) N114 selector coverage: `readAbsentWorkspacePackage`
+(`runtime-target-resolution.ts`) scans only the long-form
+flags (`--filter/--workspace/--scope/--project(s)`), so
+the cal.com failure class still slips through three
+spellings it never sees: the positional
+`yarn workspace <name> <cmd>`, npm's `-w <name>` short
+flag, and comma lists (`--projects=a,b`). Extend the
+scan to all three; keep the existing fail-safe posture
+(judge only literal names, never paths, globs, or graph
+patterns). Test first per spelling.
+
+(2) N114 npm directory selectors: npm's `--workspace=`
+also accepts a workspace *directory*. A bare selector
+naming a root-level workspace dir whose package name
+differs (`--workspace=docs` for a package named
+`docs-site`) is flagged absent in unscoped-name repos —
+the one known false positive. Add each workspace's dir
+basename to the known short names.
+
+(3) N117 gap-1 policy is cookie-less and cold by design:
+a scene route behind a bare-401 document GET (no
+redirect) or one that exists only after an earlier
+scene's create action now fails the reset gate and spends
+repair rounds reaching the authStrategy/fixture fix.
+Move that cost from repair to prevention: state in the
+script-generation contract (and its prompt) that every
+`goto` path must serve cold and unauthenticated-or-
+redirecting, so the script agent authors demo-gated
+routes and fixture-backed paths from the start.
+
+(4) Broker economics after a sticky verdict
+(`runWithExternalResourceBroker`,
+`default-harness-dependencies.ts`): once
+`readStickyFailure` records an app-origin 5xx, later
+passes still hydrate and restart before the sticky
+verdict is returned, and the returned result carries
+pass-1 evidence (its blocked-attempt list can be stale
+after hydration). Decide once: short-circuit on sticky,
+or keep hydrating for post-repair cache warmth — and
+either way return the sticky classification with
+final-pass evidence attached. Document the choice at the
+seam.
+
+(5) N115 cosmetic: when a rejection reason recurs after
+being deduped (A, B, A again), `accumulatedArtifactError`
+names B as "the most recent rejection" though the run
+just rejected on A. Track last-seen order instead of
+relying on insertion order.
+
+Sub-items (1), (2), (4), and (5) are runtime changes and
+follow TDD (failing behavior test first, through the
+public seam). Sub-item (3) is prompt/contract steering
+and is verified by its observable contract, not prompt
+text. None blocks a matrix run; schedule behind any
+active N-numbered failure class.
+
+## Addendum (2026-08-12, two same-day matrices — install truth lands, and the walls behind the walls: N119–N122)
+
+The morning batch (2026-08-12T06-26) exposed four pipeline
+seams: a control-plane call that could hang a batch
+forever, a PTY loss mode that reported a never-run install
+as exit 0, a flow-planning rejection that restated a rule
+the candidate already satisfied, and harness-executed
+install/build/start commands that left no record of having
+run. All four fixes landed the same day (wave 5, below).
+The evening rerun (2026-08-12T20-27) validated every one
+of them and surfaced four new signatures — each one layer
+deeper than the wall it replaced. homer passed both
+batches end-to-end.
+
+### Landed (2026-08-12, wave 5: install truth and hang immunity)
+
+- `bdedf67` — every Daytona control-plane attempt is
+  bounded (default 10 min); a call that hangs without
+  rejecting is abandoned as transport loss and re-issued
+  through the transient ladder. Validated in production
+  the same evening: directus's `fs.upload` hung exactly
+  600000ms, was reclaimed, and the retry succeeded — the
+  class that wedged the 2026-08-11 batch overnight now
+  self-heals. Fired exactly once across five entries; no
+  spurious timeouts.
+- `e534d72` — a PTY stream that ends without the exit
+  trailer is transport loss (new `"transport"` timeout
+  kind), never a fabricated exit code. The sentinel is
+  the only channel carrying the command's real status;
+  the shell's own exit is bash's, not the command's.
+  Closes the phantom-install class (ghostfolio's 27–42s
+  "installs", 06-26 batch).
+- `04f6d4a` — the flow-planning no-exercised-interaction
+  rule now names its actual requirement (anchor on a
+  tagged navigate, candidates enumerated) instead of
+  reusing the pairing-rule wording; enforced only when a
+  usable navigate exists (auth-wall navigates excluded
+  for non-auth features), so the retry loop can never
+  wedge on a navigate-free catalog.
+- `feb0ee6` — `command.started`/`command.finished`
+  sandbox-log events (label, bounded command text, exit,
+  duration; written after transport-fault recovery) for
+  every guarded heavy command, plus `app.start.requested`
+  before the managed launch. Evening-run payoff was
+  immediate: ghostfolio's installs are now provably real
+  (deps events, exit 0, 19–21s), and diagnosis is a grep
+  instead of wall-clock archaeology.
+
+### Diagnoses (2026-08-12T20-27)
+
+directus — run-plan synthesis, infrastructure. The Daytona
+control plane had an incident window (20:30–20:41): one
+repo-archive upload hung ten minutes (recovered by the new
+attempt bound), immediately followed by an HTTP 502 storm.
+The run then died writing the 7.5KB
+`runtime-target-selection-contract.json` into the agent
+workspace: the artifact-transfer seam is the only envelope
+caller with a blip-sized ladder (`[1_000, 4_000]`, built
+for one-off 502s on 2026-08-09), and ~15s of total budget
+across its outer retries could not outlast a real window.
+Every other seam's default ladder (~227s plus conflict
+polling) would have survived this exact storm. → N119
+
+ghostfolio — preparation-preflight, readiness semantics.
+Six rounds visibly converged (round 1 crashed on a missing
+module, rounds 2–5 had not bound yet, round 6 bound), and
+then the probe killed the round 46 seconds after start on
+its first HTTP response: a 404 served by the dev server
+mid-compile. The prep's start command compiles the Angular
+client at start time (manifest has no build command), the
+server binds before its first bundle completes, and
+`probeSubmittedCodeRuntime` retries only
+`connection-refused` — any HTTP response is terminal by
+design. A warm-up 404 is not "app route not discoverable";
+it is "not ready yet", and the compile needed minutes the
+probe never granted. → N120
+
+twenty — feature verification, a browser-contract gap. The
+build finally passed (round 4) and the app served. The
+prep's data strategy was an MSW demo worker ("deterministic
+local CRM data", per its own manifest limitation) — but the
+explorer and capture browser contexts deliberately set
+`serviceWorkers: "block"` (network-lockdown integrity:
+a service worker can intercept requests route interception
+never sees). Every route logged `[MSW] Failed to register
+the Service Worker`, no data ever loaded, all four routes
+rendered globally-repeated chrome, and the run failed as
+"empty/unmeaningful app state". Service-worker mocking is
+structurally impossible in this pipeline, and nothing ever
+tells the prep agent. → N121
+
+calcom — the database, now the binding constraint. Rounds
+oscillated between two walls: preflight 500s where the
+Next.js compile could not resolve Prisma-generated
+artifacts (`packages/prisma/enums`) despite an exit-0
+offline lifecycle — generated-state flakiness across
+workspace resets — and, more telling, rounds 3 and 5 where
+preflight fully passed and the feature probe found no
+browser evidence for "show the event type dashboard" or
+"choose an available time and complete a booking". Those
+features read and write Postgres through Prisma on the
+server; no mock at any browser boundary can reach them,
+and prep has no way to provide a service. Product decision
+recorded (2026-08-12): demos are never steered away from
+data-backed features — the pipeline gains a data-backend
+capability instead. → N122
+
+### N119 (High, bugfix) — transfer retries sized for control-plane windows
+
+Generality: the fix is at
+`runTransferThroughEnvelope` (the provider's single funnel
+for every idempotent filesystem transfer — contract
+writes, artifact uploads, archive pushes — for every
+repo); nothing is directus-specific. The transfer
+docstring already declares the operations idempotent by
+design, so a longer ladder is strictly safe; and the
+envelope's own doctrine (N103) says control-plane windows
+are multi-minute events a few-second budget always loses
+to. Fix: drop `artifactTransferBackoffMs` to the default
+control ladder (or a transfer ladder spanning minutes),
+keeping `wrapExhausted: false` rethrow semantics.
+`pty.create` keeps its short inner ladder deliberately —
+its outer fresh-id/sandbox-restart loop supplies the
+budget there; document that contrast at the seam. TDD at
+the provider envelope seam.
+
+### N120 (High, bugfix) — readiness treats any not-ready response as not ready yet
+
+Generality: `probeSubmittedCodeRuntime` gates every repo's
+preflight, and compile-at-start dev servers are a
+framework-wide class (Angular's esbuild server, Vite
+cold-transform, Next dev first-compile all bind before
+they can serve). Two parts, both general:
+
+(1) Within the readiness budget, an HTTP error response
+is retryable exactly like connection-refused. Terminal
+outcomes stay terminal: process exit (`runtime-exited`),
+probe execution failure, and budget exhaustion — where
+the final classification reads from the last observed
+status, so a stable 404 still reports "app route not
+discoverable" and a stable 500 still reports its server
+error. Single-shot callers (`budgetMs = 0` — the N117
+scene-route gate) are unchanged. Cost: a genuinely wrong
+route burns its round's budget before failing; bounded,
+and N118 sub-item (3) attacks that from the prevention
+side.
+
+(2) The budget extends while the managed app demonstrably
+works: if app output grew since the last poll, the window
+slides (absolute cap ~10 min, mirroring the
+build-timeout scale); silence spends the base 180s
+budget. A compiling server prints; a wedged one does not
+— the same output-is-progress doctrine the inactivity
+watchdog already applies to commands. Without (2), a
+correct (1) still fails any app whose start-time compile
+outlives 180s — ghostfolio's likely does.
+
+TDD through the preflight seam with a fake workspace
+whose probe responses transition refused → 404 → 200 and
+whose app status carries growing output.
+
+### N121 (High, mixed) — the browser contract bans service workers, and says so
+
+Generality: MSW is the ecosystem-standard mocking layer
+for SPAs — any repo whose prep agent reaches for
+service-worker mocking hits this wall; twenty merely got
+there first. The block itself is correct and stays (a
+service worker bypasses route interception, so Runtime
+Network Lockdown accounting would go blind); the gap is
+that the constraint is enforced silently. Two parts:
+
+(1) Contract steering: the preparation and repair
+contracts (and prompts) declare that the demo browser
+blocks service workers, and that data mocking belongs at
+the fetch/API-client layer with deterministic generated
+data — stable IDs and stable visible text, because
+capture assertions bind to on-screen strings. In-memory
+session state is acceptable ("created" rows may live only
+for the browser session).
+
+(2) Detection: a page-error pattern for service-worker
+registration failure (generic
+`/Failed to register.*Service ?Worker/i` — not an
+MSW-specific string) in exploration and validation page
+errors produces a targeted repair hint naming the
+constraint and the fetch-layer alternative, so an agent
+that chose a service worker is redirected in one round
+instead of never.
+
+Part (1) is contract/prompt work verified by observable
+behavior; part (2) is a runtime seam and follows TDD.
+
+### N122 (Critical, feature + infra, phased) — the data-backend ladder: detect, enforce, provide
+
+Product decision (2026-08-12): never steer demos away
+from data-backed features. Strategy: a closed loop where
+the pipeline detects what a repo's data layer needs,
+refuses to call preparation complete until every detected
+need is addressed by some rung of a support ladder, and
+the matrix carries one representative repo per rung as
+its acceptance gate. Backend classes then cannot fall
+through silently — an unsupported backend becomes a named
+failure pointing at its rung. The rungs, in preference
+order: embedded-config, provisioned-service, client-stub,
+provider-recipe, declared-stub (the last still demos the
+feature against deterministic generated data and declares
+the substitution in the manifest — nothing is dropped).
+
+(1) Detection — `servicesRequired` in the repo profile.
+A pure profiling module reading only repo-declared
+signals: `docker-compose.yml` services, `.env.example`
+URL schemes (`postgres://`, `mysql://`, `mongodb://`,
+`redis://`), Prisma `provider`, knex/drizzle/typeorm
+configs, dependency names (`pg`, `mysql2`, `ioredis`,
+`mongoose`). Output: normalized inventory with evidence
+paths. Fixture-repo TDD per class, including "none".
+Immediate side win: `findRuntimeConfigurationIssue` can
+fail round 1 with "this start command needs Postgres and
+nothing provides it" instead of six empirical rounds.
+
+(2) Enforcement — the manifest answers the inventory.
+The preparation contract gains a `dataStrategy`
+declaration mapping every detected required service to a
+rung; the manifest validator rejects prep output that
+leaves one unaddressed, with a message naming the
+service, its evidence, and the available rungs (the
+flow-planning lesson: rejections state the fix; rules
+fire only when satisfiable). This sub-item is the
+"make sure" mechanism for every class.
+
+(3) Rung 1, embedded steering (no infra): when detection
+shows the repo supports an embedded backend, prefer it
+(Prisma sqlite provider, directus's multi-driver config).
+Acceptance: directus green on SQLite.
+
+(4) Rung 3, client-boundary stubbing (with N121):
+fetch/API-client interception serving deterministic
+generated matrices. Acceptance: twenty green with
+generated CRM data.
+
+(5) Rung 2, ephemeral services (the infra lift): bake
+postgres + mysql + redis binaries into the submitted-code
+snapshot (`infra:`, versioned with the snapshot). One
+deep module (`sandbox-services`): provision inside the
+existing submitted-code sandbox on loopback only — no new
+sandboxes (Daytona quota), no cross-sandbox networking,
+Runtime Network Lockdown untouched. Provision during the
+open install window and before the build step (SSG and
+schema-introspection apps query at build time);
+health-check; run the repo's own migrate/seed commands
+through the guarded-command wrapper (disk markers, teed
+evidence, and lifecycle events come free); reseed per
+preflight round for determinism; teardown rides the app
+lifecycle. Distinct preflight classifications and repair
+hints per failure mode (service start, migration, seed).
+Orchestration and command construction are TDD'd against
+fake workspaces; the real-implementation exercise of an
+actual Postgres boot is the matrix itself — stated
+plainly: calcom (event types + booking on seeded
+Postgres) and ghostfolio (postgres + redis) green are
+the acceptance gate.
+
+(6) Rung 4, provider recipes on demand: serverless/cloud
+drivers get per-provider recipes only when a repo of that
+class appears (Neon driver → `pg` swap, Turso → local
+`sqld`, Firebase → local emulator), per the
+smallest-correct-module rule. The sub-item (2) loop makes
+deferral safe: an unrecognized cloud backend lands on the
+declared-stub rung with generated data and an explicit
+manifest declaration, never a silent gap.
+
+Coverage guarantee: `tests/fixtures/pipeline-matrix.json`
+keeps at least one repo per rung (homer: none, directus:
+embedded, calcom: postgres, ghostfolio: postgres+redis,
+twenty: client-stub); a new backend class enters the
+ladder by adding its fixture repo first and driving it
+red to green — the TDD loop at matrix scale.
+
+### Recommended order
+
+1. N119 — smallest diff, removes the only class that can
+   kill a run in an infrastructure incident window;
+   directus's only wall this batch.
+2. N120 — ghostfolio's only remaining wall; one probe
+   seam, both parts.
+3. N121 — twenty's wall; contract text plus one detection
+   seam, and a prerequisite for N122 sub-item (4).
+4. N122 (1) + (2) — the structural loop: detection and
+   enforcement land together so the manifest contract
+   never demands what profiling cannot yet see.
+5. N122 (3) + (4) — the cheap rungs; directus and twenty
+   green without any provisioning infrastructure.
+6. N122 (5) — the infra lift, started only after a matrix
+   with 1–5 landed shows its acceptance repos clean of
+   unrelated walls.
+7. N122 (6) — on demand, never speculatively.
+
+N118's hardening sub-items stay scheduled behind these
+active failure classes, as before. The expected matrix
+trajectory: after steps 1–3, directus and ghostfolio
+green and twenty reaching data-strategy repair with a
+named constraint; after step 5, five of five.
+
+## Addendum (2026-08-13, wave-6 acceptance matrix — five failures, five causes: N123–N126)
+
+The 2026-08-13T01-12 five-repo batch went 0/5 — but with
+five distinct signatures, and every wave-5 fix visibly
+working: N119 absorbed a 502 storm at 01:16–01:17
+(upload and write-text retries, attempt 2 succeeded),
+N120 carried calcom and twenty past startup 500s into
+feature verification for the first time, N121 kept
+twenty off service workers entirely (zero SW errors;
+the prep built an Apollo-transport stub instead), and
+N122(2) made every prep answer for its detected
+services. Two failures are harness bugs (a raw Daytona
+call outside the N103 envelope; a route-identity
+mismatch that made flow planning unwinnable), one is a
+repair-loop contradiction (evidence verified in one
+context, replayed in another, two validators vetoing
+each other's fix), one is agent quality missing a
+steering hint (schema-incomplete client stub), and one
+is the N122(5) wall arriving exactly as predicted. The
+N122(5) gate — acceptance repos clean of unrelated
+walls — is therefore not yet met: ghostfolio died to
+infrastructure and homer/directus to harness bugs.
+
+### Diagnoses (2026-08-13T01-12)
+
+ghostfolio — repo-preparation, an unenveloped Daytona
+call. The 11-minute prep agent command succeeded at
+01:28:52; ~300ms later the run died on a raw "Request
+failed with status code 502" with no `daytona.*.attempt`
+events. The harness's next step after agent success is
+reading the manifest via `tryReadWorkspaceJson` →
+`workspace.execute("cat …")`, and the provider's
+`execute` calls `sandbox.process.executeCommand` raw —
+no envelope, no retry, no classification. Daytona was
+broadly 502ing at that instant (teardown log persistence
+502'd too). The `preparation.diff.patch.succeeded` and
+three `artifact.written` events after the failure are
+the catch path (diff capture, fallback, run manifest),
+not the crime scene. Aggravation: the raw DaytonaError
+is not an infrastructure error, so the pipeline wrote a
+preparation fallback and the matrix report shows a bare
+transport error as if the product failed. → N123
+
+homer — flow planning, a latent route-identity bug. All
+three attempts burned on one contradiction: the
+declared-proof catalog action carried
+`route: '#additional-page'` (the manifest entryPath,
+copied verbatim at action creation) while the AppMap and
+every other catalog action use the normalized
+`/#additional-page`. The validator alternately rejected
+"belongs to unselected route" and "unknown AppMap
+route" — no agent output could satisfy it. The manifest
+contract legally admits bare `#` entryPaths, so the trap
+is armed on every run and sprung by whichever entryPath
+form the prep agent happens to write. → N124
+
+directus — deepest run to date, then an
+exploration-vs-capture reality gap. The script passed
+static contract using the browser-verified candidate
+(`getByPlaceholder('Email Address', { exact: true })`,
+matchCount 1, visible at exploration). Capture-path
+validation timed out waiting for that same locator —
+the element never appeared in the capture context.
+Locator regrounding "passed" by re-verifying the same
+locator in the exploration context, where it is
+visible; the script-repair agent then deviated from the
+candidate to work around the runtime failure, and
+static contract vetoed the deviation (verbatim locator
+equality). Pass/fail alternated until the script-repair
+budget died. The terminal report ("locator does not
+match browser-verified candidate") is the secondary
+symptom; the root is evidence certified in a context
+that capture does not reproduce, plus a repair loop
+with no channel to say so. → N125
+
+twenty — client-stub rung chosen correctly, fixture
+schema-incomplete. Real repair progress: rounds 1–3
+build failures, round 4 rendered but landed on the
+sign-in page, round 5 had a genuine Apollo-link stub
+(`dataStrategy: client-stub` for postgres and redis, no
+service worker — N121 steering worked). But the stubbed
+ClientConfig response is missing `authProviders` (and
+Apollo logged dozens of missing fields), so every object
+route crashed into the error boundary — "Cannot read
+properties of undefined (reading 'authProviders')" — and
+all three features failed as not observable. One missing
+fixture field took down the app; nothing told the repair
+agent which field or query. → N126
+
+calcom — the data wall, honestly reported. N120 carried
+preflight past the startup 500s that killed prior runs;
+N122(2) forced a dataStrategy answer and the prep chose
+`declared-stub` for postgres and redis ("no replacement
+was added because an alternate screen or untyped mock
+would not preserve the product flow" — the honest rung).
+Consequence exactly as the 2026-08-12 addendum
+predicted: `/event-types` renders its shell (that
+verdict passed round 5), but the Prisma-backed routes
+500 with no database behind them, so booking and
+availability have no browser evidence. Five rounds,
+correct classification. This is the acceptance case for
+N122(5), blocked only by the gate above. → N122(5)
+
+### N123 (Critical, bugfix + infra) — no Daytona call outside the envelope
+
+Generality: the invariant is on the provider, not any
+call site — no Daytona SDK rejection may escape
+unclassified. Every control-plane request runs inside
+`controlPlane.run`: transient ladder, attempt/retrying
+events, exhaustion wrapped as an infrastructure error.
+Audit every `this.sandbox.*` /
+`this.submittedCodeSandbox.*` call site; known raw
+today: `execute`, `executeStreaming`,
+`executeSubmittedCode`, `executeStreamingInSandbox`,
+`writeSandboxLogLine`, and the teardown log collectors
+(calls already inside `runTransferThroughEnvelope`
+attempt callbacks are covered). Command execution gets
+the default control ladder — commands have no outer
+retry loop, the same argument N119 made for transfers —
+with the existing `withTimeout` composition kept inside
+the attempt. Streaming executes envelope the initiation
+call only; mid-stream disconnects stay with their
+existing command-failure repair paths. Document the
+at-least-once invariant on the `execute` seam docstring:
+a retried command may run twice when the control plane
+fails after execution; every `execute` caller is a
+harness-authored idempotent command (`cat`, `mkdir -p`,
+`rm -f`, log appends — a duplicated audit line is
+acceptable), and agent commands ride the PTY seam,
+which is unaffected. Classification falls out free:
+default `wrapExhausted` makes exhausted retries an
+infrastructure error, so the orchestrator stops writing
+preparation fallbacks for infra deaths and the matrix
+report names the incident instead of echoing a bare
+502. TDD at the provider seam: 502-then-success on
+`executeCommand` retries with attempt events; exhaustion
+surfaces the wrapped error; a sandbox-log write survives
+one 502.
+
+### N124 (High, bugfix) — one route-identity space at evidence ingestion
+
+Generality: every route stored in the ActionCatalog,
+AppMap, or FlowSpec lives in one normalized route space;
+authoring contracts stay permissive (bare `#` and `?`
+entryPaths remain legal to write) and normalization
+happens once, at the seam where an entryPath becomes a
+route identity. Fix: a small helper converting a
+manifest entryPath to route space by resolving against
+the base URL (`#additional-page` → `/#additional-page`,
+`?q=1` → `/?q=1`), applied at declared-proof action
+creation — today the raw entryPath is copied verbatim
+into the action's `route`. Sweep the other entryPath
+consumers and normalize any that compare against route
+identity; the navigation use resolves against the base
+URL already and stays as-is. No double normalization
+inside comparators (it would mask drift), and no
+tightening of the authoring contract (the flow-planning
+lesson: rules fire only when satisfiable — here the rule
+must compare in the space the evidence actually uses).
+Regression: entryPath `#x` yields a declared-proof
+action whose route equals the AppMap-normalized form;
+plus a catalog-level invariant test that every produced
+action route parses in AppMap route space, so the class
+cannot silently return.
+
+### N125 (High, mixed) — evidence verified where it replays, and the ping-pong breaker
+
+Generality: browser evidence must be verified in the
+context in which it will be replayed, and a candidate
+that failed at replay may not be re-certified unchanged.
+Four parts:
+
+(1) Failure identity flows into regrounding: a
+capture-path locator failure on a browser-verified
+candidate passes `{actionId, candidateId, locator}` and
+the already-downloaded failure screenshot into the
+regrounding input, replacing the generic "re-run App
+Exploration" hint.
+
+(2) Regrounding verifies by prefix replay: for a failed
+candidate it executes the scene's action prefix before
+verifying, reproducing capture context rather than
+merely loading the route. Cost bounded by scene length.
+
+(3) Honest reclassification: if the element is still
+absent after prefix replay, the verdict is "evidence
+unreproducible at replay" — an app-state divergence
+dispatched to the preparation/runtime repair channel
+with the exploration-vs-replay evidence pair. The
+script channel cannot fix an app that no longer shows
+the element; today it burns its whole budget trying.
+
+(4) The breaker: if, for the same actionId, a
+static-contract locator-equality rejection follows a
+capture-path locator failure twice consecutively, stop
+and fail with one combined diagnosis naming the
+contradiction instead of exhausting the budget
+silently. Cheap adjunct: the locator-equality error
+prints both locators (expected candidate vs actual), so
+a genuine drafting slip is fixable in one round.
+
+TDD through the validation seams with fakes: regrounding
+input carries the failed candidate; prefix replay
+precedes verification; unreproducible evidence
+reclassifies to the preparation channel; the breaker
+trips on the alternating pattern; the contract error
+names both locators.
+
+### N126 (Medium, feature) — client-stub schema-gap hints
+
+Generality: when a run declares a `client-stub`
+dataStrategy and the app crashes at runtime, the
+explorer converts crash diagnostics into a targeted
+repair hint — the N121 mechanism, driven by pattern
+tables, never by any app's specifics. Detector beside
+the service-worker hint: error-boundary crash signals
+(`Cannot read properties of undefined (reading 'X')`)
+and client-cache missing-field signals (Apollo's
+`Missing field 'X' while writing result`), extracting
+the quoted identifiers generically. The hint names the
+extracted fields and states the obligation: the stub
+transport must satisfy the complete response schema for
+the queries powering the entry routes, starting with
+the named fields. Gated on the manifest actually
+declaring a `client-stub` rung so it never fires noise
+at apps crashing for unrelated reasons. Pattern tables
+extensible per the N122 detection precedent. TDD: fake
+observed errors containing both pattern classes produce
+the hint with extracted names; no client-stub
+declaration, no hint.
+
+### Recommended order
+
+1. N123 — kills runs nondeterministically in any
+   incident window; ghostfolio's only wall this batch,
+   and the misclassification fix rides along.
+2. N124 — makes runs unwinnable on an agent wording
+   coin-flip; homer's only wall.
+3. N125 — directus's wall; the largest seam work of the
+   four.
+4. N126 — twenty's accelerator; smallest diff.
+5. Matrix rerun, then evaluate the N122(5) gate:
+   expected trajectory is ghostfolio green or failing as
+   a named infrastructure incident, homer green through
+   flow planning, directus green or honestly
+   reclassified, twenty reaching schema-specific repair,
+   and calcom still stopped at the data wall — which is
+   the gate signal for N122(5), not a failure of this
+   wave.
+
+## Addendum (2026-08-13, wave-7 acceptance matrix — first multi-pass batch; the N122(5) gate misses on calcom alone)
+
+The 2026-08-13T05-45 batch: homer and ghostfolio
+PASSED end-to-end (final videos composited), directus,
+twenty, and calcom failed. Every wave-6 fix behaved:
+N123's envelope stamped all ~1300 control-plane calls
+across the batch with attempt events (zero retries
+needed — infrastructure was calm, so the envelope was
+armed but untriggered), N124 unblocked homer through
+flow planning on the first pass, N125's structured
+failedAction fired in homer's capture round and routed
+cleanly through plain script-repair (regrounding and
+the breaker never needed to arm), and N126's gate
+correctly stayed silent on twenty — the client stub was
+never reached, so there were no quoted-field crash
+diagnostics to match. The three failures are: one
+harness sequencing bug in front of calcom's data wall
+(N127), one classification hole plus a gate-silencing
+repair on twenty (N128, N129), and one new prep-quality
+wall on directus amplified by two pre-existing harness
+seams (N130, N131).
+
+### Diagnoses (2026-08-13T05-45)
+
+homer — passed, 416s, with two absorbed events worth
+recording. (a) Flow-planning attempt 1 failed FlowSpec
+validation and re-ran invisibly: failed agent-artifact
+validations emit no pipeline-log event at all, so
+repair-round accounting from the log undercounts
+(watchlist). (b) One capture-path failure
+(dashboard-assert-services timed out because a leftover
+`?search=notes` filter hid the tile group) was repaired
+by typing "" instead of removing the step — the FlowSpec
+still declares "enter a value and observe the search
+control accept it", so the shipped demo has a dead beat
+(watchlist: repairs may neuter a step's declared intent
+without any validator noticing).
+
+ghostfolio — passed, 1867s, on repair round 4 of 4:
+zero budget margin (watchlist). The pass rode the
+client-stub rung for both postgres and redis (an
+Angular HTTP interceptor serving fixture envelopes; no
+DATABASE_URL at all), which is legal under N122(2) but
+means the add-investment-activity scene shows a write
+that persists nothing (knownLimitations concedes it).
+The four repair rounds were coherent: fidelity
+violation → nx build path → missing env crash →
+logo-endpoint 500s, each fixed in turn. As the N122(5)
+acceptance repo, this run is "clean of unrelated
+walls" — but its acceptance criterion (postgres+redis
+green on the provisioned rung) is only now possible.
+
+calcom — NOT stopped at the data wall alone; the
+terminal failure is a harness sequencing bug. Rounds 1
+and 3 ran fs.sync → install → offline lifecycle →
+start; rounds 2 and 4 ran fs.sync → start directly.
+The install uses --mode=skip-build, so `prisma
+generate` outputs exist only via the separate lifecycle
+step — and fs.sync re-materializes /workspace/repo,
+destroying those untracked generated files. Rounds 2
+and 4 therefore compiled against a repo with no
+generated Prisma client: 1189 module-not-found
+(`../enums`, `@calcom/prisma/enums`, ×1025) surfacing
+as the 500 the matrix report shows, classified "missing
+dependency". Zero Prisma connection errors anywhere in
+the run (no ECONNREFUSED, no :5432, no P1001) — the
+data wall never got to speak in the terminal round.
+Round 3, the one correctly-sequenced round, showed the
+real wall exactly as predicted: preflight passed,
+/event-types rendered chrome with three skeleton rows
+and a disabled "Loading..." user button, feature probe
+failed 2 of 3 features. Aggravations: two of five
+repair rounds were burned on fidelity oscillation (a
+replacement-UI detour, then a .yarnrc.yml candidate the
+adjudicator had already approved being re-litigated to
+"unadjudicated" — a flake), and those fidelity rounds
+were charged against the runtime-repair budget. The
+rung chosen was declared-stub; no hint ever named the
+database. → N127 (and watchlist)
+
+directus — a new prep-quality wall, not the 2026-08-11
+predev ghost and not infrastructure (305 Daytona calls,
+all attempt 1). Upstream `packages/extensions` fans
+`build` out to two tsdown invocations sharing one
+--out-dir; tsdown cleans the dir at start of each run,
+so whichever entry builds second deletes the other's
+output — parallel order broke `dist/node.js` (round 3),
+the round-4 serialization deterministically broke
+`dist/index.*` the other way. Neither ordering can
+work; the fix (--no-clean on one entry) was one
+hypothesis past the budget. The predev fix DID land in
+round 3 and ran the workspace build. Two harness seams
+amplified it: (a) every preflight hint said "Set
+buildCommandUsed to build @directus/extensions" while
+runtime-target resolution unconditionally strips
+agent-set buildCommandUsed and forces build undefined
+for dev-server starts — the hinted channel does not
+exist (→ N131); (b) the repeated-failure fingerprint
+keys on the last error-class line, which for pnpm is
+always the ` ELIFECYCLE  Command failed` epilogue, so
+three distinct crashes counted as one repeat and the
+run died on the repeated-failure limit (2) with the
+global budget barely touched (→ N130).
+
+twenty — never reached the client stub; the wall is the
+Nx workspace build graph, terminating in a Vite
+dev-server 500. Rounds 1–5: build failures around
+twenty-shared (`twenty-shared/dist/vite.mjs` missing,
+then a self-recursive `"build": "npx nx build
+twenty-front"` rewrite). Round 6 "fixed" the build by
+rewriting the app's build script to `npx nx build
+twenty-shared` — a command that succeeds by no longer
+building the app (→ N129). At runtime, `twenty-ui`'s
+CSS build outputs don't exist, Vite's import-analysis
+500s on the entry chunk `/src/index.tsx`, and every
+route serves a full-screen Vite error overlay. The
+probe classified this "empty/unmeaningful app state"
+with a data-fixtures hint: the overlay text lives in a
+shadow root the aria snapshot pierces but the
+visible-content extraction does not, and an entry-chunk
+5xx produces neither pageErrors nor field-quoting
+diagnostics — so repairs were pointed at the data layer
+while the fault was module resolution (→ N128). N126's
+non-fire was correct behavior on wrong-layer input.
+
+### The N122(5) gate
+
+Gate text: acceptance repos (calcom, ghostfolio) clean
+of unrelated walls. ghostfolio: clean — passed.
+calcom: NOT clean — N127 sits in front of the data
+wall, and the terminal round failed on it, not on the
+missing database. Strict reading: the gate misses on
+calcom alone. Product reading: the data wall is
+directly observed in every correctly-sequenced round
+(round 3 this batch, round 5 last batch), the blocking
+bug is diagnosed with a one-line cause, and waiting one
+more matrix to re-observe a wall we can already see
+buys nothing. Decision: N122(5) implementation
+proceeds; N127 must land before (or with) the
+acceptance rerun, or calcom will fail for non-data
+reasons again.
+
+### N122(5) — landed (this session)
+
+Implementation as specified in the 2026-08-12 plan:
+postgres + mariadb (mysql protocol) + redis binaries
+baked into the submitted-code snapshot (`infra:`
+commit, dockerfile content test); one deep module
+`sandbox-services` — loopback DSNs published as
+constants, reset-then-boot provision scripts per
+service (initdb/pg_ctl as postgres, mariadb-install-db
++ socket-auth root with TCP makeademo account,
+redis-server with persistence off), `[makeademo:service]
+ready` markers as evidence; manifest declarations gain
+optional migrationCommand/seedCommand (schema reader,
+contract JSON + invariants publishing the exact DSNs,
+enforcement flip moving provisioned-service into the
+backed rungs with provisionable-service and
+command-placement checks); the template and the
+data-strategy prompt steer embedded-config →
+provisioned-service → client-stub → declared-stub; the
+offline lifecycle provisions declared services after
+install/reseal and before the build, runs migrate/seed
+through the guarded wrapper with envUsed, and reseeds
+by reprovisioning on every validation round; three new
+preparation-routed classifications (service start /
+migration / seed failure) with per-mode hints stating
+the empty-database reseed contract. The real-Postgres
+exercise is the matrix itself, per the plan.
+
+### New items
+
+### N127 (Critical, bugfix) — lifecycle must follow every workspace re-sync
+
+calcom's terminal wall. Invariant: a round that
+re-materializes /workspace/repo (fs.sync) must not
+start the app against a tree whose install/lifecycle
+outputs were destroyed by that re-sync. Either re-run
+the deps + offline-lifecycle step unconditionally after
+any fs.sync, or make the sync preserve untracked
+generated outputs (node_modules survives; generated
+source like prisma client does not). The skip logic
+that decides "install unchanged, skip it" is deciding
+about a tree the sync just replaced. Also blocks the
+N122(5) acceptance rerun: with a provisioned database,
+rounds 2/4-style sequencing would still 500 before
+touching it.
+
+Landed (this session), as the first option with the
+install reuse kept: the offline lifecycle moved out of
+the install gate and now follows every re-sync — the
+skip decision stays sound because it only concerns
+node_modules and the caches, the exact trees the sync
+preserves. Install-reuse rounds (repair preflight with
+unchanged dependency inputs, and the capture reset) run
+the lifecycle standalone from the remembered executed
+install command, so retry flags like directus's
+engine-strict bypass carry over; with no in-process
+install yet it falls back to the manifest command. The
+reuse path also recreates the staging TMPDIR (pruned at
+the end of every install round) and reapplies the Berry
+disk-fallback linker when its sentinel is armed, since
+the sync restores the repo's own .yarnrc.yml. A failed
+reuse-round lifecycle keeps the install-failure /
+lifecycle-timeout classification, and the orchestration
+now also clears the reuse marker when a reuse round
+fails at the install layer — without that, a
+lifecycle-timeout's full-latitude source-only repair
+would keep dependency inputs unchanged and replay the
+identical timeout every round.
+
+### N128 (High, bugfix) — an entry-chunk 5xx is a serve failure, not empty app state
+
+twenty's misrouted terminal round. When exploration
+observes the app's entry module (or any same-origin
+script the document requires) answering 5xx, classify
+as a serve/build failure routed to preparation repair
+with the failing URL and status in the summary — before
+any empty-state or data-strategy interpretation (N126
+included). Companion fix: visible-content extraction
+must see shadow-root text the aria snapshot already
+captures (Vite's error overlay rendered a page of
+diagnostic text that the probe read as "no visible
+content"); the overlay text names the exact missing
+import and belongs in the failure summary.
+
+Landed (this session): the explorer script records
+same-origin script responses answering 5xx (minus the
+504 stale-module shape the crawler reloads through)
+into `failedScriptResponses`, deduped and bounded; the
+backend re-filters them against the app origin and,
+when the run already failed grounding, classifies as
+"app server error" (existing preparation-repair route)
+with the failing URL and status in the summary. A named
+missing-module page error still outranks it, and a run
+that grounds its features never converts to failed.
+Companion landed: when the selector harvest and
+body.innerText both come up empty, `textSample` falls
+back to the aria snapshot's text runs — which pierce
+open shadow roots — unfiltered by cross-route dedupe,
+so every overlay-only route carries its own evidence.
+
+### N129 (High, bugfix) — the build gate must build the app under test
+
+twenty round 6 bought a green build gate by rewriting
+the app package's own build script to build a different
+project. The gate's question must be "did the app under
+test build", not "did buildCommandUsed exit 0". Options
+in strength order: verify the app's build outputs exist
+after the build step (framework-generic: the start
+command's entry artifacts); reject repairs that rewrite
+the selected app package's build script to a target
+that no longer references the app; at minimum, surface
+a fidelity check when a repair narrows the effective
+build scope.
+
+Landed (this session): option 2, at the fidelity seam.
+`readPreparationFidelityCandidates` now raises a
+candidate when a repair rewrites the selected app
+package's own `build` script so that every command
+segment carries an explicit workspace-target selector
+(nx build/run/serve, --filter/--scope/--project(s),
+yarn `workspace <name>`, npm -w/--workspace) and none
+of the targets reference the app by package name or
+directory. A script keeping any in-place step or naming
+the app stays legal, and adjudication can rescue task
+runners whose project names match none of the app's
+identifiers. Option 1 (predict build artifacts
+framework-generically) was deliberately not taken:
+artifact locations are framework-specific and guessing
+them across arbitrary repos is the overfitting this
+plan forbids; the runtime side of the same failure is
+now caught generically by N128's serve-failure
+classification. Original repos never pass through the
+fidelity seam, so unusual-but-legitimate build scripts
+in submitted repos are unaffected.
+
+### N130 (High, bugfix) — fingerprint on the cause, not the package-manager epilogue
+
+directus died on the repeated-failure limit with three
+distinct crashes. `readLastErrorCauseLine` must skip
+wrapper epilogue lines — pnpm's ` ELIFECYCLE `,
+`ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL`, `Exit status N`,
+npm's `npm ERR! Lifecycle script`, yarn's `Command
+failed with exit code` — and land on the last
+tool-authored error line above them, exactly as its
+doc comment already promises. One fingerprint per
+actual cause; the repeated-failure limit then means
+what it says.
+
+Landed (this session): a wrapper-epilogue pattern in
+the cause-line reader covering the pnpm, npm (including
+the Failed at / not-a-problem-with-npm / log-location
+block), and yarn shapes; epilogue lines are skipped
+while any tool-authored cause line exists and kept as
+the answer only when nothing above them qualifies, so
+a bare epilogue never turns into "no cause found". The
+generic command-failed shape anchors to the line end so
+execa-style lines that append the failing command keep
+their identity. Locked by an orchestration test:
+distinct causes above identical pnpm epilogues no
+longer collapse into one repeated-failure fingerprint.
+
+### N131 (Medium, bugfix) — stop hinting a channel the resolver deletes
+
+The unbuilt-workspace-package hints say "Set
+buildCommandUsed to …" while runtime-target resolution
+strips agent-set buildCommandUsed and forces build
+undefined for dev-server starts — directus's agent
+obeyed the hint into a wall three rounds running.
+Either honor a preflight-repair-set buildCommandUsed
+(resolution keeps it when it names a real workspace
+build target), or reword the hints to the channel that
+exists (the repo's own pre-start hook / predev, or the
+manifest's install scope). The hint and the resolver
+must agree on who owns the build command.
+
+Landed (this session): honor, plus hint wording that
+states the contract. `resolvePreparationRuntime` now
+keeps an agent-set buildCommandUsed whenever resolution
+itself produced no build command (dev-server starts,
+buildless targets) and the command — or the app script
+body it runs one level down — references a known
+workspace package by full name or directory (including
+`./<dir>` path filters) while selecting no absent one.
+A resolved build command still wins, and commands
+naming no real workspace target are still stripped, so
+backend ownership is unchanged everywhere except the
+hinted channel. The three unbuilt-workspace-package
+hints now say to name the package in the command and
+that the backend keeps such a command even for
+dev-server starts — hint and resolver state the same
+contract.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- Failed agent-artifact validations emit no pipeline
+  event (homer's invisible flow-planning retry);
+  dashboards undercount repair rounds.
+- Script repair can neuter a step's declared FlowSpec
+  intent without failing anything (homer's "" search).
+- Fidelity-repair rounds charge the runtime-repair
+  budget, and the adjudicator re-litigated an
+  already-approved .yarnrc.yml candidate to
+  "unadjudicated" (calcom; one full round lost).
+- ghostfolio passed on its last repair round — if 4 is
+  the cap, zero margin.
+- ghostfolio's manifest carried a stray top-level
+  `"rung": null` alongside the per-service rungs;
+  whitelist readers drop it, but whatever writes it is
+  sloppy.
+
+### Recommended order
+
+1. N127 — gates the N122(5) acceptance rerun; calcom
+   cannot show the provisioned database working while
+   rounds still start against a wiped tree.
+2. N130 — cheap, and it is currently terminating
+   pnpm-monorepo runs that are making progress.
+3. N128 — twenty's repairs cannot aim until the 500 is
+   named as a serve failure with the overlay text.
+4. N129 + N131 — the build gate and its repair channel,
+   one seam conversation.
+5. Matrix rerun: expected trajectory is homer and
+   ghostfolio holding green (ghostfolio ideally
+   choosing provisioned-service under the new
+   steering), calcom green through preflight on a
+   seeded Postgres (the N122(5) acceptance), directus
+   surviving to the tsdown hypothesis with per-cause
+   fingerprints, twenty reaching its client stub with
+   the serve failure named.
+
+## Addendum (2026-08-13, wave-7 rerun — all five failed: a Daytona platform incident plus a stale snapshot; the wave-7 code held)
+
+The 2026-08-13T19-21 batch: all five entries failed,
+and none of the failures implicate N127–N131. Two
+environmental causes explain everything. First, a
+Daytona platform incident spanning roughly 19:33–21:42
+UTC: control-plane fs.upload/fs.sync/fs.write-text
+calls hung without responding (each burning the full
+10-minute attempt timeout), and sandbox egress DNS was
+broken (EAI_AGAIN to registry.npmjs.org inside open
+install windows). That killed homer, directus, and
+twenty on the 90-minute wall clock — amplified by the
+N123 envelope's own design, whose 10-min-per-attempt ×
+8-attempt ladder let a single envelope legally consume
+60–84 minutes (→ N133). Second, the deployed
+submitted-code snapshot
+(makeademo-submitted-code-browser-ca-20260809-mem8,
+built 2026-08-09) predates the Dockerfile's N122(5)
+services layer, so the postgres/mariadb/redis binaries
+the provisioned-service rung depends on do not exist in
+the sandbox — the rung's boot script fails on its first
+shell line. That killed calcom and derailed ghostfolio
+(→ N132). The N122(5) acceptance question is therefore
+unanswered, not failed: no run in this batch ever
+executed against a real provisioned database.
+
+### Diagnoses (2026-08-13T19-21)
+
+homer — wall-clock death, pure incident. One fs.upload
+envelope opened at 20:02 and did not fail until 20:59 —
+57 minutes inside a single control-plane call — and the
+install windows that did open hit EAI_AGAIN resolving
+registry.npmjs.org (sandbox egress DNS was down too, so
+even successful uploads led to dead installs). Nothing
+app-specific or wave-7-specific in the run at all.
+
+directus — wall-clock death, pure incident. Two fs.sync
+storms (19:49→20:28 and 20:38→21:39) consumed nearly
+the entire budget before any repair hypothesis could
+run; the tsdown --out-dir wall from the previous batch
+was never reached. The per-cause fingerprints (N130)
+never got input to discriminate.
+
+twenty — wall-clock death, but with the batch's one
+piece of real progress first: round 3 passed preflight
+and ran exploration for the first time — the N129
+fidelity veto and N131's honored build channel got the
+workspace build through, and the serve failure of the
+previous batch did not recur. The new wall is past the
+build: object routes rendered only navigation chrome
+because the client stub injected no data (watchlist).
+Then the incident took over: round 4's lifecycle timed
+out on yarn retrying a sealed-network fetch until exit
+124, and round 5 died on ENOSPC in
+/root/.makeademo-staging (watchlist) before the clock
+ran out.
+
+calcom — the N122(5) image gap, end to end. The
+provisioned-service rung's postgres boot script failed
+on its first line: `ls: cannot access
+'/usr/lib/postgresql/*/bin': No such file or directory`
+then `chown: invalid user: 'postgres'` — the snapshot
+simply does not contain the binaries the rung was built
+against. The run then oscillated: service boot fails →
+repair drops the rung → the app starts but every
+DB-backed feature (event types, booking) is
+unobservable → repair re-adds the rung → boot fails
+again — to the repair limit. The oscillation is
+rational agent behavior against an impossible
+environment; no harness bug.
+
+ghostfolio — image gap, then an unhinted retreat path.
+Round 1 hit the same missing-binaries boot failure and
+the agent legally retreated to the client-stub rung —
+but the retreat rewrote startup to `npm run start`
+(`node dist/apps/api/main`), and dist/ had never been
+built: MODULE_NOT_FOUND every round after. The resolver
+derives no build command for this shape and the
+unbuilt-workspace-package hints (N131) only match
+workspace-package paths, not root-level dist/ output —
+so no hint ever named the missing build (watchlist:
+retreat-path build channel).
+
+### New items
+
+### N132 (Critical, infra) — the deployed snapshot must contain its own services layer
+
+The Dockerfile has shipped the
+mariadb-server/postgresql/redis-server layer since the
+N122(5) landing; the deployed snapshot predates it, and
+nothing between "Dockerfile changed" and "matrix run"
+checks that the deployed image matches. Fix in two
+parts. (1) Rotate: build a fresh snapshot from the
+current Dockerfile via the established runbook
+(`daytona snapshot create`, CPU 2 / memory 8GB / disk
+10GB), repoint MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT,
+run `bun run verify:daytona-image`. (2) Guard: the
+verifier must provision all three services with the
+real createServiceProvisionCommand inside the
+submitted-code sandbox and demand each
+`[makeademo:service] <name> ready` marker, so a
+snapshot missing the binaries fails verification
+instead of failing mid-matrix.
+
+Landed (this session): the verifier guard runs every
+provisionable service through the exact harness call
+shape (sh -ec + shellQuote) and asserts the ready
+markers; snapshot
+makeademo-submitted-code-browser-ca-20260813-services-mem8
+built from the unchanged Dockerfile and `.env`
+repointed. The guard earned its keep immediately: the
+first run against the fresh snapshot failed on a latent
+bug in the mysql provision script — its first-ever real
+execution (the matrix never got past the missing
+binaries). mariadbd drops to the mysql user before
+creating its socket and pid file, and both paths sat
+directly in the root-owned services root: TCP bound
+fine, then "Can't start server : Bind on unix socket:
+Permission denied" and abort. Fixed by moving both
+inside the mysql-owned data directory (regression test
+on the script contract); postgres and redis were never
+exposed — postgres writes only inside its chowned
+subdirectory and redis runs as root. One retry also ate
+a residual incident flicker (the parent sandbox
+transiently could not resolve github.com — egress DNS,
+the same symptom that killed homer's installs). The
+rerun passed everything: all three ready markers, plus
+the full pre-existing runtime verification.
+
+### N133 (High, bugfix) — hung attempts must not inherit the transient ladder
+
+The escalating ladder (2s→90s backoff, 8 attempts)
+exists for fast-rejecting transients — 502s, resets —
+where retrying is cheap and the 2026-08-12 batch proved
+patience wins. A hung attempt is a different animal:
+each one costs the full 10-minute attempt timeout
+before the envelope even learns it failed, so the same
+ladder prices a persistent control-plane outage at
+60–84 minutes per envelope against a 90-minute run.
+Attempts abandoned by the attempt timeout (error name
+DaytonaControlPlaneAttemptTimeoutError) now count
+against a separate hungAttemptLimit (default 2)
+regardless of remaining ladder rungs: a persistently
+hung envelope fails in ~21 minutes, while fast
+transients keep the full ladder unchanged.
+
+Landed (this session): the cap in the control-plane
+envelope with two tests — persistent hangs stop at the
+cap with the attempts count and classification
+preserved in the terminal error, and a hang followed by
+fast 502s still walks the whole ladder to success.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- ghostfolio's retreat path has no build channel: a
+  client-stub retreat that switches startup to a
+  root-level dist/ entry (`node dist/apps/api/main`)
+  gets MODULE_NOT_FOUND with no hint and no resolver
+  build derivation — the unbuilt-workspace hints only
+  match workspace-package paths.
+- twenty's client stub injected no data: object routes
+  rendered navigation chrome only. The stub reached is
+  not the stub working.
+- twenty round 5 hit ENOSPC in /root/.makeademo-staging
+  — staging-dir hygiene under repeated repair rounds.
+- Incident-mode observability: nothing in the run
+  distinguishes "the platform is down" from "the app is
+  slow" until the wall clock kills the run; a batch
+  health canary (verify:daytona-image before launch)
+  is now the manual mitigation.
+
+### Rerun
+
+All five entries, after the N132 rotation is verified.
+Expected trajectory: calcom and ghostfolio finally ask
+the N122(5) acceptance question against real binaries;
+homer green as before the incident; directus reaching
+the tsdown hypothesis with N130's per-cause
+fingerprints; twenty resuming from its round-3 progress
+into the client-stub data question.
+
+## Addendum (2026-08-13, wave-7 second rerun — all five failed: the batch starved its own uplink, and two apps hit real walls the harness misread)
+
+The 2026-08-13T23-23 batch: all five entries failed,
+but unlike the 19-21 batch the platform was healthy —
+directus's 28MB archive upload succeeded on an ordinary
+retry in the same minutes twenty's was dying, and no
+envelope saw a hang outside the bulk transfers. Three
+causes explain everything. First, launch-window network
+contention of the batch's own making: five entries
+entered the launch window together, putting two
+multi-GB clones (calcom, ghostfolio) and three archive
+uploads — including twenty's 294MB uncompressed tar —
+on one developer uplink at once. The clones died
+locally at 87s and 213s with exit 128 mid-transfer
+(both repos clone fine solo, and there are no
+disk-pressure events), and twenty's upload was killed
+at exactly 600s twice — a live, slow transfer abandoned
+as a "hang" — so the N133 cap correctly ended the run
+in 25 minutes (→ N134). Second, a flow-planning rule
+contradiction on homer: the prompt ordered "select
+exactly min(3, inventory)" while the validator demanded
+evidence the catalog could not supply for dark-mode, so
+three fresh sessions produced three byte-identical
+rejected FlowSpecs (→ N135). Third, a dead demo gate on
+directus: the client stub keyed on
+`import.meta.env.MAKEADEMO_DEMO`, which Vite never
+delivers to browser code, so the stub was dead code,
+the app's real calls stormed ECONNREFUSED
+127.0.0.1:8055 through the Vite proxy, and the explorer
+misclassified the wreckage as "requested feature not
+observable" — five repair rounds aimed at the wrong
+layer (→ N136). N132's snapshot held (the services
+binaries verified clean before launch), and N133 did
+its job — but the N122(5) acceptance question is
+unanswered for the third consecutive batch: calcom and
+ghostfolio died before ever reaching Daytona.
+
+### Diagnoses (2026-08-13T23-23)
+
+calcom — local clone death, launch-window contention.
+`git clone` exited 128 at 87s, mid-transfer, while
+ghostfolio's clone and three archive uploads shared the
+uplink. The report row truncated the message at
+"Cloning into …" and nothing durable recorded git's
+trailing fatal: line (→ N134 part D). The same clone
+succeeds solo after the batch. Never reached Daytona;
+the N122(5) question was not asked.
+
+ghostfolio — same shape as calcom at 213s: exit 128
+mid-transfer during the launch window, full fatal line
+lost to truncation, clean solo clone afterward. Never
+reached Daytona.
+
+twenty — the 294MB uncompressed screened-repo.tar
+upload was abandoned at exactly 600s by the envelope's
+attempt timeout, twice in a row, and the N133 cap ended
+the run at 25 minutes. Working as designed — but the
+design conflates a hung call with a live transfer that
+is merely big: directus's 28MB upload succeeded on
+retry at the same moment, proving the control plane
+responsive. The transfer needed compression and a bound
+that scales with payload (→ N134 parts A and C), not
+more retries.
+
+homer — flow-planning wedge, zero forward progress
+after exploration. The inventory held three features
+but the ActionCatalog grounds dark-mode with only a
+navigate action (the theme toggle is an anchor
+harvested into primaryNavigation; buttons is empty),
+while the validator unconditionally demands a tagged
+interaction and a tagged visible assertion per selected
+feature. The prompt's "select exactly min(3,
+inventory)" forced dark-mode in anyway, so attempt
+after attempt — three, in three fresh sessions —
+selected the same three features and died on the same
+violation, byte-identical each time. The N131 lesson
+recurs one seam up: the hint and the validator must
+state the same contract (→ N135).
+
+directus — deepest run of any batch, then five rounds
+against a dead gate. The tsdown wall from two batches
+ago was never hit, preflight passed, and exploration
+ran — real cumulative progress (N129/N130/N131 all
+earning keep). The preparation chose the client-stub
+rung for all three services (despite the
+provisioned-service rung being available and preferred —
+watchlist) and gated the stub on
+`import.meta.env.MAKEADEMO_DEMO`. Vite only exposes
+VITE_-prefixed variables (or explicit `define` /
+`envPrefix` entries) to browser code; `process.env`
+works inside vite.config.ts, which is exactly why the
+gate looked right to the agent that wrote it. The stub
+never engaged, every real API call was refused
+(ECONNREFUSED 127.0.0.1:8055 storm through the Vite
+proxy), and the explorer classified the empty screens
+as "requested feature not observable" — so repair
+attacked feature selection and routes, never the
+delivery mechanism (→ N136).
+
+### New items
+
+### N134 (High, infra) — the batch must not starve its own uplink
+
+Four parts, one cause: bulk transfers were unbounded,
+uncompressed, invisible, and concurrent. (A) Compress:
+the screened archive is now `git archive
+--format=tar.gz` (source trees compress several-fold;
+twenty's 294MB becomes a fraction of itself), with the
+quarantine member-check reading the gzip stream.
+(B) Serialize: one in-process FIFO BulkTransferLimiter
+per matrix batch, threaded through
+DefaultDemoPipelineOptions, wraps each entry's
+clone+archive and its sandbox archive upload so the
+uplink carries one bulk transfer at a time — the
+existing 30–60s launch stagger spreads control-plane
+herds but not multi-minute transfers. (C) Size the
+bound to the payload: fs.upload computes its
+attemptTimeoutMs from the actual payload bytes (256KiB/s
+worst-case floor plus headroom) whenever that exceeds
+the 600s default, so a live large transfer is never
+abandoned as a hang while true hangs keep the tight
+bound. (D) See the failure: readGithubRepoSnapshot logs
+`repo.clone.failed` with git's full stderr before
+rethrowing, and the matrix report detail rides along
+the message's last `fatal:`/`error:` line the way it
+already rides `[makeademo:]` markers.
+
+Landed (this session): all four parts with tests at
+each seam — a real-git gzip test plus gunzipped
+quarantine assertions, limiter FIFO/failure-release
+unit tests plus seam tests proving the snapshot read
+and the archive upload run inside the batch's one
+limiter, a sparse-300MB upload test proving the scaled
+attempt bound (and a small-payload test proving the
+default is untouched), and clone-failure tests at both
+the snapshot log and the report row.
+
+### N135 (High, bugfix) — flow planning may only demand what the catalog can ground
+
+The prompt and validator now share one groundability
+predicate: a feature is groundable when the
+ActionCatalog tags a visible assertion for it on a
+route outside login/auth walls — the only per-feature
+demand the validator enforces unconditionally (every
+other FlowSpec rule is satisfiability-guarded).
+Inferred flows must select exactly min(3, groundable
+count) — at least one, three when possible — and record
+each ungroundable inventory feature in a new
+droppedFeatures field with a reason, so the concession
+is auditable instead of silent. Zero groundable
+features fails fast before any agent attempt, routed at
+exploration/catalog quality ("repair App Exploration or
+the ActionCatalog"), because no valid FlowSpec exists
+and every attempt would be wasted. Maker-requested
+features are untouched: an explicit request that cannot
+be grounded must still fail loudly, never be silently
+dropped. Validator messages name the groundable set and
+the required count, so a wrong attempt's retry prompt
+states the exact contract (the N131 lesson applied to
+this seam). Contract version 2026-08-13.
+
+Landed (this session): shared predicate module, schema
++ contract + validator + prompt updated together, with
+tests for the grounded-two acceptance, the
+three-feature rejection naming the count rule, the
+missing-droppedFeatures rejection, and the
+zero-groundable fast fail with zero attempts.
+
+### N136 (High, bugfix) — a refused-loopback storm under a declared client stub is a delivery failure, not a feature failure
+
+The explorer now converts a feature-observability
+classification into "client stub not engaged" when the
+run declared a client-stub rung and stderr shows
+repeated ECONNREFUSED against loopback backends — the
+signature of a stub that never engaged in the browser
+bundle. The new classification routes to preparation
+repair with full repo latitude (the gate is app
+source), and its summary and hints name the delivery
+contract: bundlers only expose allowlisted values to
+browser code — for Vite, a VITE_-prefixed
+import.meta.env variable or an explicit define. The
+data-fixture playbook gains the same contract as step
+7, so preparation stops writing gates the bundler
+strips. Single refusals and provisioned-service runs
+are never converted: a provisioned backend refusing
+connections is a service problem, and one refusal is
+noise.
+
+Landed (this session): stderr conversion with positive
+and both negative tests (provisioned-service rung and
+single-refusal), repair routing test, and the playbook
+step.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- N122(5) remains unanswered after three batches:
+  calcom and ghostfolio have still never executed
+  against real provisioned services. The rerun is the
+  question.
+- directus chose the client-stub rung for all three
+  services despite the provisioned-service rung being
+  available and preferred — if it recurs with N136's
+  contract in place, the rung-steering prompts (N122(3))
+  need revisiting.
+- Carried: ghostfolio's retreat path has no build
+  channel (root-level dist/ MODULE_NOT_FOUND gets no
+  hint); twenty's client stub injected no data when
+  reached; twenty's ENOSPC in /root/.makeademo-staging
+  under repeated repair rounds.
+
+### Rerun
+
+All five entries. Expected trajectory: the clones and
+uploads serialize through the batch limiter with
+compressed archives — calcom and ghostfolio finally
+reach Daytona and ask the N122(5) question; twenty's
+archive upload fits comfortably inside one sized
+attempt; homer plans two grounded features with
+dark-mode recorded in droppedFeatures and proceeds to
+capture; directus either engages the stub through a
+bundler-visible gate or is steered to the
+provisioned-service rung, and any dead gate that slips
+through is named "client stub not engaged" on round
+one instead of round five.
+
+## Addendum (2026-08-14, wave-8 — homer green; the batch machinery held everywhere; four failures, each one layer deeper: N137–N140)
+
+The 2026-08-14T03-07 batch: homer PASSED in 306s
+(final video composited; three grounded features
+selected, droppedFeatures empty). Every wave-7 fix
+validated on its first exercise: both multi-GB clones
+completed with zero exit-128s (N134 limiter + gzip —
+calcom's archive 162MB, twenty's 294MB tar became
+134MB and uploaded inside one ordinary attempt), the
+N122(5) provisioned-Postgres rung executed for real on
+three entries, N135's count rule was satisfied
+normally, and N136 fired and was obeyed. The four
+failures are new, deeper walls: a capture-stage race
+with no repair path (calcom), an OOM-killed migration
+hidden behind npm noise (twenty), N136's own blind
+spot between "gate dead" and "gate live but partial"
+(directus), and an asset-404 storm classified as empty
+app state (ghostfolio).
+
+### Diagnoses (2026-08-14T03-07)
+
+homer — passed, 306s. Flow planning selected
+service-tiles, operations-page, service-search — all
+three groundable this round, droppedFeatures empty —
+and capture and compositing ran clean.
+
+calcom — five minutes from a final video; the N122(5)
+acceptance question is ANSWERED YES. Provisioned
+Postgres migrated and seeded via the repo's own
+commands (`yarn workspace @calcom/prisma db-deploy` /
+`db-seed`), preflight passed, DB-backed features
+produced real browser evidence, the capture-path
+dry-run passed. The terminal failure is a race in the
+real continuous take: the script clicked "New
+schedule" (which starts the app's own client-side
+redirect) and immediately issued
+`page.goto(/availability)`; the redirect aborted the
+goto (net::ERR_ABORTED). The identical script passed
+the dry-run fifteen minutes earlier — timing-dependent
+by construction. Seam gap: a scene failure in the real
+take goes straight to pipeline.failed; only the
+dry-run routes to script-repair (→ N137).
+
+twenty — provisioned Postgres booted and the declared
+migration created schemas public/core and extensions
+against the real service; then the migration's command
+runner (a full NestJS bootstrap after SWC-compiling
+7,314 files) was `Killed` at the sandbox's ~8GB memory
+ceiling. That one-word fact is the literal last line
+of the evidence; the failure summary headlined npm
+config-warning noise instead, so six rounds (including
+a detour through lifecycle-timeout and
+lockfile-reconciliation install failures) never
+addressed memory, and the run died at the 90-minute
+deadline (→ N140).
+
+directus — the N136 arc worked, then hit its own blind
+spot. Rounds 1–4 fixed a Vite config crash, the predev
+build, and an app-served 500 (the N117/N128 detector
+caught it). Round 5 fired "client stub not engaged"
+correctly. The round-6 repair obeyed the hint — gate
+moved to VITE_MAKEADEMO_DEMO, read via
+import.meta.env, declared in envUsed (which
+guardedRuntimeEnv spreads into the app's process) —
+and the stub partially engaged: screenshots show the
+app chrome rendering "Directus Demo" from fixtures.
+But uncovered endpoints still refused (12×
+ECONNREFUSED 127.0.0.1:8055), an "owner not set"
+onboarding modal blocked every route, and the target
+route 404'd. Because refusals persisted, N136 fired
+again with the now-false "the stub is dead code"
+message and misdirected the final round; budget
+exhausted (→ N138; modal and route on the watchlist).
+
+ghostfolio — blank pages with the mechanism sitting in
+the console evidence. Round 1 was an honest
+provisioned-service seed failure (headline: the same
+npm noise class as twenty — N140 applies), rounds 2–3
+build failures, round 4 the known 404-mid-compile
+readiness shape. Round 5 passed preflight, then
+exploration found four routes serving their document
+shell and rendering nothing: every asset request
+doubles the locale prefix — /en/en/styles.css,
+/en/en/chunk-*.js — all 404 (the Angular i18n build's
+`<base href="/en/">` composing with the serve path),
+so zero JavaScript loads. Classified
+"empty/unmeaningful app state", which aimed repair at
+data fixtures instead of the serve configuration
+(→ N139).
+
+### New items
+
+### N137 (High, bugfix) — capture failures deserve the same repair path as validation failures
+
+A scene failure during the real continuous take must
+route through the bounded script-repair loop the
+dry-run already uses (the N125 structured failedAction
+machinery exists; the take should produce the same
+failure shape), instead of ending the pipeline on the
+first flake. Additionally, the script contract should
+forbid the racy shape itself: a `goto` immediately
+following a click that triggers client-side navigation
+(require waitForURL or equivalent settling first) —
+enforce at the static script validation seam so the
+script is fixed before any take runs. Acceptance:
+calcom's exact failure (click "New schedule" →
+immediate goto aborted) either never validates or is
+repaired and retaken within budget.
+
+Landed: static validation now rejects an immediate
+`goto` after a click proven to start client-side
+navigation, continuous-take failures retain their
+structured action identity, and the default pipeline
+routes them through a bounded repair, full revalidation,
+fresh reset, and retake.
+
+### N138 (High, bugfix) — N136 must distinguish a dead gate from partial stub coverage
+
+When the refused-loopback signature fires but the
+probed routes rendered real content (exploration found
+headings/controls, i.e. the stub demonstrably
+delivered fixtures), reclassify as "client stub
+partially engaged": name the refused request targets
+(and paths where available from the runtime network
+guard) so repair aims at the uncovered client seams,
+not at delivery that already works. Keep routing to
+repo-preparation-repair. The "dead code / delivery
+channel" message fires only when routes rendered
+nothing stub-shaped. Acceptance: directus round-6
+evidence produces the partial-coverage classification
+listing 127.0.0.1:8055, not the delivery message.
+
+Landed: repeated refused-loopback evidence now records
+both backend targets and proxy paths. Routes that
+rendered headings or controls classify as
+`client stub partially engaged` and steer repair toward
+uncovered client seams; only hollow routes retain the
+dead-gate diagnosis.
+
+### N139 (High, bugfix) — a same-origin subresource-404 storm is a serve failure, not empty app state
+
+Extend the N128 entry-chunk rule: when exploration's
+console evidence shows the document's own styles and
+script chunks 404ing (same-origin subresources), the
+classification must become a serve/configuration
+failure that names the failing asset path prefix —
+including the doubled-prefix shape (/en/en/…) — never
+"empty/unmeaningful app state". Acceptance:
+ghostfolio's round-5 evidence classifies as a serve
+failure whose message contains the /en/en/ prefix.
+
+Landed: an already-failing exploration with a storm of
+same-origin stylesheet/script 404s now reports an
+`app server error`, names the common asset prefix (such
+as `/en/en/`), and steers at document-base and serve-path
+configuration instead of fixture content.
+
+### N140 (High, bugfix) — surface the kill, not the epilogue, in service-command evidence
+
+Provisioned-service migration/seed failure summaries
+must headline the causal line — a trailing `Killed`,
+`fatal:`, or nonzero-exit marker — not the npm
+config-warning epilogue (the N130/N134-D lesson
+applied to this seam). When the command was killed
+(signal/OOM shape), say so and carry the
+memory-ceiling hint (bounded NODE_OPTIONS
+--max-old-space-size for the migration/seed command in
+envUsed, prefer narrower targets); keep the
+"service migration failure"/"service seed failure"
+classifications and their preparation-repair routing so
+the repair can actually bound the memory. Acceptance:
+twenty's attempt-6 evidence produces a summary whose
+first line names the Killed migration, and ghostfolio's
+attempt-1 seed failure headlines its real error.
+
+Landed: provisioned-service migration and seed reports
+now headline the last causal `Killed`, `fatal:`, or
+tool-authored nonzero-exit line ahead of warning noise.
+Killed commands also carry bounded
+`envUsed.NODE_OPTIONS --max-old-space-size` and
+narrower-target guidance while retaining their existing
+repair classifications.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- directus under a working stub: the "owner not set"
+  onboarding modal blocks every route, and
+  /admin/settings/data-model/+ 404s — fixture
+  completeness (project-settings owner) and route
+  coverage, visible only once N138 stops misdirecting.
+- twenty's mid-run detour: automatic lockfile
+  reconciliation failed in rounds 3–5 before the run
+  returned to the migration wall — reconciliation
+  robustness under berry.
+- calcom absorbed one "features declare identical
+  proofs" preparation-manifest rejection (round 1) —
+  recovered, but worth watching for prompt drift.
+- The capture dry-run passed a script the real take
+  failed — beyond N137's repair path, dry-run/take
+  parity may deserve its own look if recurrence shows.
+
+### Rerun
+
+All five entries after N137–N140 land. Expected:
+calcom green (its only wall is the capture race);
+twenty reaches a bounded migration or fails it with a
+memory headline on round one; directus spends its
+budget on stub coverage and the modal instead of
+delivery; ghostfolio's serve-path fix gets named on
+round one; homer stays green.
+
+## Addendum (2026-08-14, wave-9 — ghostfolio's first video; N139 validated on its first exercise; a rule contradiction, a word-only stub, and a sandbox twenty outgrew: N141–N146)
+
+The 2026-08-14T05-59 batch: TWO passes. homer green
+again (655s), and ghostfolio produced its FIRST final
+video (2,855s) — N139 fired on round 3 exactly as
+specified ("App server error: 13 of the document's own
+stylesheet/script assets returned HTTP 404 under…"),
+round 4 fixed the serve path, and capture plus
+compositing ran clean. The batch machinery held
+end-to-end for the third consecutive run: no infra
+casualties, all five entries ran their full course.
+The three failures are each a different lesson: calcom
+died in a contradiction between the new N137 static
+rule and the catalog-conformance rule (the remedy the
+first prescribes, the second forbids); directus
+regressed onto a repair path that declared stubs in
+words while shipping none, and fidelity took it at its
+word; twenty never even reached last wave's migration
+wall — it hit the sandbox's 8GiB memory ceiling and
+10GiB disk during install and build, with every causal
+line hidden by summarizer defects.
+
+Wave-8 item scorecard: N139 VALIDATED (ghostfolio
+passed). N137's static rule fired correctly on calcom
+but its prescribed remedy is unsatisfiable (new
+finding, → N141); its take-repair path was never
+reached. N138 and N140 were not exercised — directus
+failed before exploration, twenty before any service
+command.
+
+### Diagnoses (2026-08-14T05-59)
+
+homer — passed, 655s (slower than wave-8's 306s, same
+shape: three groundable features, clean capture).
+
+ghostfolio — passed, 2,855s. Rounds 1–2 were dev-server
+connect failures during compile, round 3 fired the new
+N139 serve-failure classification naming the doubled
+locale prefix, round 4 repaired the serve
+configuration and every feature grounded, rounds 4–5
+passed. First ghostfolio final video.
+
+calcom — deepest run yet, killed by two rules that
+contradict each other. Preflight passed (three
+"requested feature not observable" rounds, then
+green). But exploration's session degraded: the
+catalog records that clicking "Apps" and "New" on
+/availability landed on /auth/login (the explorer's
+own login attempt also failed — clicking Continue
+before hydration self-submitted the form as a native
+GET, leaving csrfToken and empty email/password in the
+URL). Flow planning nonetheless grounded
+weekly-availability-event-duration on
+click-interaction-3-2 — a click whose only observed
+outcome is the auth wall — and coverage enforcement
+then REQUIRED the script to contain it. Static
+validation attempt 3: the N137 rule fired (goto after
+a navigation-starting click) and suggested "an
+assert-url action compiled to waitForURL". The repair
+obeyed, adding assert-url confirm-new-navigation.
+Attempt 4: the kind-conformance rule rejected it —
+compatibleCatalogKinds("assert-url") is ["assert"],
+and the only catalog entry carrying the observed
+destination is the click itself (kind "click"); an
+assert-url also requires action.path to equal its
+source entry's route. The prescribed remedy is
+structurally unexpressible; three script-repairs
+ping-ponged between the two rules and exhausted the
+budget without a take ever running (→ N141, N142).
+
+directus — a nondeterministic repair path regressed
+below wave-8's high-water mark. This round's
+preparation abandoned stub delivery entirely: envUsed
+carries only NODE_ENV (no VITE_MAKEADEMO_DEMO gate),
+mocksAndFixturesAdded and localDemoModeChanges are
+empty, all three dataStrategy rungs are
+"declared-stub" whose own detail text admits "no
+…-backed local fixture adapter was added", and
+knownLimitations states data-backed routes require a
+separately configured Directus API. Fidelity PASSED
+this word-only manifest six times ("Prepared runtime
+preserves the screened product application") — the
+N122(2) enforcement checks that a legal rung is
+declared, not that anything backs it. Rounds 1–5 were
+spent untangling self-inflicted Vite config and module
+errors (@directus/extensions unbuilt under the
+filtered install; the predev build of 19 workspace
+packages blew the readiness budget as round 5's
+"listen failure"). Round 6: the app finally bound, and
+the readiness curl of the first featureInventory
+entryPath /settings/data-model/+ was proxied by the
+Vite dev server to the absent API at 127.0.0.1:8055 —
+HTTP 502, classified "build failure" (the app had
+built and bound). Budget exhausted; N136/N138 never
+ran because the failure precedes exploration
+(→ N143, N144).
+
+twenty — never reached the migration wall; died
+shallower, against the sandbox itself, with every
+causal line buried. Attempts 1 and 4: build failure —
+the real cause is ERR_MODULE_NOT_FOUND for
+/workspace/repo/node_modules/twenty-shared/dist/vite.mjs
+(twenty-front's vite.config.ts imports a workspace
+dependency nobody built), but the summary headlined an
+ANSI-mangled code-frame fragment (";5;249meta_url =
+…") — the excerpt slicer cut mid-escape-sequence and
+never surfaced the causal line. Attempts 2 and 5:
+network-closed lifecycle deadline (exit 124); the
+excerpt is six IDENTICAL yarn RequestError/ECONNREFUSED
+stacks (yarn reaching for the registry inside the
+network-closed phase — the cache/lockfile was never
+reconciled while the network was open), and buried
+mid-excerpt sits the actual kill: "1726 Killed — yarn
+rebuild" (OOM again), followed by a failed npm exec
+vite build; the canned "Everything in the output below
+completed successfully" framing is factually false for
+this window. Attempt 3: ENOSPC — yarn's cache copy
+died on the 10GiB disk (the [makeademo:disk] marker
+shows 69% used AFTER failure cleanup; the peak hit
+100%), and [makeademo:mem] peak-bytes reads within
+kilobytes of exactly 8GiB in BOTH the deps and build
+phases — the cgroup ceiling is being slammed, not
+approached. Verdict: twenty does not fit the current
+sandbox class, and the evidence layer hid it
+(→ N145, N146).
+
+### New items
+
+### N141 (High, bugfix) — a static rule must not prescribe a remedy another rule forbids
+
+Make the goto-after-click settle requirement
+satisfiable. A rules audit (2026-08-14) showed the
+originally sketched option (a) — widening
+compatibleCatalogKinds so assert-url may ground on the
+click — is insufficient: a click-grounded assert-url
+is independently rejected by the route-agreement rule
+(action.path must equal the click's ORIGIN route, not
+its destination) and by all three feature-selection
+rules (referencedAppMapRoutePaths, referencedActionIds,
+featureIds), so the settle would still be illegal on
+four grounds. Implement (b): compile the settle into
+the click itself — a click whose catalog evidence
+records client-side navigation emits
+waitForURL(destination) in the capture compiler, and
+the static goto-after-click rule is removed (the racy
+shape can no longer be authored). Two hygiene
+requirements: the navigation evidence must become a
+structured catalog field written at evidence ingestion
+(the current clickStartedClientNavigation predicate
+regex-matches the prose expectedResult — the
+wording-lottery fragility N102–N111 documented), and
+the compiler must key off that field, not prose.
+Acceptance: calcom's exact attempt-3 script shape
+(click-interaction-3-2 followed by goto) compiles with
+a settle between click and goto and validates
+statically with no repair round.
+
+Landed: exploration now records same-origin click
+destinations as structured ActionCatalog evidence,
+backend enrichment copies only that evidence into the
+typed click, and the capture compiler races the click
+against `waitForURL(destination)` before the next step
+can begin. The contradictory prose-regex static rule
+is gone, and the compiler contract version advanced.
+
+### N142 (High, bugfix) — a click observed to land on an auth wall grounds nothing
+
+Extend N135's groundability to interactions: a catalog
+click whose observed navigation destination matches
+the auth-wall route shape (the SAME predicate N135
+applies to routes — one shared definition, not a
+second list) is auth-degraded evidence, and flow
+planning must never reference it in a feature's
+referencedActionIds. What happens to the feature then
+splits on provenance — a rules audit (2026-08-14)
+caught that unconditional dropping contradicts two
+standing rules ("Preserve every selected
+productContext feature, including every requested
+feature" in the repair prompt, and the "requested
+feature not observable" preflight gate):
+
+- INFERRED feature: drop it (droppedFeatures, N135's
+  count rule selects from the remainder).
+- REQUESTED feature: dropping is forbidden — fail the
+  exploration round with the EXISTING "feature auth
+  barrier" classification (already routed to
+  repo-preparation-repair, which owns the
+  authentication/session seam), naming the
+  auth-degraded clicks and their destinations, so the
+  repair fixes the seeded session instead of flow
+  planning silently shipping a demo missing a feature
+  the user asked for.
+
+Acceptance: calcom's wave-9 catalog
+(click-interaction-3-2, expectedResult "/auth/login
+became visible", backing the REQUESTED
+weekly-availability feature) produces either a
+FlowSpec grounded on non-degraded evidence for that
+feature, or a "feature auth barrier" preparation
+failure naming the click — never a FlowSpec
+referencing the auth-degraded click and never a silent
+drop of a requested feature.
+
+Landed: the route observer, click-evidence gate, Flow
+Planning groundability rule, validator, and capture
+reset now share one auth-wall route-shape predicate.
+Requested features whose only exercised click reaches
+auth fail as `feature auth barrier` with the click and
+destination named; inferred features must be recorded
+in `droppedFeatures`, while explicitly requested auth
+footage remains legal. Reset probes also reject a
+nominally-200 scene route whose effective URL changed
+to authentication.
+
+### N143 (High, bugfix) — a stub declared in words must show its mechanism
+
+Fidelity must reject a dataStrategy rung whose claim
+has no backing in the same manifest. A client-stub or
+declared-stub rung requires delivery evidence: a
+non-empty mocksAndFixturesAdded or
+localDemoModeChanges entry, or a delivery gate in
+envUsed (the N136 contract); a declared-stub rung
+whose own detail text describes the absence of a
+mechanism ("no fixture adapter was added") fails with
+a message naming the rung, the service, and the
+missing mechanism. This is a deterministic structural
+check at the manifest validation seam — it costs no
+agent round. Acceptance: directus's wave-9 manifest
+(three declared-stub rungs, empty
+mocksAndFixturesAdded, no env gate) fails fidelity on
+round 1 with the stub-without-mechanism message
+instead of passing six times.
+
+Landed: preparation fidelity now treats an unbacked
+client-stub or declared-stub as a deterministic
+manifest contradiction. The gate accepts only
+same-manifest fixture, local-demo, or active demo-env
+delivery evidence, rejects declared absence even when
+a gate is present, names every affected rung and
+service, and bypasses agent adjudication so repair
+starts on the first round.
+
+### N144 (Medium, bugfix) — a 5xx from a bound app is a serve failure at the readiness seam too
+
+Extend the N128/N139 family to the readiness probe:
+when the app command is alive and the readiness curl
+of the entry route returns 5xx, classify as a
+serve/backend failure that names the probed route and
+the status — never "build failure" (the app built) or
+"listen failure" (it bound). When the runtime is a dev
+server known to proxy unmatched routes, say so: the
+directus shape is a 502 minted by the Vite proxy for a
+route whose backend does not exist. Acceptance:
+directus's wave-9 attempt-6 evidence (app running,
+probe 502 on /settings/data-model/+) classifies as a
+serve/backend failure naming the route, steering
+repair at data delivery rather than the build.
+
+Landed: readiness now classifies an entry-route 5xx
+from a still-running managed app as `app server error`
+and headlines the probed route and status. A 502 from
+a source-backed Vite runtime also identifies the
+likely proxy-to-absent-backend shape and steers repair
+at backend or data delivery, while exited processes
+remain runtime failures.
+
+### N145 (High, bugfix) — every failure summary headlines its causal line, in clean text, once
+
+Apply the N130/N140 causal-headline rule to the
+remaining summarizers — lifecycle-timeout and
+submitted-code build/install — and fix the excerpt
+hygiene defects wave-9 exposed: (1) strip ANSI escape
+sequences before any slicing (attempts 1/4 headlined
+";5;249meta_url…", a fragment of an escape code); (2)
+headline the trailing causal line — Killed, fatal:,
+ERR_MODULE_NOT_FOUND, nonzero tool exit — when the
+killed window contains one, and drop the "Everything
+in the output below completed successfully" framing
+whenever the window contains a kill or nonzero exit
+(twenty's attempt-5 buried "1726 Killed — yarn
+rebuild" beneath that exact false claim); (3) collapse
+repeated identical error blocks (six copies of the
+same yarn RequestError stack crowded out the kill
+line) to one instance with a repeat count. Acceptance:
+twenty's attempt-1 evidence summarizes with
+ERR_MODULE_NOT_FOUND naming twenty-shared/dist/vite.mjs
+on its first line; attempt-5 summarizes with the
+Killed yarn rebuild line first and the ECONNREFUSED
+storm deduplicated with its count.
+
+Landed: install, build, service, and lifecycle
+failures now share deterministic causal-headline
+selection, promote real kills, fatal/module errors,
+and nonzero tool exits once, and keep raw context
+below the headline. Teed evidence is ANSI-cleaned
+before its bounded tail is taken, repeated identical
+error stacks collapse with an occurrence count, and a
+timeout that contains a kill or failed tool can no
+longer claim the preceding work completed
+successfully.
+
+### N146 (High, infra) — right-size the sandbox for repos that measure it
+
+twenty slammed the 8GiB memory ceiling in both the
+deps and build phases and filled the 10GiB disk
+mid-install; no summarizer fix makes it fit. Two
+parts: (1) a larger sandbox class for heavyweight
+repos, selected deterministically from the repo
+profile the harness already computes (archive size,
+workspace count) before the first lifecycle run — the
+Daytona quota can absorb fewer, larger sandboxes for
+flagged entries; (2) purge the harness staging
+directory (the TMPDIR the sandbox points at
+/root/.makeademo-staging — yarn's xfs-* temp dirs land
+there and survive killed attempts) between lifecycle
+attempts, so six repair rounds do not compound the
+disk debt. Acceptance: twenty's install and build
+complete without ENOSPC or an OOM kill, or fail with a
+summary whose first line names the resource that
+remains short.
+
+Landed: the screened archive's exact byte size now
+reaches RepoProfile before workspace creation, where a
+deterministic 128,000,000-byte or 64-workspace boundary
+selects a 4-CPU/16GiB heavyweight submitted-code class.
+Daytona sizing uses its real nested resources channel,
+keeps both classes at the measured 10GB disk cap, and
+every offline lifecycle starts after the persistent
+package-manager staging directory is purged.
+
+### Rules audit (2026-08-14, requested alongside wave-9)
+
+A pass over the standing rule surfaces (script
+contract, repair router, repair-prompt restrictions,
+readiness/reset gates, hint texts) looking for
+N141-class contradictions — a rule prescribing what
+another rule forbids. Findings beyond N141 itself:
+
+- N142's first draft contradicted the
+  preserve-requested-features rules; amended above
+  (requested → "feature auth barrier" repair, inferred
+  → drop).
+- The capture reset gate is redirect-blind: the reset
+  probe follows up to 5 redirects and only checks
+  "responded", so a goto route that 302s to a login
+  page passes with a 200 and gets filmed. The probe
+  already records finalUrl (url_effective); comparing
+  it against the requested route / auth-wall shape is
+  cheap. Fold into N142's implementation or take as
+  its own small item — without it, N142 blocks
+  auth-degraded CLICKS while the reset gate still
+  admits auth-redirected GOTOS.
+- Verified consistent (no action): N140's
+  envUsed.NODE_OPTIONS hint — guardedRuntimeEnv
+  preserves the manifest value and appends its own
+  flags, so the hinted channel is honored (no N131
+  recurrence). The N137 message's "compiled to
+  waitForURL" wording is imprecise (assert-url
+  compiles to expect(page).toHaveURL, which polls) but
+  functionally settles; the message dies with N141(b).
+- Latent handcuff, watch only: "missing
+  dependency"/"install failure" classifications
+  restrict repair to dependency-metadata edits AND the
+  prompt says to preserve backend-resolved install
+  fields — when the classification is wrong (directus
+  round 1: a vite.config import of an UNBUILT
+  workspace package classified "missing dependency"),
+  the restriction can forbid the actual fix. N144/N145
+  reduce the misclassification side; if a round ends
+  where no legal edit could fix the reported failure,
+  the classification→restriction pairing earns an
+  item.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- Script-repair has no ping-pong breaker: two static
+  rules alternated for three rounds without the loop
+  noticing (the N125 breaker fingerprints REPEATED
+  failures; alternation produces distinct fingerprints
+  each round). N141/N142 remove this instance; if a
+  new rule pair recurs, the breaker generalizes to
+  alternating pairs.
+- calcom exploration login robustness: the explorer
+  clicked Continue before hydration and the form
+  self-submitted as a native GET. Filling credentials
+  and awaiting hydration/network-idle before submit
+  would keep the session evidence clean at the source.
+- twenty unbuilt-workspace-dependency hint: N145 makes
+  the causal line visible; if repair still cannot act
+  on it, a targeted hint naming the package to build
+  first earns an item.
+- Carried from wave-8, still unobserved (failures now
+  occur earlier): the directus "owner not set"
+  onboarding modal and /admin/settings/data-model/+
+  route coverage; dry-run/take parity.
+- twenty lockfile reconciliation under berry recurred
+  (registry fetches inside the network-closed phase) —
+  N145's evidence fix plus N146's headroom should
+  expose whether reconciliation itself still fails.
+
+### Rerun
+
+All five entries after N141–N146 land. Expected: homer
+and ghostfolio stay green; calcom produces a statically
+valid script (no rule contradiction) and finally
+exercises N137's take-repair path if a race recurs;
+directus bounces the word-only stub at fidelity round 1
+and re-treads the wave-8 stub arc into N138's
+partial-coverage classification; twenty clears install
+and build inside the larger class — or fails with the
+resource or the unbuilt dependency named on line one —
+and meets last wave's migration wall with N140 armed.
+
+## Addendum (2026-08-14, wave-10 launch failure — N146's resources channel cannot ride a snapshot; N147)
+
+Two post-N141–N146 runs died at sandbox creation
+before any pipeline work: the 2026-08-14T19-59 batch
+(all five entries failed in 2–66 seconds — the spread
+is clone time, homer 2.4s, calcom/twenty ~65s) and a
+20-15 solo homer retest, every one with the same
+Daytona API rejection at
+daytona.submitted-code-sandbox.create:
+
+    Cannot specify Sandbox resources when using a snapshot
+
+Cause: the N146 landing (1f7cb2e) replaced the
+previous top-level `disk` create param with a nested
+`resources` object — `{disk: 10}` for the standard
+class, `{cpu: 4, disk: 10, memory: 16}` for
+heavyweight — passed alongside `snapshot:`. Daytona
+sandboxes created from a snapshot inherit the
+snapshot's resource spec; `resources` is only legal
+for image-based creation, and the API says so in the
+error verbatim. Because BOTH classes now send
+`resources`, every entry fails — the sizing change
+broke the standard path it was supposed to leave
+untouched. (The removed top-level `disk` was almost
+certainly inert all along: it is not a
+snapshot-creation param, and the observed 10GiB disks
+match the snapshot's own spec.) The N133 ladder
+behaved correctly — the 4xx-class rejection was
+treated as fatal after one attempt, no retry burn. The
+staging-purge half of N146 landed fine and is
+unaffected.
+
+### N147 (High, bugfix) — capacity classes are snapshot variants, not creation-time overrides
+
+Remove `resources` from snapshot-based creation
+entirely and restore the plain snapshot create shape.
+Implement the heavyweight class as a SECOND snapshot:
+the provider selects the snapshot name by class —
+standard keeps MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT,
+heavyweight reads
+MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT.
+When the heavyweight variable is unset, fall back to
+the standard snapshot with a logged warning — never
+fail creation over a missing upgrade. Keep
+selectSubmittedCodeSandboxClass and its threading
+exactly as landed. Owner prerequisite: build the
+heavyweight snapshot in Daytona (a 4-CPU/16GiB variant
+of the current submitted-code snapshot, same N132
+service binaries and verifier guard; check whether the
+org disk cap really is 10GB when building — if larger
+disk is available, take 20GB) and set the env var.
+Acceptance: a batch launches with all five entries
+past sandbox creation; twenty's run logs the
+heavyweight snapshot name, or the explicit fallback
+warning when the variable is unset.
+
+Landed: snapshot-based creation carries no `resources`
+override; the provider resolves the submitted-code
+snapshot by class, reading
+MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT
+for heavyweight runs and falling back to the standard
+snapshot with a
+`daytona.submitted-code-sandbox.heavyweight-fallback`
+warning when unset. Class selection and threading are
+unchanged. The heavyweight snapshot itself remains an
+owner prerequisite (build a 4-CPU/16GiB variant; the
+10GB disk cap is a measured org maximum).
+
+### Rerun
+
+Any run at all is the gate: five entries past sandbox
+creation. The wave-9 rerun expectations then apply
+unchanged.
+
+## Addendum (2026-08-14, wave-11 — N147 unblocked the batch; homer green; the wave-9 gates all fired true; three failures are one owner TODO and two repair dead-ends: N148–N150)
+
+The 2026-08-14T21-02 batch ran full course — N147's
+launch gate is ANSWERED YES (all five entries created
+sandboxes; twenty logged the heavyweight-fallback
+warning exactly as designed). homer passed again
+(495s). The wave-9 code validated everywhere it was
+reached: N142 fired its new "feature auth barrier"
+classification on calcom with the seeded-session
+steer; N140/N145 headlines are crisp on every twenty
+failure (the causal Killed line is now literally the
+first line); N141/N143/N144 were not reached (no entry
+got past preparation into scripting, and directus
+died before declaring stubs). The four failures:
+calcom and twenty burned the 90-minute wall clock in
+preparation-repair loops (calcom's making real
+progress, twenty's unable to fix hardware), ghostfolio
+regressed onto a start-without-build runtime the
+repair was instructed not to touch, and directus
+re-hit the unbuilt-workspace-dependency wall for the
+second consecutive wave.
+
+### Diagnoses (2026-08-14T21-02)
+
+homer — passed, 495s. Third consecutive green.
+
+twenty — resource starvation, correctly evidenced,
+unfixable in software. The heavyweight fallback
+warning fired (the owner has not yet built the
+heavyweight snapshot), so all six rounds ran on the
+standard 8GiB/10GB class: migration Killed (attempts
+1, 5), yarn rebuild Killed inside the network-closed
+lifecycle (attempts 2, 6), install ENOSPC (attempts 3,
+4). Every summary headlines its causal line — N140 and
+N145 fully validated. No code item: this entry is
+BLOCKED on the owner prerequisite from N147 (build the
+4-CPU/16GiB submitted-code snapshot variant, set
+MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT).
+
+calcom — no defect; a budget shape problem. Preflight
+failed six times but the failing-feature set SHRANK
+(rounds 1–2: all three requested features
+unobservable; round 3: N142's new "feature auth
+barrier" for weekly-availability with the
+seed-a-session steer; rounds 4–6: only the booking
+feature failing). One fidelity round caught a repair
+overreach (layout.tsx/providers.tsx edits) and the
+next round backed it out — the gate worked. The run
+died at the 90-minute wall clock mid-progress: each
+round costs ~10 minutes of full re-exploration plus
+lifecycle, so six rounds cannot fit even when
+converging (→ N150; the seeded-session churn itself
+stays on the watchlist).
+
+ghostfolio — regression from wave-9's pass, and the
+rules-audit "latent handcuff" materialized. This
+round's preparation declared startCommandUsed
+"npm run start" — ghostfolio's PRODUCTION entry
+(node dist/apps/api/main) — with buildCommandUsed
+OMITTED, so nothing ever produced dist/ and the server
+exited MODULE_NOT_FOUND on every round. Four identical
+failures: the repair prompt instructs "Preserve
+backend-resolved appDir, install, build, start…
+unless the failure summary explicitly reports a
+runtime-configuration error" and the summary never
+said those words — the classification was generic
+"build failure", so the repair was forbidden from
+touching the one field that was wrong (→ N148).
+
+directus — the unbuilt-workspace-dependency wall,
+second wave running (twenty-shared in wave-9, now
+@directus/extensions): vite.config.js fails with
+'Failed to resolve entry for package
+"@directus/extensions"' because the filtered install
+brings the package but nothing builds its dist; three
+rounds of "missing dependency"/"build failure"
+classifications steered repair at manifests instead of
+at building the package. The watchlist hint-item is
+hereby promoted (→ N149). N143 went unexercised —
+this round's manifests never reached stub
+declarations.
+
+### New items
+
+### N148 (High, bugfix) — a start command that consumes missing build output is a runtime-configuration error, and the summary must say so
+
+When app start dies with MODULE_NOT_FOUND (or
+equivalent entry resolution failure) for a path under
+a build output directory (dist/, build/, .next/…),
+classify and summarize it as a runtime-configuration
+error naming both sides: "startCommandUsed runs
+<entry> but no declared build produces it — declare
+the build that emits <path>, or start the dev server
+instead." Those words matter mechanically: the repair
+prompt's preserve-backend-resolved-fields instruction
+already carries an escape hatch for summaries that
+"explicitly report a runtime-configuration error", so
+the correct fix becomes legal without weakening the
+preserve rule. Additionally, the manifest contract
+should flag the shape statically where cheap: a
+production-entry start (node <builddir>/…) with
+buildCommandUsed omitted is rejectable at manifest
+validation, before any lifecycle run. Acceptance:
+ghostfolio's wave-11 attempt-1 evidence produces a
+runtime-configuration summary naming
+dist/apps/api/main and the repair changes build/start
+on round 2 instead of failing identically four times.
+
+Landed: readiness now recognizes a production start
+whose missing entry lives under dist/, build/,
+.next/, .output/, or out/ when no build is declared,
+classifies it as `runtime-configuration error`, and
+headlines the missing entry plus the legal build or
+development-server repairs. The router and repair
+prompt share one structured runtime-configuration
+vocabulary, so build/start edits no longer depend on
+matching summary prose, and the Preparation Manifest
+contract rejects the shape before lifecycle execution.
+
+Amendment (2026-08-15, wave-12): the static invariant
+matches only literal production-entry starts
+("node dist/...", "node build/...", "node .next/...")
+and ghostfolio evaded it with `npm run start`, which
+reaches node dist/apps/api/main through package.json
+script indirection — the run passed only because the
+agent ran three undeclared `npm run build`s that left
+dist in the workspace, so the manifest still cannot
+reproduce its own pass. Extend the invariant: when
+startCommandUsed is npm/yarn/pnpm/bun `run <script>`,
+resolve the script through the repo profile's
+packageScripts (already on RepoProfile) and apply the
+same production-entry test to the resolved command.
+The runtime classification half needs no change — it
+keys on the observed missing entry, not the command
+text.
+
+Landed: manifest validation now resolves npm, yarn,
+pnpm, and bun `run <script>` starts through the
+selected package's profiled script table before
+applying the existing production-entry rule. A
+Ghostfolio-shaped `npm run start` resolving to
+`node dist/apps/api/main` is rejected while
+`buildCommandUsed` is omitted, and the published
+Preparation Manifest contract states the same
+script-indirection invariant.
+
+### N149 (High, bugfix) — name the unbuilt workspace dependency
+
+Detect the recurring shape at the readiness/build
+classification seam: an entry-resolution failure
+("Failed to resolve entry for package X",
+ERR_MODULE_NOT_FOUND under node_modules/X/dist or an
+in-repo package path) where X is a workspace package
+of the repo under preparation. Classify as "unbuilt
+workspace dependency" naming X, with a repair hint to
+run X's own build (from its package.json scripts or
+the monorepo tool) before the app lifecycle, or widen
+the install/predev filter to include it. Keep
+preparation-repair routing. Two-wave evidence:
+twenty-shared/dist/vite.mjs (wave-9),
+@directus/extensions (wave-11). Acceptance: directus's
+wave-11 attempt-1 evidence classifies as unbuilt
+workspace dependency naming @directus/extensions, and
+the hint names a build for it.
+
+Landed: build and readiness failures now share one
+workspace-aware inspection of entry-resolution,
+`node_modules/<workspace>/...`, and in-repo sibling
+paths. A match is classified as `unbuilt workspace
+dependency`; its causal headline names the package,
+and its repair hint names the package's declared build
+script (when present) plus the install/predev-filter
+alternative. The classification routes to full
+preparation repair, never dependency-only repair, and
+unknown registry packages retain the generic path.
+
+### N150 (Medium, bugfix) — repair rounds re-verify only what failed
+
+Full re-exploration of every feature on every repair
+round costs ~10 minutes on calcom-class apps, so a
+converging repair loop cannot fit its budget inside
+the 90-minute wall clock. On a repair round, features
+whose evidence passed in the previous round get a
+cheap re-probe (entry route serves, evidence still
+replayable) instead of full re-exploration; full
+exploration runs only for features that failed or
+whose routes the workspace diff touched. A cheap
+re-probe that fails promotes that feature back to full
+exploration — carried-forward evidence must never mask
+a repair that broke a passing feature. Acceptance: a
+calcom-shaped run's per-round cost drops enough that
+six rounds fit the wall clock with margin; no
+carried-forward evidence survives a failing re-probe.
+
+Landed: repair validation now receives the previous
+feature-verdict ledger plus feature IDs mapped from
+the repair's source/data-seam diff and any changed
+feature declarations. Prior failed, touched, new, or
+non-replayable features take full entry exploration;
+unchanged grounded features reuse the same-round
+readiness result (or a 15-second single-shot route
+probe) and execute only their declared proofs from
+fresh navigation. Any missing or failed route/proof
+verdict promotes that feature to full exploration,
+and merged failure reports contain only evidence
+freshly produced in the current round.
+
+### Refactor-not-add (2026-08-14): N148–N150 extend existing rules
+
+Audited on request before implementation: each item
+lands inside machinery that already exists, and two of
+them get stricter — not just cheaper — when built that
+way. Implementers should follow this shape rather than
+adding parallel rules.
+
+N148 — extend the readiness classifier; make the
+escape hatch structured. The readiness failure
+classifier (default-harness-dependencies.ts, the
+failures[] builder around
+readReadinessServeFailureHeadline) already
+special-cases redirect-to-auth into "auth wall"; the
+start-consumes-missing-build-output shape is one more
+branch there, not a new rule. The repair prompt's
+preserve rule currently prose-matches the summary
+("unless the failure summary explicitly reports a
+runtime-configuration error") — the same fragility the
+rules audit flagged in N141's prose regex. Refactor:
+add the classification once to the router vocabulary
+(repair-router.ts) and export a shared
+runtimeConfigurationClassifications set consumed by
+BOTH the router and the repair-prompt builder, so the
+escape hatch keys on failureClassification instead of
+summary wording. The static half is one new invariant
+line in the existing
+createPreparationManifestContract() invariants list
+(production-entry start with buildCommandUsed
+omitted), not a new validation module.
+
+N149 — one vocabulary entry plus one headline
+pattern. Routing is a single line added to the
+existing preparationFailureClassifications table; it
+must NOT join dependencyFailureClassifications,
+precisely so the metadata-only handcuff the rules
+audit flagged cannot forbid the real fix (building
+the workspace package). Detection extends N145's
+causal-headline chooser (ANSI-strip +
+collapseRepeatedErrorBlocks + headline selection)
+with the two measured shapes ("Failed to resolve
+entry for package X"; ERR_MODULE_NOT_FOUND under a
+workspace package's dist/) — no parallel log scanner.
+The is-X-a-workspace-package test reads
+RepoProfile.workspacePackages, which the repo profile
+already enumerates for the N146 class selector.
+
+N150 — no new rules at all; it is a scoping change in
+orchestration. Everything it needs exists:
+featureVerdicts already persists per-feature verdicts
+per round (schemas/artifacts.ts),
+recordFailingFeatureProgress already computes the
+failing set for budget bonuses,
+probeSubmittedCodeRuntime with budgetMs 0 is the
+cheap single-shot probe, and N125's replay-context
+verification is the evidence re-check. The only new
+code is the exploration planner consulting the
+previous round's verdicts to scope full exploration
+to failed/diff-touched features, plus the
+promote-on-failed-re-probe wiring for the rest.
+
+### Watchlist (updated)
+
+- Heavyweight snapshot: built 2026-08-14 as
+  makeademo-submitted-code-browser-ca-20260814-services-cpu4-mem8
+  and MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT
+  now points at it — but Daytona rejected the 16GiB
+  spec: "Memory request 16GB exceeds maximum allowed
+  per sandbox (8GB)", the same org-cap class as the
+  10GB disk limit measured 2026-08-08. The variant
+  doubles CPU (4 vs the standard's 2) inside the same
+  8GiB/10GB envelope: that buys wall-clock headroom,
+  not memory. Lifting the memory ceiling needs a
+  Daytona plan change (support@daytona.io). Until
+  then twenty passes only if preparation keeps
+  build+migration under 8GiB (N140's guidance), so
+  twenty stays on the watchlist as
+  capacity-constrained, not fixed.
+- calcom seeded-session robustness: N142 now names the
+  auth barrier and steers at session seeding; whether
+  the preparation can hold an authenticated session
+  across exploration remains the churn source.
+- Script-repair alternation breaker, dry-run/take
+  parity, directus owner-modal fixtures: carried,
+  still pending their trigger conditions.
+- N141/N143/N144 remain unexercised by a real run;
+  their unit gates are green.
+
+### Rerun
+
+After N148–N150 land (the heavyweight snapshot now
+exists, CPU-doubled but memory-capped at the org's
+8GB): homer green; twenty gets 2× CPU but stays under
+the 8GiB ceiling, so it passes only if N140's memory
+guidance keeps build and migration under the cap;
+ghostfolio repairs its runtime on round 2 and returns
+green; directus builds @directus/extensions round 1
+and re-enters the stub arc (N143/N138 finally
+exercised); calcom converges inside the clock with
+N150's cheap re-verification.
+
+## Addendum (2026-08-15, wave-12 — two videos; N141's first real exercise breaks capture; a weak proof masks a dead session; a wedged sandbox eats a run: N151–N153)
+
+Batch matrix-2026-08-15T02-47-42-772Z, report
+matrix-report-2026-08-15T04-11-19-185Z.json. Two
+passes: homer (fourth consecutive) and ghostfolio
+(second video). Three failures, each a different
+stage and each new in shape.
+
+Wave-12 ran with N148–N150 live (landed 2026-08-14
+18:04–18:38, before the batch launched; an earlier
+revision of this addendum wrongly called them
+unimplemented — corrected 2026-08-15). What the wave
+validated: the N146/N147 heavyweight path worked end
+to end on its first outing — twenty's class selected
+heavyweight, the cpu4-mem8 snapshot booted, no
+fallback warning, and the submitted-code upload
+succeeded. N142's flow-spec gate fired exactly as
+amended (it is what caught calcom). N149 met its
+acceptance criterion verbatim: directus preflight
+attempts 1–2 classified "unbuilt workspace
+dependency" naming @directus/extensions, repair
+built it, and that is why directus reached capture
+at all — its deepest run ever. N150 was exercised
+inside directus's preparation repair (attempt 6:
+"freshly re-grounded 0 unchanged feature(s)");
+calcom died before any repair loop, so the
+calcom-shaped wall-clock acceptance remains
+untested. N148 is live but was evaded twice over on
+ghostfolio: see below.
+
+ghostfolio (passed, N148 evaded twice over): manifest
+install `npm ci --no-audit`, build omitted, start
+`npm run start`; sandbox log records three
+`npm run build` invocations during preparation. The
+landed static invariant keys on literal
+production-entry starts ("node dist/...", "node
+build/...", "node .next/..."), and `npm run start`
+reaches node dist/apps/api/main only through
+package.json script indirection — so the manifest
+passed validation. The runtime classification then
+never fired because the undeclared builds left dist
+present in the workspace. The video is real but the
+manifest still cannot reproduce it. No new item —
+amended into N148 (see its section): the
+production-entry invariant must resolve
+npm/yarn/pnpm/bun `run <script>` start commands
+through the repo profile's packageScripts before
+matching.
+
+calcom (failed 56m, flow-planning): all three
+requested features grounded at app-exploration via
+declared-proof — route-level visible-text checks
+("Event types" is visible on /event-types) — while
+the action catalog already recorded that the only
+exercised interactions for event-types-public-link
+and availability-and-duration were auth-degraded
+(clicks on /event-types and /availability observed
+"/auth/login became visible"). The verdict builder
+returns declared-proof grounding before the N142
+auth-degraded check runs
+(submitted-app-explorer.ts, declared-proof branch
+precedes the requested-feature auth-degraded
+branch), so the "feature auth barrier" →
+repo-preparation-repair route never fired. Flow
+planning then inherited a catalog whose only clicks
+for two requested features ground nothing; the N142
+flow-spec gate correctly refused three times; the
+flow-planning agent cannot repair a demo session and
+has no route back to preparation-repair; the run
+died on the artifact retry budget (→ N151).
+
+directus (failed 82m, capture-path-validation — its
+deepest run ever): preparation itself was N149's win
+(preflight attempts 1–2 classified the unbuilt
+@directus/extensions and repair built it) and the
+stub arc finally engaged (attempt 3: "client stub
+partially engaged", repaired through by attempt 6).
+Then static contract validation and
+capture preflight passed; script execution then
+failed four identical times with "Capture Script
+Protocol Violation: Capture script emitted nested
+Browser Action markers." and script-repair burned
+its 3-round budget without moving the failure. The
+candidate JSON is conformant; the defect is
+harness-owned. N141's compiler settle emits
+`await Promise.all([page.waitForURL(dest),
+animatedClick(page, locator)])`
+(browser-action-plan.ts), and the Capture SDK's
+proxy instrumentation emits a started/succeeded
+action-marker pair around EVERY instrumented call
+(capture-sdk-contract.ts runInstrumentedStep). The
+two spans overlap by construction — waitForURL's
+span is still open when the click's started marker
+is emitted — so every navigation-observed click
+trips the validator's single-activeAction check
+(capture-runtime-protocol.ts). Deterministic, and
+invisible until now: wave-12 is the first run to
+reach capture with a navigationDestination click
+(homer's and ghostfolio's scripts contain zero).
+The violation message also names neither the open
+action nor the new one, so the repair agent had
+nothing to aim at, and no identical-failure
+fingerprint covers capture protocol violations —
+three doomed repairs ran (→ N152).
+
+twenty (failed 27m, upload): the agent-sandbox
+fs.upload hung for the full 600s attempt timeout,
+was classified transient, retried against the same
+sandbox, hung another 600s, and the run failed with
+~63 minutes of budget left. The target was wedged,
+not the transport: the parallel upload of the same
+archive to the submitted-code sandbox succeeded 17s
+earlier, and three sibling runs used the control
+plane throughout the hang window. Retrying a hung
+call against the same sandbox is the one retry shape
+N133's ladder gets wrong (→ N153).
+
+### N151 (High, bugfix) — a passing declared proof must not mask a dead demo session on a requested feature
+
+Reorder the existing checks in the exploration
+verdict builder: for a requested feature, run the
+auth-degraded-interactions test before (or inside)
+the declared-proof grounding branch. A requested
+feature whose declared proof passes but whose
+exercised interactions are all auth-degraded fails
+with the existing "feature auth barrier"
+classification and routes to repo-preparation-repair
+— the session seam, which can actually fix it. A
+route-level visible-text proof proves the page
+renders, not that the requested behavior ("open a
+public scheduling link") is filmable; the feature's
+interactions are what capture will replay. This is a
+reordering of two rules that already exist (the
+declared-proof branch and the N142 auth-degraded
+branch in the same function), not a new rule; the
+flow-spec gate stays as the downstream backstop.
+Acceptance: calcom's wave-12 evidence fails
+event-types-public-link and
+availability-and-duration at app-exploration with
+"feature auth barrier", and the run enters
+preparation-repair instead of dying in flow
+planning.
+
+Landed: requested-feature verdicts now evaluate
+exercised auth-degraded interactions before accepting
+a declared proof. A passing route-level proof can no
+longer ground a feature whose only exercised clicks
+reach authentication; the persisted verdict is
+`auth-wall`, the report is `feature auth barrier`,
+and the existing router sends the run to Repo
+Preparation Repair.
+
+### N152 (High, bugfix) — navigation-observed clicks must compile to one marker span
+
+N141's settle is correct about WHAT to wait for and
+wrong about HOW to emit it: two concurrently
+instrumented calls can never share a Promise.all
+under a marker protocol whose validator holds a
+single activeAction. Compile a navigation-observed
+click to ONE instrumented composite SDK helper
+(e.g. navigatedClick(page, locator, destination))
+that performs the concurrent waitForURL+click inside
+a single started/succeeded span labeled with the
+click and its destination; the compiler emits one
+call (an acceptable minimal variant: leave the
+Promise.all shape and exclude page.waitForURL from
+action-marker instrumentation — it is
+synchronization, not a browser action — so only the
+click emits a span; failures still surface through
+the step marker). Either way, two hardening moves
+from this incident: the nested-marker violation must
+name both labels (the open action and the one that
+started — N145 doctrine: a repair agent cannot fix
+what is not named), and capture protocol violations
+from a statically conformant candidate should trip
+the identical-failure fingerprint after one repeat
+instead of burning the full script-repair budget on
+a harness-owned defect. Acceptance: directus's
+wave-12 script executes past open-create-field and
+open-create-role; a synthetic nested-marker
+violation names both labels.
+
+Landed: `page.waitForURL` remains the bounded
+concurrent settle for a navigation-observed click,
+but the Capture SDK now treats it as synchronization
+rather than opening a second Browser Action marker
+span. The click retains its action markers and step
+failures still carry synchronization errors. Nested
+marker diagnostics name both the open and newly
+started labels, and an identical Capture Script
+protocol violation after one statically conformant
+repair trips the repeated-failure budget instead of
+spending all three script repairs.
+
+### N153 (Medium, bugfix) — consecutive hangs on one sandbox mean the sandbox is wedged, not the network
+
+Extend N133's retry ladder with an escalation rung:
+when an attempt fails by attempt-timeout (a hang —
+no response, as opposed to an error response) twice
+consecutively against the same sandbox, reclassify
+from transient transport loss to a wedged sandbox
+target and escalate to recreating that sandbox
+(bounded by the same remaining-budget arithmetic the
+ladder already does; re-upload after recreate). The
+evidence discriminates: a sibling call to another
+sandbox succeeded during the same window, so the
+loss was target-scoped. This is a new rung in the
+existing ladder plus reuse of the envelope's
+existing create path, not a new retry system.
+Acceptance: a wedged-sandbox fs.upload scenario
+recreates once and completes inside budget instead
+of failing the run after two 10-minute hangs.
+
+Landed: the Daytona control-plane envelope now
+counts consecutive attempt-timeout hangs per dynamic
+sandbox id and, only while a transient ladder rung
+remains, emits a `wedged-sandbox-target` escalation.
+The initial screened-workspace upload can spend that
+rung once to recreate its network-locked linked child
+through the existing submitted-sandbox create path,
+switch attribution to the replacement, and replay the
+same upload. Stale-target deletion is best-effort and
+cannot hold the healthy replay hostage; later runtime
+transfers do not recreate because a fresh child would
+discard prepared state.
+
+### Watchlist (updated)
+
+- Twenty has still never reached its migration on the
+  heavyweight snapshot: wave-12 died at upload before
+  the sandbox did any work, so the cpu4-mem8 +
+  8GiB-cap question (does N140's guidance keep
+  build+migration under the ceiling?) remains open.
+- Calcom seeded-session robustness is now the sole
+  blocker for its arc: N151 routes it to the right
+  repair seam, but whether preparation can hold an
+  authenticated session across exploration is still
+  the underlying churn.
+- The directus stub arc engaged during preparation
+  (client-stub classifications fired and repaired
+  through); its capture arc is still unreached, and
+  N152 is the gate. N141's first exercise is N152
+  itself; N144 remains unexercised.
+- N148–N150 landed 2026-08-14 and ran live in
+  wave-12: N149 validated end to end on directus,
+  N150 exercised inside directus's repair (calcom's
+  wall-clock acceptance still untested), N148 amended
+  for script-indirected production starts.
+
+### Rerun
+
+After N151–N153 land:
+homer and ghostfolio stay green; directus executes
+its script and reaches the stub/fixture arc; calcom
+enters preparation-repair at exploration and its
+fate turns on session repair; twenty survives upload
+and finally shows whether 4 CPUs and 8GiB clear the
+migration.
+
+## Addendum (2026-08-15, wave-13 — the classification layer is done, the convergence layer is the frontier: N148/N149 both fired with perfect headlines and both failed to converge: N154–N155)
+
+Batch matrix-2026-08-15T05-38-26-724Z, report
+matrix-report-2026-08-15T07-18-13-216Z.json,
+launched 2026-08-14 22:38 local — twelve minutes
+after N151–N153 landed, so every specced item to
+date ran live. Homer passed (fifth consecutive).
+Four failures, and for the first time none of them
+is a diagnosis problem: every failure carries the
+right classification and a causal headline. What
+failed is convergence — repairs that were correctly
+prescribed and then defeated by machinery one seam
+downstream.
+
+ghostfolio (failed 30m, preflight ×3): N148 end to
+end minus the last seam. The classifier fired
+verbatim ("Runtime-configuration error:
+startCommandUsed runs dist/apps/api/main but no
+declared build produces it…"), routed to
+preparation-repair with the structured escape
+hatch, and the repair agent did exactly the right
+thing twice: round 1 declared
+`npm run nx -- run api:build`, round 2
+`npm run build:production`. Both candidates passed
+validation and were adopted by the orchestrator —
+and then resolvePreparationRuntime
+(runtime-target-resolution.ts) stripped the build
+both times: it destructures buildCommandUsed out of
+the manifest and honors an agent build only when
+the command references a workspace package by name
+or directory (N131's carve-out). Ghostfolio's repo
+profile has no named workspace packages, so the
+honored-build test can never pass, the resolved
+lifecycle re-ran buildless, and the identical
+failure recurred until the repair budget died. The
+escape hatch reached the classifier, the router,
+and the repair prompt — but not the resolver, which
+un-corrects the correction every round (→ N154).
+This is N131's bug shape recurring one level up,
+and the second resolver-strips-the-fix incident;
+the resolver seam should be presumed guilty in any
+future repair-does-not-stick diagnosis.
+
+directus (failed 26m, preflight ×5): N149 fired and
+named the right package every time — and the chain
+defeated it. Attempt 1: unbuilt @directus/extensions
+(repair built it). Attempt 2: unbuilt
+@directus/constants — the package extensions
+depends on. Attempt 3: runtime crash. Attempt 4:
+@directus/extensions again, headline showing a
+sibling build's output. Attempt 5:
+@directus/extensions again as TS2307 from a
+dependent's own compile. One package per round
+against a dependency graph is whack-a-mole, and it
+can even revisit the same package when a dependent's
+build re-fails (→ N155). Wave-12 converged in two
+rounds only because that day's chain was shallow.
+
+calcom (failed 55m, preflight ×5): real progress,
+then data-state churn. No auth degradation anywhere
+this wave — the two features N142/N151 fought for
+grounded cleanly. The failure moved to
+public-booking's declared proof: "no visible element
+with accessible name 'View next month' on
+/free/30min" — the booking calendar widget never
+rendered, which on cal.com means no availability
+data behind the page. Five repair rounds could not
+seed a schedule the calendar would show. The
+classification ("requested feature not observable")
+and proof-level detail are correct and actionable;
+this is the calcom watchlist item advanced from the
+session layer to the seeded-data layer, not a new
+harness rule.
+
+twenty (failed 97m, wall clock; preflight ×6 on the
+heavyweight sandbox): the capacity question is
+answered, negatively. Upload was clean (no N153
+trigger), fidelity passed six times, and preflight
+died six ways inside the org's caps: the postgres
+migration command Killed (OOM at 8GiB, attempt 1),
+lifecycle Killed (2), yarn install ENOSPC on the
+10GB disk (3, 4), migration failure (5), lifecycle
+Killed (6). Four CPUs did not change the memory
+arithmetic. Twenty is capacity-blocked at the
+Daytona org limits, with every failure correctly
+headlined — there is no harness item here. Owner
+decision: request higher per-sandbox limits
+(support@daytona.io) or accept twenty as out of
+envelope; a lighter preparation path (dev-mode
+serve, partial workspace) is the only code-side
+lever left and is speculative.
+
+N152 and N153 went unexercised (nothing reached
+capture; no upload hung).
+
+### N154 (High, bugfix) — the resolver must honor the build a runtime-configuration failure demanded
+
+Extend the honored-build exception in
+resolvePreparationRuntime beyond
+workspace-package-referencing commands: when the
+manifest's declared build is being adopted from a
+repair of a runtime-configuration-error failure —
+or equivalently, when the resolved target's start
+command consumes a production entry
+(readProductionEntry) and the resolver would
+otherwise emit no build — honor the agent's
+declared buildCommandUsed after the existing
+absent-package safety check, instead of dropping
+it. A resolver that emits a production-entry start
+with no build is resolving to a lifecycle the N148
+classifier will provably reject; refusing that
+resolution is also acceptable (treat it as
+unresolved and let the repair path negotiate),
+dropping the declared build is not. Refactor, not
+add: readProductionEntry and the honored-build
+machinery both already live in
+runtime-target-resolution.ts; N148's
+runtimeConfigurationClassifications set is already
+shared. Acceptance: ghostfolio's wave-13 evidence
+converges on round 2 — the resolved lifecycle runs
+the agent's declared build, and preflight's
+runtime-configuration failure does not recur.
+
+Landed: runtime resolution now follows a selected
+start script one level to its production entry and,
+when the backend has no build of its own, preserves
+the agent-declared build after the absent-workspace
+selector check. The regression fixture mirrors
+ghostfolio's locked root target, empty workspace
+package inventory, `npm run start` wrapper, and
+`dist/apps/api/main` entry.
+
+### N155 (High, bugfix) — unbuilt-workspace chains escalate to the workspace-graph build
+
+After one unbuilt-workspace-dependency repair round,
+a second unbuilt-workspace-dependency failure (any
+package) escalates the repair hint — and the
+honored-build acceptance — from "build package X"
+to the repository's own workspace-graph build: the
+root build/prepare script, or the monorepo tool's
+topological invocation (pnpm -r / turbo / nx
+run-many) scoped to the app's dependency closure
+when the repo declares one. The N149 headline
+builder already knows the failing package and the
+repo profile already enumerates workspacePackages
+with scripts; the escalation is a state check
+against the previous round's classification (the
+fingerprint ledger already records it), not new
+detection. Acceptance: directus's wave-13 evidence
+builds its package graph in at most two rounds and
+preflight proceeds past dependency resolution.
+
+Landed: the charged fingerprint ledger now arms a
+graph-build escalation after the first
+unbuilt-workspace repair. A second failure receives
+an exact root build/prepare or pnpm/turbo/nx graph
+command, scoped to the selected app's declared
+dependency closure, and runtime resolution honors
+that command only while the escalation is armed.
+Absent selectors still win, including Nx project
+lists and pnpm relationship selectors.
+
+### Watchlist (updated)
+
+- Twenty: capacity-blocked at the Daytona org caps
+  (8GiB memory measured against migration OOM, 10GB
+  disk against install ENOSPC, on the cpu4-mem8
+  heavyweight snapshot). Owner decision required;
+  no harness item.
+- Calcom: seeded-data depth — the booking calendar
+  needs real availability data behind /free/30min;
+  proof-level failure details are correct, agent
+  convergence on seeding is the open question.
+- Resolver seam: two incidents (N131, N154) of
+  resolution silently discarding an agent fix the
+  failure demanded. Any future repair-loop
+  no-progress diagnosis should check
+  resolvePreparationRuntime first.
+- N152/N153 remain unexercised; directus's capture
+  arc (N152's acceptance) is gated on N155 now.
+
+### Rerun
+
+After N154–N155 land: homer green; ghostfolio
+converges round 2 and returns green; directus
+builds its graph and finally exercises N152's
+single-span capture markers; calcom's fate turns on
+availability seeding; twenty stays red until the
+org caps move.
+
+## Addendum (2026-08-17, wave-14 — the matrix doubled and the machinery generalized; N154/N155 validated; red-flag sweep before M1: N156–N157)
+
+Batch matrix-2026-08-17T04-03-08-593Z, report
+matrix-report-2026-08-17T06-03-26-810Z.json — the
+first eleven-entry matrix (six new repos). Five
+passed: homer (sixth consecutive, 4.6m), ghostfolio,
+and three first-timers — conduit (18m), midday
+(61m), cyberchef (50m). Three of six brand-new repos
+passing on first contact is the strongest
+generality evidence the program has produced: the
+N-item machinery was tuned on five repos and held on
+strangers.
+
+Validated this wave: N154 end to end — ghostfolio's
+final manifest declares the full nx build chain
+(client and api copy-assets + build) alongside the
+production start, resolution honored it, and the run
+converged and passed. N155 substantially — directus
+cleared the dependency chain (the workspace-graph
+build engaged; it needed three rounds, not the
+specced two, because the repo's own graph script
+failed partway on round two) and reached its real
+frontier: feature evidence for the data-model flows.
+Pass-run logs are clean: every warn/error event in
+the five passing runs is a mid-run repair that then
+converged.
+
+Red flags found by the sweep, in severity order:
+
+1. twenty ran 112.7 minutes against the 90-minute
+   budget — the deadline is asserted only between
+   stages, so a doomed run burned ~23 extra minutes
+   of sandbox time inside one long stage (→ N156).
+2. Canvas apps are ungroundable: excalidraw's
+   requested feature ("draw and label shapes,
+   connect with arrows") produced no browser
+   evidence because declared proofs speak
+   DOM-accessibility (visible-text, element-appears,
+   state-transition) and canvas content has no DOM
+   presence. This blocks an entire app category
+   (→ N157).
+3. N152 has never been exercised in production: all
+   five passing scripts contain zero
+   navigation-observed clicks — five waves running.
+   The single-span compiled shape is effectively
+   untested outside unit gates; directus's first
+   capture pass remains its real test. Watchlist.
+4. ghostfolio's compositing hydrated an external
+   favicon URL (t0.gstatic.com) and warned on
+   failure — a nondeterministic external dependency
+   in the render path (the video rendered without
+   it). Watchlist: the render path should not reach
+   external hosts at all.
+
+Non-flags, recorded: outline (new) died on a correct
+contract rejection — the agent cited its own added
+seedDemo.ts as product evidence and could not fix
+the citation within budget; the rule and message are
+right, convergence is the churn. calcom remains at
+the booking-availability seeded-data wall,
+unchanged. ghost (new) hit the wall clock in
+preparation churn — undiagnosed depth, next wave's
+work. twenty remains capacity-blocked (org caps),
+unchanged.
+
+### N156 (Medium, bugfix) — stage budgets must respect the wall clock
+
+Cap every stage timeout — agent commands, lifecycle
+waits, install/build gates — at the remaining
+wall-clock budget: a stage may never be granted more
+time than the job has left. The deadline assertion
+between stages stays; this bounds the overshoot a
+single long stage can add to a doomed run.
+Acceptance: a run that reaches its deadline
+mid-stage fails within minutes of the 90-minute
+mark, not twenty-plus.
+
+Landed: a deadline-capped workspace decorator now
+wraps the sandbox handle at creation. Every
+execute/executeSubmittedCode command — agent runs,
+install/build gates, readiness-probe attempts — has
+its timeout clamped to the remaining job budget
+(the omitted-timeout default moved into the seam
+contract so decorator and provider cannot drift),
+and a command issued after the budget is spent is
+refused with the classified job-deadline error
+instead of starting. Teardown, log collection, and
+transfers stay uncapped so a deadline-crossed run
+still cleans up and keeps its evidence. The
+between-stage assertions are unchanged; overshoot
+is now bounded by one clamped command, not a stack
+of ten-minute defaults.
+
+### N157 (High, feature) — a proof rung for canvas-rendered features
+
+Declared proofs need a vocabulary for features whose
+output never enters the DOM. Two candidate rungs, in
+preference order: app-state proof (assert against
+the application's own persisted scene/store state —
+excalidraw's scene JSON names its shapes and
+arrows), and canvas-delta proof (assert that a
+bounded canvas region changed after the action,
+screenshot-diff based, weakest acceptable form).
+Manifest contract, explorer verification, and the
+preflight probe all learn the new rung(s); flow
+planning treats canvas features as groundable only
+through them. Acceptance: excalidraw's wave-14
+requested features ground through an app-state or
+canvas-delta proof and the run proceeds past
+app-exploration.
+
+Landed: both rungs exist end to end, declared as
+data, never code. app-state names a storage
+(local-storage or session-storage), the key the app
+persists under, and a substring the stored value
+must contain; canvas-delta names the control whose
+click must change the largest visible canvas region
+(screenshot-diff, with a self-animating-canvas
+guard that fails honestly when a delta cannot be
+attributed). Manifest contract, schema reader,
+verification guide, and inventory assertions all
+carry them; the generated explorer script executes
+them, so the preflight probe learned them for free.
+A passed non-DOM proof mints a catalog action
+marked declaredProofKind, and both the explorer's
+flow-evidence-gap check and isFeatureGroundable
+accept that marker as complete grounding — a canvas
+route harvests no DOM asserts, so nothing else
+could satisfy the assert+interaction pair. Known
+boundary: the demo-script vocabulary still has no
+draw-on-canvas verbs; that is excalidraw's next
+frontier, to be surfaced by the rerun.
+
+### Watchlist (updated)
+
+- N152 zero production exercise across five waves —
+  first directus capture pass is the test.
+- Compositing external-favicon hydration — remove
+  the external fetch from the render path.
+- ghost: undiagnosed wall-clock churn, next wave.
+- outline: correct-rule convergence churn on
+  evidence citations.
+- calcom seeded-availability, twenty org caps:
+  carried unchanged.
+
+### Rerun
+
+With N156–N157 landed and M1 in progress: the five
+greens hold; excalidraw grounds through the new
+rung; ghost gets a first real diagnosis; directus's
+capture arc finally exercises N152.
+
+## Addendum (2026-08-19, wave-15 — the strategist's first live wave: its advice was right and the rule layer refused it twice: N158–N159)
+
+Batch matrix-2026-08-19T22-22-10-154Z, report
+matrix-report-2026-08-19T23-58-58-426Z.json, launched
+minutes after N156/N157 landed — everything specced
+to date ran live, including M1/M2. Three passed
+(homer seventh consecutive, conduit, cyberchef);
+midday and ghostfolio regressed from wave-14; calcom
+broke through to capture for the first time in its
+history and died at the wall clock mid-capture.
+
+Validated this wave: N152's first production
+exercise — excalidraw compiled three
+navigation-observed clicks through the single-span
+navigatedClick and the marker protocol held (no
+nested-marker violation); the failure it surfaced is
+new and real (→ N158). N157 grounded excalidraw's
+canvas features (deepest excalidraw run ever, into
+capture). N156 enforced the deadline exactly twice
+(calcom and twenty both ended at 90m, not 112m) —
+though a deadline-capped stage dies with a
+misleading "Daytona command did not finish within
+3745ms" instead of naming wall-clock exhaustion;
+amend N156's landing to report the deadline as the
+cause when the cap is the remaining-budget floor.
+M2's triage warnings were both accurate, twenty's
+prophetically so ("production frontend build
+requests 8 GiB; unlikely to fit") — it then died
+exactly there. calcom's capture breakthrough
+plausibly owes to triage steering preparation away
+from the broad Turbo closure.
+
+The wave's defining pattern: the strategist (M1)
+consulted on five runs, diagnosed correctly on all
+five, and twice the pipeline's own rule layer
+refused the correct fix.
+
+directus: the strategist saw that the graph-closure
+build excludes @directus/extensions (it is consumed
+by vite.config without being a declared dependency,
+so `--filter=@directus/app...` never builds it) and
+prescribed the exact explicit command. The repair
+agent kept the graph build in both subsequent
+candidates — the directive never entered a
+candidate. The build-shape rule ("narrowest
+app-scoped build, never a root aggregate build")
+lives in the repair CONTRACT section, which
+directives by design cannot supersede.
+
+outline: five repair rounds, buildCommandUsed NONE
+in every candidate, while the N148 classifier
+demanded a build every round ("startCommandUsed runs
+build/server/index.js but no declared build produces
+it" — resolved through `yarn run dev`). The
+contract carries both "Omit buildCommandUsed for
+development-server starts" (unconditional) and the
+runtime-configuration escape hatch ("correct the
+build/start fields") — for a dev start whose script
+consumes build output, the two contract lines
+contradict and the agent obeyed the conservative
+one, five rounds running.
+
+midday and ghostfolio regressed on preparation
+nondeterminism, not machinery: midday's demo gating
+left server components constructing a Supabase
+client without env (routes served empty shells);
+ghostfolio's Nest API was healthy while the client
+route 404'd (static-client serving path). The
+strategist diagnosed both correctly; budgets ended
+the runs. No new rule; watch both.
+
+ghost repeated its wave-14 artifact-production
+death unchanged (never enters the repair loop, so
+the strategist never sees it). twenty remains
+capacity-bound at the org caps, exactly as its
+triage warning predicted.
+
+### N158 (High, bugfix) — external navigation destinations must never ground clicks
+
+Excalidraw's script waited on
+`http://127.0.0.1:5000/undefined/plus?utm_source=excalidraw…`
+— the app's external "Excalidraw+" marketing banner,
+recorded as a navigable click with a literal
+`undefined` interpolated into the local path. Three
+fixes at the existing seams: (1) the exploration
+evidence builder must never interpolate a missing
+value into a destination path — resolve or drop;
+(2) at catalog build, a click whose observed
+destination is cross-origin is non-navigable
+evidence — treated like N142's auth-wall
+destinations: never grounds an inferred feature,
+and a requested feature left with only external
+destinations fails with an "external destination"
+detail on the existing classification; (3) the
+script contract rejects any navigationDestination
+that is not a valid local path (defense in depth).
+Acceptance: excalidraw's wave-15 evidence produces
+no compiled waitForURL for the plus banner and the
+scene grounds on in-app actions only.
+
+Landed: a shared missing-value detector
+(route-placeholders) recognizes literal
+`undefined`/`null` path segments, decoded, in both
+the path and the hash route. Link harvesting and
+the exercised-click catalog builder both drop such
+destinations, so the click is recorded with no
+navigation destination. A click observed leaving
+the app origin now records where it went in a new
+externalDestination field — non-navigable evidence,
+mirroring N142's auth-wall treatment: excluded from
+exercised evidence, from isFeatureGroundable, and
+from the flow-evidence-gap check, and a requested
+feature left with only external clicks fails with
+a new "external-destination" cause naming each
+id → URL, with matching repair guidance in the
+verification guide. The verdict branch sits after
+the declared-proof branch, so a passed N157 proof
+still grounds a canvas feature despite the banner
+click — excalidraw's grounding is protected by a
+dedicated test. Defense in depth at the script
+contract: a click navigationDestination carrying a
+missing-value interpolation is rejected even when
+the catalog agrees, and navigation enrichment
+strips a poisoned catalog destination rather than
+injecting it (old evidence cannot trap the repair
+loop on an unfixable reject). Off-app URLs were
+already rejected by the script action reader's
+local-app-path assertion; that mechanism is now
+pinned by a regression test.
+
+### N159 (High, bugfix) — the build-command rules must obey the classifier that polices them
+
+Three moves, one theme. (1) Make the
+omit-build-for-dev contract line
+classification-aware: when the failure is a
+runtime-configuration error naming a build-output
+entry that the resolved start script consumes, the
+omit rule yields — the same pattern that fixed the
+preserve-fields handcuff. (2) Reclassify
+build-command SHAPE guidance (app-scoped vs root
+aggregate) from contract to approach, where
+directives can lawfully supersede it — the directus
+loss. (3) Align resolvePreparationRuntime's
+honored-build predicate with the script-resolving
+classifier: a dev start whose resolved script
+consumes build output is production-entry-like, and
+a declared build for it must be honored, not
+stripped. Acceptance: outline's wave-15 evidence
+converges (a round declares the build, resolution
+keeps it, preflight passes); replaying directus's
+wave-15 round 2 with the strategist's directive
+yields a candidate containing the explicit package
+builds.
+
+Landed: all three moves. (1) The runtime repair
+prompt now computes a missing-build-output
+predicate — runtime-configuration classification
+plus "no declared build produces" in the failure
+summary (both classifier paths, static and
+runtime, land that message in logsSummary) — and
+swaps the omit-build-for-dev line for an explicit
+declare-the-build-that-emits-that-entry
+instruction, the same conditional pattern as the
+adjacent preserve-fields escape hatch. (2) The
+artifact-repair prompt's shape sentence
+(app-scoped vs root aggregate) moved from its
+contract section to its approach section; the
+omit-for-dev sentence stays contract. Shape is
+strategy, not law — directives can now lawfully
+prescribe directus's explicit package builds.
+(3) resolvePreparationRuntime's honored-build
+predicate gained an unanchored, boundary-guarded
+consumed-build-output detector over the resolved
+start script, OR'd with the anchored
+production-entry match: outline's
+`concurrently … nodemon ./build/server/index.js`
+dev shape is now production-entry-like and its
+declared build is honored. Absent-workspace builds
+are still stripped first, unchanged.
+
+### Watchlist (updated)
+
+- N156 amendment — landed: the deadline-capped
+  decorator converts a command timeout into the
+  classified job-deadline error ("exceeded its
+  90-minute wall-clock budget") only when the cap
+  was binding; unclamped timeouts and
+  inactivity/transport errors pass through, so
+  ordinary stage timeouts keep their exit-124
+  repair path.
+- calcom: first capture reached; next wave tests
+  whether prep stays fast enough to finish capture
+  inside the clock (N150's savings now matter).
+- midday, ghostfolio: prep nondeterminism
+  regressions; strategist diagnoses on file.
+- ghost: artifact-production loop, still outside
+  every repair seam — needs its own diagnosis.
+- twenty: org caps; triage now predicts it at run
+  start. Consider whether a confirmed envelope
+  warning should arm earlier stop eligibility.
+
+## Addendum (2026-08-20, wave-16 — N158/N159 hold; the sealed network's own lifecycle pass becomes the top blocker: N160–N162)
+
+Batch matrix-2026-08-20T06-54-29-864Z (report
+matrix-report-2026-08-20T08-24-19-276Z.json), eleven
+repos, the first wave after N158, N159, and the N156
+amendment landed. Five passed: homer (5.6m), conduit
+(13.7m), midday (70.3m — its nondeterminism
+regression resolved, carrying the strategist's first
+observed spend-bonus-round), excalidraw (40.1m), and
+cyberchef (52.3m). Six failed: calcom, directus,
+ghost, ghostfolio, outline, twenty.
+
+### What wave-16 proved
+
+- N158 validated end-to-end: excalidraw compiled no
+  waitForURL for the plus banner and passed.
+- N159 validated on directus: wave-15's refused
+  directive now lands. Rounds 1–2 failed on unbuilt
+  @directus/extensions, the strategist directed
+  "make the lifecycle explicitly build
+  @directus/extensions", the directive was applied,
+  and round 3 moved past the build entirely.
+- Outline escaped the omit-build deadlock: from
+  round 2 every candidate compiled the server via
+  `yarn build:server && yarn db:migrate` in the
+  provisioned-postgres migrationCommand, which the
+  classifier accepts. (N159's resolver alignment
+  was not exercised — no candidate declared
+  buildCommandUsed.)
+- N151 held calcom out of capture correctly: after
+  one migration failure and two runtime crashes,
+  rounds 4–7 all failed feature-auth-barrier —
+  weekly-availability clicks land on /auth/login.
+
+### Diagnoses
+
+- outline (82.6m, budget exhausted): rounds
+  alternate between real app repairs — a seed
+  schema error, then the seed's redis-client init
+  retrying 127.0.0.1:6379 188 times until killed,
+  both precisely diagnosed by the strategist — and
+  rounds 2/4/6 dying inside the harness's own
+  offline lifecycle pass `yarn rebuild && yarn run
+  postinstall`: 9m28s of registry ECONNREFUSED
+  retries each (~28 minutes total), classified
+  "install failure" and charged to a candidate that
+  never declared the command. Outline's .yarnrc.yml
+  both forbids lifecycle scripts (enableScripts:
+  false) and demands registry metadata
+  (npmMinimalAgeGate: 4320); the agent removed the
+  age gate in round 3 and the pass still fetched.
+  → N160.
+- twenty (74.4m): no OOM and no ENOSPC this wave —
+  real build-graph progress (unbuilt twenty-shared,
+  then dist present but missing declarations, then
+  a broken vite entry — UNRESOLVED_ENTRY
+  index.html — in round 5). Round 2 died in the
+  same `yarn rebuild` pass; the strategist's
+  directive named it "deterministically invokes
+  network-dependent lifecycle downloads" — a
+  correct diagnosis aimed at an actor that cannot
+  fix a harness-owned command. → N160. Separately,
+  M2 triage warned the CRM cannot fit the envelope
+  and recommended the self-contained website;
+  target selection rejected the website as "a
+  marketing product mockup" and chose the CRM for
+  fidelity. Both are right on their own axis; the
+  run burned 74 minutes between them. → watchlist.
+- ghostfolio (46.5m): infra, not repo. Daytona
+  fs.upload into the submitted-code sandbox hung
+  600s four consecutive times (~40 minutes — the
+  entire failure); the wedged-target detector fired
+  at attempts 2 and 4 and the retry loop still fed
+  the same sandbox; the post-mortem diff found
+  /workspace/repo absent. The prep-nondeterminism
+  watch item was never even tested. → N161.
+- ghost (37.5m): the artifact-production loop is
+  now legible. Three manifest static-validation
+  rejections, alternating between two rules:
+  featureInventory sourcePaths under
+  apps/ember-admin "belongs to non-selected browser
+  application" (rounds 1 and 3) and an
+  embedded-config rung declaring migration/seed
+  commands (round 2). Ghost's admin features
+  genuinely live in the non-selected client
+  directory and are served through the selected
+  server app: directory ownership is not
+  consumption — N159's lesson resurfacing at a
+  different seam. The loop has no fingerprints, no
+  ledger, and no strategist. → N162.
+- directus (55.7m): after the N159 win, a genuine
+  new class: "client stub not engaged" —
+  dataStrategy declares client-stub fixtures but
+  the running app kept issuing real calls to
+  127.0.0.1:8055 through rounds 3–5. The
+  strategist's second directive named the likely
+  repair (trace the Axios/SDK adapter selection;
+  make the hydration translations response an array
+  so newTranslations?.reduce cannot throw); round 5
+  was unchanged and the strategist issued its first
+  observed stop. Repo-repair problem; the seams
+  behaved.
+- calcom (84.5m): the auth-degraded gate blocked
+  capture for four straight rounds; the repair
+  never made MAKEADEMO_DEMO satisfy both server and
+  client session checks on the availability routes
+  (the strategist also flagged a stale /pro/30
+  probe vs the app's /pro/30min). Repo-repair
+  problem; the seams behaved.
+
+### N160 (High, bugfix) — the offline lifecycle pass must actually be offline
+
+createOfflineLifecycleCommand's berry arm
+(`yarn rebuild [&& yarn run postinstall]`,
+tools/dependency-install-gate.ts) is documented
+"run only while the network is closed", but berry's
+rebuild performs registry requests: outline retried
+ECONNREFUSED for 9m28s three times; twenty's round
+2 was killed at the lifecycle deadline inside the
+same pass. Three fixes: (1) run the pass with the
+package manager's network hard-disabled
+(YARN_ENABLE_NETWORK=false; npm and pnpm offline
+equivalents) so an attempted fetch fails in seconds
+with a named cause instead of minutes of retries;
+(2) honor the repo's own script policy — when
+.yarnrc.yml declares enableScripts: false there is
+nothing to rebuild, so skip the pass; (3) fix the
+attribution: a harness-owned lifecycle command must
+fail as harness lifecycle, not be classified into
+the candidate's repair loop — outline's repair
+agent was charged three rounds for a command it
+never declared and cannot lawfully change.
+Acceptance: replaying outline's wave-16 lifecycle,
+the pass either completes offline or fails fast
+naming the harness-owned pass, and no repair round
+is consumed by it.
+
+### N161 (High, bugfix) — wedged upload targets must be recreated, not retried into
+
+Ghostfolio: fs.upload hung 600s four consecutive
+times into one sandbox while the wedged-target
+detector fired twice, and every retry re-entered
+the sandbox it had already called wedged. Extend
+N153's remedy to the control plane: a wedged-target
+detection on fs.upload (or any control-plane call
+addressed to a sandbox) recreates the paired
+sandbox and replays the transfer; a second wedge
+fails the run fast, naming the sandbox.
+Acceptance: replaying ghostfolio's wave-16 sequence
+spends at most two timeout windows before
+recreation or a named fast failure.
+
+### N162 (Medium, bugfix) — sourcePaths ownership is not consumption, and blind rejection loops need the meta seam
+
+Ghost burned its whole preparation budget on three
+static rejections with no memory between them. Two
+fixes: (1) featureInventory sourcePaths under a
+non-selected browser application must be accepted
+when the selected app builds or serves that client
+(or the rejection downgraded to a repairable
+classification carrying remediation), instead of
+the flat "belongs to non-selected browser
+application" refusal; (2) route repeated identical
+artifact-validation rejections through the same
+fingerprint and consultation machinery as preflight
+failures — the artifact-production loop currently
+runs with no ledger and no strategist, so round 3
+repeated round 1 verbatim. Acceptance: ghost's
+wave-16 attempt-1 manifest either validates or
+yields a classified, strategist-visible round;
+identical consecutive rejections trigger a
+consultation.
+
+### Meta-orchestrator audit (second live wave)
+
+- First observed spend-bonus-round (midday) — the
+  run passed. The advice artifact carries no reason
+  field; require a reason on every advice kind.
+- First observed stop (directus round 5): the
+  reason cites the unchanged fingerprint and
+  exhausted budget; it coincided with the budget
+  floor, so early-stop behavior was not observable
+  this wave.
+- Diagnosis quality stays high: outline's two seed
+  diagnoses, calcom's server/client session split
+  and stale-probe catch, directus's adapter trace,
+  and twenty's rebuild-determinism call were all
+  correct and specific.
+- Two gaps repeat from the first audit: advice
+  application is still invisible in the pipeline
+  log (no strategist events at all), and
+  repair-round-ledger.json still appears in no run
+  mirror.
+- New gap: outline's identical harness-owned
+  install failure occurred three times without a
+  consultation while both seed fingerprints drew
+  one on their second occurrence — verify the
+  fingerprint gating covers harness-owned lifecycle
+  commands (or accept that N160(3) removes those
+  rounds from the repair loop entirely).
+
+### Watchlist (updated)
+
+- twenty: envelope-vs-fidelity is now the whole
+  problem — triage predicts the CRM cannot fit;
+  selection rightly rejects the website as a
+  mockup. Decide the policy: fail fast with a named
+  capacity outcome honoring the brief, or let a
+  confirmed triage warning override fidelity. Ties
+  to the standing earlier-stop-eligibility
+  question.
+- calcom: one auth-session repair from capture; the
+  strategist's session-path directive is on file.
+- ghostfolio: infra-killed before preparation; the
+  nondeterminism watch inherits to the next wave.
+- outline: after N160, the remaining work is
+  repo-level (seed schema, redis-free seed path) —
+  both already diagnosed by the strategist.
+- directus: client-stub engagement is the last
+  blocker; the adapter-trace directive is on file.
+
+### Wave-16 landings (2026-08-21)
+
+- N160 — landed, all three moves. (1)
+  createOfflineLifecycleCommand now hard-disables the
+  manager's own network on every part of the chain
+  (YARN_ENABLE_NETWORK=false for berry;
+  npm_config_offline=true for npm and pnpm; classic
+  yarn and bun have no manager-level switch and keep
+  the sealed network as their enforcement), so a
+  fetch the sealed network would strand fails in
+  seconds with a named cause instead of ~9.5 minutes
+  of ECONNREFUSED retries. (2) The repo profiler
+  reads the root .yarnrc.yml (enableScripts: false)
+  and .npmrc (ignore-scripts=true) into a new
+  RepoProfile.lifecycleScriptsDisabled fact — root
+  config only; a member's config never speaks for
+  the install — and the pass is skipped entirely
+  when the repo itself forbids lifecycle scripts:
+  the gated install skipped nothing, so there is no
+  offline work to run. (3) Attribution landed as
+  skip-and-continue, which is stronger than the
+  specced fail-named: when the pass fails with the
+  manager's own offline-refusal signature
+  (isOfflineLifecycleNetworkRefusal — enableNetwork,
+  ENOTCACHED/only-if-cached, ERR_PNPM_NO_OFFLINE;
+  deliberately NOT bare ECONNREFUSED, which stays
+  with the agent-repairable download-failure hint),
+  the harness records a
+  lifecycle.offline-refusal.skipped sandbox-log
+  event and continues to preflight — no repair round
+  is consumed, and anything the pass would have
+  built surfaces there as a specific, repairable
+  failure. Acceptance met: outline (enableScripts:
+  false) never runs the pass; twenty's refusal skips
+  in seconds.
+
+- N161 — landed, with a correction to this
+  addendum's diagnosis. The claim "every retry
+  re-entered the sandbox it had already called
+  wedged" was wrong: the run's pipeline log shows
+  onTargetWedged DID fire and recreated aa4194b8 as
+  32a9a641 — and the upload then hung two MORE full
+  600s windows against the fresh sandbox until the
+  transient ladder ran out. The real gap: recreation
+  is the strongest hang remedy, and after it is
+  spent another full window can buy nothing. Landed:
+  a hung attempt after a successful wedge-remedy
+  replacement fails the envelope immediately with a
+  hung-after-recreation event and an error naming
+  that recreation did not clear the hang (the
+  11.5MB archive rules out a legitimately slow
+  transfer). Replay of ghostfolio's wave-16
+  sequence: two windows → recreate → one window →
+  named fast failure (30 minutes and an honest
+  cause, down from 40 and a generic timeout).
+
+- N162 — landed (1); (2) withdrawn with a
+  correction. The sibling-path throw is removed from
+  assertPreparationRuntimeTarget: featureInventory
+  sourcePaths (and productContext evidencePaths) may
+  cite non-selected client directories, because the
+  appDir lock plus the per-feature anchor — every
+  feature must cite at least one path in the
+  selected app, now with an actionable message
+  saying sibling paths may accompany that anchor —
+  already carry the target-switch protection, and
+  any feature citing only sibling paths still fails
+  the anchor. The addendum's claim that the
+  artifact-production loop "runs with no memory" was
+  wrong: accumulatedArtifactError already feeds
+  every distinct prior rejection into each retry.
+  Ghost oscillated because its constraint pair was
+  genuinely unsatisfiable (admin features' true
+  sources all live in apps/ember-admin, and sibling
+  paths were forbidden) — no consultation can solve
+  an unsatisfiable contract, removing the bad
+  constraint can. Strategist wiring into the
+  artifact-production loop is therefore deferred
+  until a wave shows a repeated rejection that
+  memory-plus-satisfiable-constraints cannot
+  converge; if one appears, spec it as its own
+  N-item rather than resurrecting N162(2) as
+  written.
+
+## Addendum (2026-08-22, wave-17 — the best wave yet: 6/11, directus's first pass; two of my own N160 landing bugs surface, and the failures split cleanly: N163–N165)
+
+Batch matrix-2026-08-22T02-26-42-139Z, report
+matrix-report-2026-08-22T04-02-58-151Z. Six of
+eleven repos passed — more than any previous wave:
+homer (5.9m), conduit (25.7m), excalidraw (51.6m),
+cyberchef (77.1m), directus (89.3m — its FIRST
+pass ever; the client-stub engagement directive
+from wave-16's watchlist is resolved), ghostfolio
+(88.2m — the infra-killed wave-16 run was
+nondeterministic as suspected). Failures: midday
+(90.2m, wall clock), calcom (90.8m, wall clock),
+ghost (90.8m, wall clock), outline (59.5m, round
+exhaustion), twenty (78.0m, strategist stop).
+
+### What wave-17 proved
+
+- N160 fail-fast works: outline's stranded
+  lifecycle fetches died in seconds, not 9.5
+  minutes — the run ended at 59.5m against
+  wave-16's 82.6m. But both of the other N160
+  moves missed in production (N163 below): the
+  refusal predicate never matched yarn 4's real
+  wording, and lifecycleScriptsDisabled never left
+  None because the profiler never saw .yarnrc.yml.
+- N161 held: no upload-envelope hangs this wave.
+- N162 held: ghost sailed through manifest
+  validation with its ember-admin sourcePaths and
+  reached runtime preflight for the first time
+  since wave-14 — the failure moved forward into a
+  real app-startup problem, which is progress.
+- N156's message held: midday and calcom report
+  "exceeded its 90-minute wall-clock budget" —
+  named, not generic.
+- The strategist's stop advice terminates runs:
+  twenty ended at 78.0m on the stop instead of
+  grinding to the 90-minute ceiling.
+
+### Diagnoses
+
+- outline (59.5m, rounds exhausted): three layers.
+  (1) The offline lifecycle pass still charged
+  repair rounds 2 and 4 because yarn 4's actual
+  refusal is "➤ YN0080: ... has been blocked
+  because of your configuration settings" — my
+  predicate guessed "Network access have been
+  disabled" and enableNetwork, which yarn prints
+  in neither form here. (2) repo-profile.json
+  shows lifecycleScriptsDisabled: None despite
+  outline's root enableScripts: false — the
+  profiler code is correct but .yarnrc.yml text
+  never reaches profileRepo: it was not a readable
+  file name in the snapshot. My profiler unit test
+  fed the text directly and masked the missing
+  seam — exactly the fakes-everywhere failure the
+  testing rules warn about. Both are N163, landed
+  this session. (3) With rounds freed, the real
+  remaining failure is repo-level: migrations die
+  with "The server does not support SSL
+  connections" plus outline's own
+  [MISSING_ENV_FILE] — the prepared runtime needs
+  a DATABASE_URL without SSL against the local
+  Postgres and a materialized .env. The
+  strategist's demo-mode migration directive is on
+  file; this is repair-agent territory, watchlist.
+- twenty (78.0m, stopped): every install attempt
+  died before yarn ever ran — corepack must fetch
+  the repo-pinned yarn@4.13.0 from
+  https://repo.yarnpkg.com/4.13.0/... and that
+  request failed with the same network error in
+  five attempts, including retries inside the open
+  install window; the snapshot's corepack cache
+  holds only 4.11.0. Corepack's fetch is not
+  governed by YARN_ENABLE_NETWORK (it runs before
+  yarn exists) and evidently repo.yarnpkg.com is
+  not reachable where registry.yarnpkg.com is
+  (outline's installs used the registry all wave).
+  The strategist's stop correctly named the
+  blocked target and the exhausted budget. This is
+  N164: the pinned manager is a harness
+  provisioning concern, not an agent-repairable
+  fault.
+- ghost (90.8m, wall clock): six preflight rounds
+  of a genuinely evolving startup repair. The
+  start command now rebuilds the admin client at
+  launch (pnpm -C ../.. exec nx run
+  @tryghost/admin:build && pnpm build:assets &&
+  nodemon index.js) and the build fails:
+  @tryghost/shade:build and
+  @tryghost/kg-unsplash-selector:build die on
+  TS2688 "Cannot find type definition file for
+  'vite/client'", and the chain exits 130 at the
+  readiness deadline. The nx-cloud client fetch to
+  cloud.nx.app is blocked by the sealed runtime
+  and logged, but nx continues without it — noise
+  and stall risk, not the cause (N165 neutralizes
+  it cheaply). No strategist consult fired: the
+  failure fingerprint evolved every round and
+  first repeated only on the final attempt, which
+  is exactly the gating contract — watch whether a
+  same-theme-different-fingerprint chain deserves
+  consultation, but change nothing yet.
+- midday (90.2m, wall clock): the repair loop was
+  CONVERGING and ran out of clock. Attempt 1:
+  three routes render nothing; attempts 2–3: both
+  feature proofs missing; attempts 4–6: only the
+  transactions proof missing. The strategist's
+  escalate-hint (WelcomeSummary's fixture lacks
+  data.openInvoices; QuickActions still builds a
+  Supabase browser client in demo mode) was
+  verifiably right — invoicing passed the round
+  after it landed. But six repair cycles at 8–22
+  minutes each (repair-2 alone 18.2m) plus 12.9m
+  preparation consumed the whole budget with one
+  proof string left. Wave-13's midday passed at
+  70.3m; this wave's preparation started from a
+  worse state and the loop paid for it.
+- calcom (90.8m, wall clock): same shape.
+  Preparation alone took 25.9m, repair-2 took
+  22.6m, and the loop was converging (startup
+  fixed → proofs missing → auth-degraded: clicks
+  land on /auth/login, needs the seeded demo
+  session the strategist's directive describes).
+  Repair round 5 was admitted at 04:01:07 with
+  roughly one minute of wall clock left and was
+  killed twelve seconds in — a round that could
+  never have finished. That admission gap is N165.
+
+### N163 (High, bugfix) — N160's landing missed production twice; landed 2026-08-22
+
+Two bugs in my own wave-16 landing, both proven by
+outline's run artifacts and both fixed this
+session with seam-honest regression tests:
+
+1. isOfflineLifecycleNetworkRefusal now matches
+   yarn 4's real per-request refusal — "has been
+   blocked because of your configuration
+   settings" (YN0080) — alongside the enableNetwork
+   and disabled-network wordings. The regression
+   test carries outline's verbatim line. Bare
+   ECONNREFUSED still deliberately does not match.
+2. .yarnrc.yml now reaches the snapshot as
+   readable text — but through
+   registryConfigFileNames, not the plain readable
+   list, because berry configs can embed
+   npmAuthToken/npmAuthIdent credentials exactly
+   like .npmrc's _authToken. The credential
+   pattern in isCredentialRegistryConfig gained
+   npmAuth(Token|Ident), so a credentialed
+   .yarnrc.yml is quarantined from the execution
+   archive and flagged by the static screen, while
+   a clean one (outline's) flows to the profiler
+   and lifecycleScriptsDisabled finally fires.
+   Regression tests run the real snapshot reader
+   both ways: clean text reaches the profiler;
+   credentialed .yarnrc.yml joins the quarantine
+   exclusions.
+
+Acceptance: outline's next run must show
+lifecycleScriptsDisabled: true in
+repo-profile.json and zero lifecycle-attributed
+repair rounds.
+
+### N164 (High, bugfix) — provision the repo-pinned package manager; corepack's fetch is outside every window we control
+
+The dependency-install gate assumes the package
+manager exists, but corepack materializes the
+pinned version lazily from repo.yarnpkg.com — a
+host the sandbox cannot resolve even inside the
+open install window, and a fetch that ignores
+every yarn-level network switch because it runs
+before yarn does. Fix at the gate seam, in order
+of preference: (1) set
+COREPACK_NPM_REGISTRY=https://registry.npmjs.org
+in the gate's install environment so corepack
+fetches the pinned CLI from the npm registry
+(@yarnpkg/cli-dist), which demonstrably works in
+the window; (2) run corepack install inside the
+open window before the install command so the
+manager is cached before the network reseals;
+(3) pre-cache current yarn majors in the snapshot
+image as defense in depth (the cache held 4.11.0;
+twenty pins 4.13.0 — a cache can lag, so this is
+the backstop, not the fix). Acceptance: twenty's
+install reaches yarn's own output (even a
+failing install) instead of dying in corepack.
+
+### N165 (Medium, bugfix) — do not admit a repair round the budget cannot fit, and neutralize nx cloud in sealed runtimes
+
+Two small deterministic guards from this wave's
+wall-clock deaths:
+
+1. Round admission: calcom's repair round 5 was
+   admitted with ~1 minute of remaining wall
+   clock against a run whose median
+   repair-plus-preflight cycle cost ~10 minutes;
+   it was killed 12 seconds in. Before starting a
+   repair round, compare remaining wall clock
+   against the run's own observed cycle cost
+   (median of completed repair+validation cycles,
+   or a floor constant before any completes);
+   when the budget cannot fit another cycle, end
+   the run with the named budget outcome
+   immediately. That converts a doomed
+   mid-round kill into an honest early stop and
+   returns the leftover minutes to the matrix.
+2. nx cloud: ghost's sealed runtime logged a
+   blocked cloud.nx.app client fetch on every
+   start; twenty is nx-managed too. Export
+   NX_NO_CLOUD=true (and drop
+   NX_CLOUD_ACCESS_TOKEN if present) in the
+   prepared runtime environment so nx never
+   reaches for its cloud client under the sealed
+   network. Removes a stall risk and a recurring
+   red herring from preflight logs; it would not
+   have saved ghost, which is why this rides
+   along at Medium instead of standing alone.
+
+### Meta-orchestrator audit (third live wave)
+
+Five consultations across four runs; every one of
+the six passing runs consulted zero times — the
+gating spends nothing on healthy loops, and
+directus's first pass needed no advice. Kinds:
+midday escalate-hint then spend-bonus-round;
+calcom directive (seeded demo session across
+server and client checks — matches the observed
+auth-degraded evidence exactly); outline directive
+(demo-mode migration handling); twenty stop
+(named the blocked repo.yarnpkg.com target and
+exhausted budget — correct, and the run honored
+it, ending 12 minutes under the ceiling). The
+midday escalate-hint is the first advice whose
+effect is directly measurable in artifacts: the
+invoicing proof it addressed passed on the next
+attempt. One audit gap: the spend-bonus-round
+artifact records no reason — the advice schema
+should require a reason for bonus grants so the
+ledger can answer "why did this run get a seventh
+round"; fold into the standing M1 follow-up items
+(ledger adhered field, run-mirror persistence,
+pipeline-log visibility). Ghost's zero consults
+are consistent with fingerprint gating (first
+repeat happened on the final attempt); noted on
+the watch, no change proposed.
+
+### Watchlist (updated)
+
+- midday and calcom: both are one converging
+  repair short of passing inside the budget; N165
+  reclaims the doomed-round minutes and the
+  strategist directives are on file. If they miss
+  again next wave with rounds to spare, the
+  question becomes preparation quality (midday
+  prepared into a worse starting state than its
+  wave-13 pass), not budget.
+- outline: with N163 landed, rounds 2 and 4 come
+  back; the remaining failure is repo-level
+  (.env materialization, SSL-free DATABASE_URL
+  for migrations). Expect a pass or a pure
+  repo-repair failure next wave.
+- twenty: N164 unblocks corepack; after that the
+  standing envelope-vs-fidelity policy question
+  (CRM too big for the budget) likely returns.
+- ghost: startup repair is real agent work now
+  (admin build at launch fails on vite/client
+  type defs). Watch whether the repair agent
+  finds the prebuilt-assets path or needs a
+  same-theme consultation gate change.
+- spend-bonus-round reasons: schema change queued
+  with the M1 ledger follow-ups.
+
+### Wave-17 landings (2026-08-22)
+
+- N163 — landed same-session, both fixes, gates
+  green (lint, typecheck, 1424 tests, knip). The
+  YN0080 signature joined the refusal predicate
+  with outline's verbatim line as the regression;
+  .yarnrc.yml entered registryConfigFileNames so
+  its text reaches the profiler while credentialed
+  variants (npmAuthToken/npmAuthIdent) are
+  quarantined and screened — the plain readable
+  list was deliberately NOT used, because it would
+  have bypassed credential screening.
+- N164, N165 — specced above, not yet implemented.

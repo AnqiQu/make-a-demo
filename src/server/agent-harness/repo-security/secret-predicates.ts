@@ -6,7 +6,13 @@ const environmentFileNames = new Set([".envrc", ".netrc", ".pgpass"]);
  * Snapshot readers must read the text of every name in this set: quarantine
  * decides by content, so an unread member would be screened blind.
  */
-export const registryConfigFileNames = new Set([".npmrc", ".yarnrc"]);
+export const registryConfigFileNames = new Set([
+  ".npmrc",
+  ".yarnrc",
+  // Berry config: the profiler needs its enableScripts policy (N160), and
+  // its npmAuthToken/npmAuthIdent entries are credentials like .npmrc's.
+  ".yarnrc.yml",
+]);
 const privateKeyFileNames = new Set([
   "id_dsa",
   "id_ecdsa",
@@ -60,7 +66,9 @@ export function isCredentialRegistryConfig(
 ): boolean {
   if (!registryConfigFileNames.has(secretFileName(path))) return false;
   if (text === undefined) return true;
-  return /_auth|_password|:always-auth|npm_token/i.test(text);
+  return /_auth|_password|:always-auth|npm_token|npmAuth(?:Token|Ident)/i.test(
+    text,
+  );
 }
 
 /** Filenames that are private-key containers regardless of content. */

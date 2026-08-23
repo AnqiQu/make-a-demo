@@ -217,6 +217,55 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     });
   });
 
+  it("fails a run whose main document returned an app-origin server error", async () => {
+    const localRunDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-capture-validation-test-"),
+    );
+    const workspace: AgentHarnessWorkspaceHandle = {
+      async destroy() {},
+      id: "agent_sandbox",
+      workspace: createFakeAgentHarnessWorkspace({
+        async executeSubmittedCode(command) {
+          if (command.includes("bun ")) {
+            return {
+              exitCode: 0,
+              stderr:
+                '[makeademo:navigation] {"status":500,"url":"http://127.0.0.1:3000/booking"}',
+              stdout: [
+                '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":12,"event":"started","label":"expect.toBeVisible(locator(main))","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":18,"event":"succeeded","label":"expect.toBeVisible(locator(main))","sceneId":"scene-main"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene-main"}',
+                '[makeademo:validation] script succeeded {"title":"Demo","url":"http://127.0.0.1:3000/"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      }),
+    };
+
+    const result = await validatePreparedWorkspaceCapturePath({
+      baseUrl: "http://127.0.0.1:3000",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+        "await scene('scene-main', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+      ].join("\n"),
+      localRunDirectory,
+      sceneIds: ["scene-main"],
+      workspace,
+    });
+
+    expect(result).toMatchObject({
+      failureClassification: "app server error",
+      status: "failed",
+    });
+    expect(result.failureReason).toContain("500");
+    expect(result.failureReason).toContain("/booking");
+  });
+
   it("preserves the generated browser failure as repair evidence", async () => {
     const localRunDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-capture-validation-test-"),
@@ -274,6 +323,13 @@ describe("validatePreparedWorkspaceCapturePath", () => {
       failureClassification: "locator failure",
       failureReason: expect.stringContaining("click-dashboard"),
       status: "failed",
+    });
+    // N125: the typed failure identity survives as structured data, not
+    // only inside the prose failureReason, so regrounding can name the
+    // exact failed action instead of re-exploring blind.
+    expect(result.failedAction).toEqual({
+      actionId: "click-dashboard",
+      sceneId: "scene-main",
     });
     expect(result.logs.join("\n")).toContain("locator click timed out");
     expect(await readFile(result.stdoutPath, "utf8")).toContain(

@@ -1,10 +1,127 @@
 import { describe, expect, it } from "vitest";
 import type { PreparationManifest } from "../schemas/artifacts";
-import { validatePreparationFidelity } from "./preparation-fidelity";
+import {
+  createPreparationFidelityReport,
+  readPreparationFidelityCandidates,
+  reconcileFidelityAdjudication,
+  validatePreparationFidelity,
+} from "./preparation-fidelity";
 
 const routePath = "apps/dashboard/src/app/tracker/page.tsx";
 
 describe("validatePreparationFidelity", () => {
+  it("rejects word-only client and declared stubs without a delivery mechanism", () => {
+    const report = validateDiff({
+      manifestOverrides: {
+        dataStrategy: [
+          {
+            detail: "No fixture adapter was added for the API.",
+            rung: "declared-stub",
+            service: "directus-api",
+          },
+          {
+            detail: "The client will use generated data.",
+            rung: "declared-stub",
+            service: "directus-schema",
+          },
+          {
+            detail: "The SDK is stubbed for the demo.",
+            rung: "client-stub",
+            service: "directus-sdk",
+          },
+        ],
+        envUsed: { NODE_ENV: "development" },
+        localDemoModeChanges: [],
+        mocksAndFixturesAdded: [],
+      },
+      modifiedFiles: ["package.json"],
+      patch: 'diff --git a/package.json b/package.json\n+  "private": true',
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("declared-stub");
+    expect(report.logsSummary).toContain("directus-api");
+    expect(report.logsSummary).toContain("directus-schema");
+    expect(report.logsSummary).toContain("client-stub");
+    expect(report.logsSummary).toContain("directus-sdk");
+    expect(report.logsSummary).toContain("delivery mechanism");
+  });
+
+  it("accepts each manifest-level stub delivery mechanism", () => {
+    const baseStrategy = [
+      {
+        detail: "The API client returns deterministic project fixtures.",
+        rung: "client-stub" as const,
+        service: "directus-api",
+      },
+    ];
+    const mechanisms: Array<Partial<PreparationManifest>> = [
+      {
+        mocksAndFixturesAdded: [
+          "src/demo/directus-fixtures.ts supplies project rows.",
+        ],
+      },
+      {
+        localDemoModeChanges: [
+          "The existing Directus client selects fixture data in demo mode.",
+        ],
+      },
+      { envUsed: { VITE_MAKEADEMO_DEMO: "true" } },
+    ];
+
+    for (const mechanism of mechanisms) {
+      const candidates = readPreparationFidelityCandidates({
+        preparationManifest: manifest({
+          dataStrategy: baseStrategy,
+          ...mechanism,
+        }),
+        repoSourceFiles: new Map([[routePath, "export default 1;"]]),
+        workspaceDiff: workspaceDiff(
+          [routePath],
+          `diff --git a/${routePath} b/${routePath}`,
+        ),
+      });
+
+      expect(
+        candidates.filter((candidate) => candidate.deterministic === true),
+      ).toEqual([]);
+    }
+  });
+
+  it("rejects a declared stub whose own detail says its adapter is absent", () => {
+    const candidates = readPreparationFidelityCandidates({
+      preparationManifest: manifest({
+        dataStrategy: [
+          {
+            detail: "No fixture adapter was added for the Directus SDK.",
+            rung: "declared-stub",
+            service: "directus-sdk",
+          },
+        ],
+        envUsed: { VITE_MAKEADEMO_DEMO: "true" },
+      }),
+      repoSourceFiles: new Map([[routePath, "export default 1;"]]),
+      workspaceDiff: workspaceDiff(
+        [routePath],
+        `diff --git a/${routePath} b/${routePath}`,
+      ),
+    });
+
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          deterministic: true,
+          message: expect.stringMatching(
+            /declared-stub.*directus-sdk.*explicitly says the mechanism is absent/i,
+          ),
+        }),
+      ]),
+    );
+  });
+
   it("fails a manifest claiming fixtures the empty workspace contains no trace of", () => {
     // Give-up repairs after agent stalls (excalidraw, ghostfolio 2026-08-07)
     // wrote manifests claiming prepared fixtures onto empty workspace diffs;
@@ -29,6 +146,247 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain("demoScene.ts");
     expect(report.logsSummary).toContain("Firebase");
     expect(report.logsSummary).toContain("workspace diff is empty");
+  });
+
+  it("fails a data seam whose declared fixture module never entered the workspace", () => {
+    // N100: the in-code fixture contract is only checkable if the declared
+    // fixture module actually exists in the prepared diff — a seam declared
+    // over nothing is the same hollow-manifest class as claimed fixtures on
+    // an empty diff.
+    const report = validateDiff({
+      manifestOverrides: {
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "bypass",
+              dataSeams: [
+                {
+                  fixtureModule: "src/demo/tracker-fixtures.ts",
+                  functionName: "getTrackerEntries",
+                  path: routePath,
+                },
+              ],
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      },
+      modifiedFiles: [routePath],
+      patch: [
+        `diff --git a/${routePath} b/${routePath}`,
+        "+import { getTrackerEntries } from '../demo/tracker-fixtures';",
+      ].join("\n"),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("src/demo/tracker-fixtures.ts");
+    expect(report.logsSummary).toContain("tracker");
+  });
+
+  it("accepts a data seam whose fixture module and replaced file are real", () => {
+    const report = validateDiff({
+      createdFiles: ["src/demo/tracker-fixtures.ts"],
+      manifestOverrides: {
+        envUsed: { MAKEADEMO_DEMO: "true" },
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "bypass",
+              dataSeams: [
+                {
+                  fixtureModule: "src/demo/tracker-fixtures.ts",
+                  functionName: "getTrackerEntries",
+                  path: routePath,
+                  shapeProbe: "passed",
+                },
+              ],
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      },
+      modifiedFiles: [routePath],
+      patch: [
+        "diff --git a/src/demo/tracker-fixtures.ts b/src/demo/tracker-fixtures.ts",
+        "new file mode 100644",
+        "+export const getTrackerEntries = () => trackerFixtures;",
+        `diff --git a/${routePath} b/${routePath}`,
+        "+import { getTrackerEntries } from '../demo/tracker-fixtures';",
+        "+const entries = process.env.MAKEADEMO_DEMO === 'true' ? getTrackerEntries() : await fetchTrackerEntries();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("routes an unverified fixture shape behind a declared observable state to the judge", () => {
+    // Excalidraw claimed "Undo enabled immediately" through a declared
+    // proof while the seam's shapeProbe read not-run; the harvested control
+    // state read [disabled] (2026-08-08). A proof obligation rests on the
+    // fixture rendering — a shape nobody verified cannot back it.
+    const report = validateDiff({
+      createdFiles: ["src/demo/tracker-fixtures.ts"],
+      manifestOverrides: {
+        envUsed: { MAKEADEMO_DEMO: "true" },
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "bypass",
+              dataSeams: [
+                {
+                  fixtureModule: "src/demo/tracker-fixtures.ts",
+                  functionName: "getTrackerEntries",
+                  path: routePath,
+                  shapeProbe: "not-run: tsc unavailable in the sandbox",
+                },
+              ],
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              expectedProof: {
+                from: "disabled",
+                kind: "state-transition",
+                locator: "Undo",
+                to: "enabled",
+              },
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      },
+      modifiedFiles: [routePath],
+      patch: [
+        "diff --git a/src/demo/tracker-fixtures.ts b/src/demo/tracker-fixtures.ts",
+        "new file mode 100644",
+        "+export const getTrackerEntries = () => trackerFixtures;",
+        `diff --git a/${routePath} b/${routePath}`,
+        "+import { getTrackerEntries } from '../demo/tracker-fixtures';",
+        "+const entries = process.env.MAKEADEMO_DEMO === 'true' ? getTrackerEntries() : await fetchTrackerEntries();",
+      ].join("\n"),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("shapeProbe");
+    expect(report.logsSummary).toContain("not-run");
+    expect(report.logsSummary).toContain("tracker");
+  });
+
+  it("accepts a compiler-verified fixture shape behind a declared observable state", () => {
+    const report = validateDiff({
+      createdFiles: ["src/demo/tracker-fixtures.ts"],
+      manifestOverrides: {
+        envUsed: { MAKEADEMO_DEMO: "true" },
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "bypass",
+              dataSeams: [
+                {
+                  fixtureModule: "src/demo/tracker-fixtures.ts",
+                  functionName: "getTrackerEntries",
+                  path: routePath,
+                  shapeProbe: "passed",
+                },
+              ],
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              expectedProof: {
+                from: "disabled",
+                kind: "state-transition",
+                locator: "Undo",
+                to: "enabled",
+              },
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      },
+      modifiedFiles: [routePath],
+      patch: [
+        "diff --git a/src/demo/tracker-fixtures.ts b/src/demo/tracker-fixtures.ts",
+        "new file mode 100644",
+        "+export const getTrackerEntries = () => trackerFixtures;",
+        `diff --git a/${routePath} b/${routePath}`,
+        "+import { getTrackerEntries } from '../demo/tracker-fixtures';",
+        "+const entries = process.env.MAKEADEMO_DEMO === 'true' ? getTrackerEntries() : await fetchTrackerEntries();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("routes an error-status rewrite on a probed response to the judge", () => {
+    // Ghost's maintenance page (2026-08-08): the agent rewrote the 503 the
+    // harness was probing into a 200 — the probe went green while the page
+    // still said maintenance; nothing was fixed, the record was. Even a
+    // demo-gated flip lies to the probe (the probe runs with the gate on),
+    // so the status rewrite itself must reach the judge.
+    const serverPath = "core/server/web/site/app.js";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [serverPath],
+      patch: [
+        `diff --git a/${serverPath} b/${serverPath}`,
+        "-  res.writeHead(503, { 'Content-Type': 'text/html' });",
+        "+  if (process.env.MAKEADEMO_DEMO === 'true') { res.writeHead(200, { 'Content-Type': 'text/html' }); } else { res.writeHead(503, { 'Content-Type': 'text/html' }); }",
+      ].join("\n"),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain(serverPath);
+    expect(report.logsSummary).toContain("503");
+    expect(report.logsSummary).toContain("200");
+  });
+
+  it("accepts a gated data adaptation that never touches response statuses", () => {
+    const serverPath = "src/server/data.ts";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [serverPath],
+      patch: [
+        `diff --git a/${serverPath} b/${serverPath}`,
+        "-  const entries = await fetchTrackerEntries();",
+        "+  const entries = process.env.MAKEADEMO_DEMO === 'true' ? trackerFixtures : await fetchTrackerEntries();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
   });
 
   it("rejects removing the packageManager pin", () => {
@@ -125,6 +483,107 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("routes an empty-diff manifest that still claims demoable features to the judge", () => {
+    // Midday's sham (2026-08-09): empty workspace diff, empty
+    // localDemoModeChanges, mocksAndFixturesAdded, and dataSeams — and two
+    // claimed features. "Preserves the screened application" was trivially
+    // true of a preparation that changed nothing, and fidelity passed it.
+    // A manifest claiming demoable features must either carry demo
+    // machinery or say how the features run unchanged.
+    const report = validatePreparationFidelity({
+      preparationManifest: manifest(),
+      repoSourceFiles: new Map(),
+      workspaceDiff: workspaceDiff([], ""),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("tracker");
+    expect(report.logsSummary).toContain("workspace diff is empty");
+  });
+
+  it("routes an observed auth wall against a declared no-auth feature to the judge", () => {
+    // Exploration's own ledger beats the manifest's prose: midday declared
+    // authStrategy "none" across surfaces that exploration then found
+    // walled behind login redirects (2026-08-09). When a prior round's
+    // feature verdict records an auth wall, a manifest that still claims
+    // the feature needs no auth handling is a disproven claim.
+    const report = validatePreparationFidelity({
+      preparationManifest: manifest({
+        localDemoModeChanges: [
+          "MAKEADEMO_DEMO=true activates the built-in demo dataset.",
+        ],
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "none",
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      }),
+      priorFeatureVerdicts: [
+        {
+          detail: "entry route /tracker redirected to /login",
+          failedBecause: "auth-wall",
+          featureId: "tracker",
+          verdict: "failed",
+        },
+      ],
+      repoSourceFiles: new Map(),
+      workspaceDiff: workspaceDiff([], ""),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("authentication wall");
+    expect(report.logsSummary).toContain("tracker");
+    expect(report.logsSummary).toContain('authStrategy "none"');
+  });
+
+  it("accepts prior feature verdicts that do not contradict the manifest's auth claims", () => {
+    // A wall observed on a feature that already declares an auth strategy is
+    // the strategy failing, not a false claim — and non-auth failure causes
+    // say nothing about authStrategy at all.
+    const report = validatePreparationFidelity({
+      preparationManifest: manifest({
+        localDemoModeChanges: [
+          "MAKEADEMO_DEMO=true activates the built-in demo dataset.",
+        ],
+      }),
+      priorFeatureVerdicts: [
+        {
+          detail: "entry route /tracker redirected to /login",
+          failedBecause: "auth-wall",
+          featureId: "tracker",
+          verdict: "failed",
+        },
+        {
+          detail: "rows rendered as loading skeletons",
+          failedBecause: "skeleton-rows",
+          featureId: "tracker",
+          verdict: "failed",
+        },
+      ],
+      repoSourceFiles: new Map(),
+      workspaceDiff: workspaceDiff([], ""),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects a standalone replacement runtime for an existing product", () => {
     const report = validateDiff({
       createdFiles: ["demo/server.ts"],
@@ -183,6 +642,146 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain(featurePath);
   });
 
+  it("allows a created content-free gate file under a presentation directory", () => {
+    // directus (2026-08-09): the whole frontend package is named `app/`, so
+    // `app/src/utils/is-demo.ts` — a one-line boolean gate with zero
+    // presentation content — was vetoed as "replacement product UI" and the
+    // repeated wrong verdict killed the run at the fingerprint cap. Content
+    // decides; the directory prior only nominates.
+    const report = validateDiff({
+      createdFiles: ["app/src/utils/is-demo.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: ["app/src/api.ts"],
+      patch: [
+        "diff --git a/app/src/utils/is-demo.ts b/app/src/utils/is-demo.ts",
+        "new file mode 100644",
+        "+export const isDemo = import.meta.env.MAKEADEMO_DEMO === 'true';",
+        "diff --git a/app/src/api.ts b/app/src/api.ts",
+        "+import { isDemo } from '@/utils/is-demo';",
+        "+if (isDemo) api.defaults.adapter = demoApiAdapter;",
+      ].join("\n"),
+      sourceFiles: { "app/src/api.ts": "export const api = axios.create();" },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows created content-free camelCase fixture modules under an app directory", () => {
+    // outline (2026-08-09): `app/utils/demoFixtures.ts` and `isDemoMode.ts`
+    // cost two repair rounds because camelCase names cannot match the
+    // delimiter-bound seam vocabulary while the `app/` prior vetoed them.
+    const report = validateDiff({
+      createdFiles: ["app/utils/demoFixtures.ts", "app/utils/isDemoMode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      patch: [
+        "diff --git a/app/utils/demoFixtures.ts b/app/utils/demoFixtures.ts",
+        "new file mode 100644",
+        "+export const demoDocuments = [{ id: 'demodoc0001', title: 'Getting started' }];",
+        "diff --git a/app/utils/isDemoMode.ts b/app/utils/isDemoMode.ts",
+        "new file mode 100644",
+        "+export const isDemoMode = () => process.env.MAKEADEMO_DEMO === 'true';",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("treats a demo-named camelCase module as a demo seam", () => {
+    // The pipeline's own prompts direct agents to build demo-gated
+    // adaptations under demo-named files — an owned convention, not vocab
+    // chasing. outline's camelCase helpers missed every delimiter-bound
+    // token and a properly gated change read as "outside a seam".
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: ["src/utils/demoContent.ts"],
+      patch: [
+        "diff --git a/src/utils/demoContent.ts b/src/utils/demoContent.ts",
+        "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+        "+  content.push(demoDocument);",
+        "+}",
+      ].join("\n"),
+      sourceFiles: {
+        "src/utils/demoContent.ts": "export const content = [];",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("routes a gated external-service neutralization outside the seam vocabulary through the judge", () => {
+    // ghost (2026-08-09): neutralizing gravatar.js — a genuine external
+    // integration — was vetoed "outside a seam" twice because neither the
+    // path nor the diff wording matches the seam vocabulary, and those two
+    // rounds started the budget starvation. Vocabulary gaps cost a judge
+    // call, not a run: the candidate is generated with its evidence path,
+    // and an overturn verdict clears it without spending a repair round.
+    const path = "core/server/lib/gravatar.js";
+    const patch = [
+      `diff --git a/${path} b/${path}`,
+      "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+      "+  module.exports.lookup = async () => null;",
+      "+}",
+    ].join("\n");
+    const candidates = readPreparationFidelityCandidates({
+      preparationManifest: manifest({ envUsed: { MAKEADEMO_DEMO: "true" } }),
+      repoSourceFiles: new Map([
+        ["package.json", ""],
+        [routePath, ""],
+        [path, "module.exports.lookup = lookup;"],
+      ]),
+      workspaceDiff: workspaceDiff([path], patch),
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("outside an authentication"),
+        path,
+      }),
+    ]);
+
+    const { record, surviving } = reconcileFidelityAdjudication({
+      candidates,
+      patch,
+      verdicts: [
+        {
+          candidateIndex: 0,
+          quotedEvidence: [],
+          steering:
+            "The change conditionally disables an external avatar lookup and preserves the original path.",
+          verdict: "overturn",
+        },
+      ],
+    });
+    const report = createPreparationFidelityReport({
+      adjudication: record,
+      candidates: surviving,
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.fidelityAdjudication?.outcomes).toEqual([
+      expect.objectContaining({ candidateIndex: 0, outcome: "overturned" }),
+    ]);
+  });
+
+  it("allows package commands to wire a created demo-named module", () => {
+    const report = validateDiff({
+      createdFiles: ["scripts/demoSeed.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: ["package.json"],
+      patch: [
+        "diff --git a/scripts/demoSeed.ts b/scripts/demoSeed.ts",
+        "new file mode 100644",
+        "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+        "+  await seedDemoDatabase();",
+        "+}",
+        "diff --git a/package.json b/package.json",
+        '+    "predev": "bun run scripts/demoSeed.ts",',
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects newly authored replacement product routes", () => {
     const replacementPath = "src/pages/demo-dashboard.tsx";
     const report = validateDiff({
@@ -192,6 +791,35 @@ describe("validatePreparationFidelity", () => {
 
     expect(report.status).toBe("failed");
     expect(report.logsSummary).toContain(replacementPath);
+  });
+
+  it("rejects an ungated created page component that takes over an original import", () => {
+    // The recall guard for N92's precision work: replacement UI must render
+    // something, so a created .tsx with JSX whose export takes over an
+    // original import must still veto — even though its demo-named path is
+    // a demo seam and .tsx is not presentation by file type. Content
+    // decides in both directions.
+    const replacementPath = "src/pages/DemoDashboard.tsx";
+    const report = validateDiff({
+      createdFiles: [replacementPath],
+      modifiedFiles: ["src/App.tsx"],
+      patch: [
+        "diff --git a/src/App.tsx b/src/App.tsx",
+        "-import { Dashboard } from './pages/Dashboard';",
+        "+import { Dashboard } from './pages/DemoDashboard';",
+        `diff --git a/${replacementPath} b/${replacementPath}`,
+        "new file mode 100644",
+        "+export const Dashboard = () => <main>Timer overview</main>;",
+      ].join("\n"),
+      sourceFiles: {
+        "src/App.tsx": "import { Dashboard } from './pages/Dashboard';",
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${replacementPath} creates replacement product UI`,
+    );
   });
 
   it("rejects replacement UI hidden behind seam-like names or public directories", () => {
@@ -686,6 +1314,52 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("recognizes a framework-prefixed gate binding in a presentation adaptation", () => {
+    // excalidraw attempt 7 (2026-08-09): the canonical repair — a demo scene
+    // seeded behind `import.meta.env.VITE_MAKEADEMO_DEMO` — was vetoed
+    // because the identifier extractor's lookbehind rejected the flag inside
+    // the Vite-required prefix. The pipeline owns the MAKEADEMO_DEMO token;
+    // any name containing it is the gate.
+    const appPath = "excalidraw-app/App.tsx";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [appPath],
+      patch: [
+        `diff --git a/${appPath} b/${appPath}`,
+        '+const isMakeADemoDemo = import.meta.env.VITE_MAKEADEMO_DEMO === "true";',
+        "+if (isMakeADemoDemo) {",
+        "+  return { scene: getMakeADemoScene(), isExternalScene: false };",
+        "+}",
+      ].join("\n"),
+      sourceFiles: {
+        [appPath]: "export function App() { return initializeScene(); }",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("recognizes a define-constant gate in a presentation adaptation", () => {
+    // excalidraw attempt 6: `__MAKEADEMO_DEMO__` from a vite define block hit
+    // the same underscore blind spot.
+    const appPath = "excalidraw-app/App.tsx";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [appPath],
+      patch: [
+        `diff --git a/${appPath} b/${appPath}`,
+        "+if (__MAKEADEMO_DEMO__) {",
+        "+  seedMakeADemoScene();",
+        "+}",
+      ].join("\n"),
+      sourceFiles: {
+        [appPath]: "export function App() { return initializeScene(); }",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("exempts framework and build configuration from the demo gate requirement", () => {
     const report = validateDiff({
       modifiedFiles: ["vite.config.ts", "apps/dashboard/next.config.ts"],
@@ -733,6 +1407,105 @@ describe("validatePreparationFidelity", () => {
     expect(report.suggestedRepairHints).toHaveLength(2);
     expect(report.suggestedRepairHints[0]).toContain("MAKEADEMO_DEMO");
     expect(report.suggestedRepairHints[1]).toContain("original application");
+  });
+
+  it("rejects a repair that redirects the app's build script at a different workspace package", () => {
+    // N129 (twenty, 2026-08-13): round 6 bought a green build gate by
+    // rewriting the app package's own build script to build a sibling
+    // package — a command that exits 0 by no longer building the app.
+    const report = validateDiff({
+      manifestOverrides: { appDir: "packages/twenty-front" },
+      modifiedFiles: ["packages/twenty-front/package.json"],
+      patch: [
+        "diff --git a/packages/twenty-front/package.json b/packages/twenty-front/package.json",
+        '-    "build": "npx nx build twenty-front",',
+        '+    "build": "npx nx build twenty-shared",',
+      ].join("\n"),
+      sourceFiles: {
+        "packages/twenty-front/package.json":
+          '{ "name": "twenty-front", "scripts": { "build": "npx nx build twenty-front" } }',
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.failureClassification).toBe("product fidelity violation");
+    expect(report.logsSummary).toContain("twenty-shared");
+    expect(report.logsSummary).toContain('"build" script');
+  });
+
+  it("rejects a build script redirected through a package-manager filter at another package", () => {
+    const report = validateDiff({
+      modifiedFiles: ["package.json"],
+      patch: [
+        "diff --git a/package.json b/package.json",
+        '-    "build": "vite build",',
+        '+    "build": "pnpm --filter @acme/docs run build",',
+      ].join("\n"),
+      sourceFiles: {
+        "package.json":
+          '{ "name": "acme-app", "scripts": { "build": "vite build" } }',
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("@acme/docs");
+  });
+
+  it("allows a rewritten build script that still builds the app after its dependencies", () => {
+    const report = validateDiff({
+      manifestOverrides: { appDir: "packages/twenty-front" },
+      modifiedFiles: ["packages/twenty-front/package.json"],
+      patch: [
+        "diff --git a/packages/twenty-front/package.json b/packages/twenty-front/package.json",
+        '-    "build": "npx nx build twenty-front",',
+        '+    "build": "npx nx build twenty-shared && npx nx build twenty-front",',
+      ].join("\n"),
+      sourceFiles: {
+        "packages/twenty-front/package.json":
+          '{ "name": "twenty-front", "scripts": { "build": "npx nx build twenty-front" } }',
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a rewritten build script that builds in place without a workspace selector", () => {
+    const report = validateDiff({
+      manifestOverrides: { appDir: "packages/twenty-front" },
+      modifiedFiles: ["packages/twenty-front/package.json"],
+      patch: [
+        "diff --git a/packages/twenty-front/package.json b/packages/twenty-front/package.json",
+        '-    "build": "npx nx build twenty-front",',
+        '+    "build": "tsc -b && vite build",',
+      ].join("\n"),
+      sourceFiles: {
+        "packages/twenty-front/package.json":
+          '{ "name": "twenty-front", "scripts": { "build": "npx nx build twenty-front" } }',
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a build script that adds a sibling build ahead of an in-place build step", () => {
+    // Building a workspace dependency first, then the app itself in place,
+    // is the legitimate shape of the same edit; only a script whose every
+    // step is redirected away from the app buys the gate without it.
+    const report = validateDiff({
+      manifestOverrides: { appDir: "packages/twenty-front" },
+      modifiedFiles: ["packages/twenty-front/package.json"],
+      patch: [
+        "diff --git a/packages/twenty-front/package.json b/packages/twenty-front/package.json",
+        '-    "build": "vite build",',
+        '+    "build": "npx nx build twenty-shared && vite build",',
+      ].join("\n"),
+      sourceFiles: {
+        "packages/twenty-front/package.json":
+          '{ "name": "twenty-front", "scripts": { "build": "vite build" } }',
+      },
+    });
+
+    expect(report.status).toBe("passed");
   });
 
   it("resolves the start command through the package script table to reject created entrypoints", () => {
@@ -1370,3 +2143,94 @@ function manifest(
     ...overrides,
   };
 }
+
+describe("reconcileFidelityAdjudication", () => {
+  const candidate = {
+    hint: "Adapt the original application.",
+    message: "app/App.tsx modifies original product UI.",
+    path: "app/App.tsx",
+  };
+  const patch = [
+    "diff --git a/app/App.tsx b/app/App.tsx",
+    "+const isDemo = true;",
+    "+if (isDemo) { render(); }",
+    "diff --git a/src/other.ts b/src/other.ts",
+    "+export const elsewhere = 'unrelated evidence';",
+  ].join("\n");
+
+  it("keeps a confirmed candidate whose quotes exist in the named file's diff", () => {
+    const { record, steering, surviving } = reconcileFidelityAdjudication({
+      candidates: [candidate],
+      patch,
+      verdicts: [
+        {
+          candidateIndex: 0,
+          quotedEvidence: ["if (isDemo) { render(); }"],
+          steering: "Gate the render call behind the demo flag.",
+          verdict: "confirm",
+        },
+      ],
+    });
+
+    expect(surviving).toEqual([candidate]);
+    expect(record.outcomes).toEqual([
+      expect.objectContaining({ candidateIndex: 0, outcome: "confirmed" }),
+    ]);
+    expect(steering).toEqual(["Gate the render call behind the demo flag."]);
+  });
+
+  it("overturns a confirmation whose quotes are not in the named file's diff", () => {
+    // A hallucinated veto cannot survive: quotes from another file's section
+    // (or from nowhere) fail verification and the candidate is dropped.
+    const { record, surviving } = reconcileFidelityAdjudication({
+      candidates: [candidate],
+      patch,
+      verdicts: [
+        {
+          candidateIndex: 0,
+          quotedEvidence: ["export const elsewhere = 'unrelated evidence';"],
+          verdict: "confirm",
+        },
+      ],
+    });
+
+    expect(surviving).toEqual([]);
+    expect(record.outcomes).toEqual([
+      expect.objectContaining({
+        candidateIndex: 0,
+        outcome: "overturned-unverifiable",
+      }),
+    ]);
+  });
+
+  it("drops overturned candidates and keeps unjudged ones", () => {
+    const second = {
+      hint: "Gate it.",
+      message: "src/other.ts is ungated.",
+      path: "src/other.ts",
+    };
+    const { record, surviving } = reconcileFidelityAdjudication({
+      candidates: [candidate, second],
+      patch,
+      verdicts: [
+        { candidateIndex: 0, quotedEvidence: [], verdict: "overturn" },
+      ],
+    });
+
+    expect(surviving).toEqual([second]);
+    expect(record.outcomes).toEqual([
+      expect.objectContaining({ candidateIndex: 0, outcome: "overturned" }),
+      expect.objectContaining({ candidateIndex: 1, outcome: "unjudged" }),
+    ]);
+  });
+
+  it("requires at least one quote to confirm", () => {
+    const { surviving } = reconcileFidelityAdjudication({
+      candidates: [candidate],
+      patch,
+      verdicts: [{ candidateIndex: 0, quotedEvidence: [], verdict: "confirm" }],
+    });
+
+    expect(surviving).toEqual([]);
+  });
+});

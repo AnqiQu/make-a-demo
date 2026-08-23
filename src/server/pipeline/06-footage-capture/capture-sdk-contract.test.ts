@@ -216,6 +216,70 @@ describe("Capture SDK Contract", () => {
     }
   });
 
+  it("treats waitForURL as synchronization inside a concurrent click span", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+    const captureSdk = await import(
+      `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+    );
+    const actionMarkers: Array<{ event: string; label: string }> = [];
+    const originalLog = console.log;
+    let waitedForUrl = false;
+
+    console.log = (...args: unknown[]) => {
+      if (args[0] === "[makeademo:action]") {
+        actionMarkers.push(JSON.parse(String(args[1])));
+      }
+    };
+    captureSdkGlobal.__makeademoCaptureSdk = {
+      context: {
+        baseUrl: "http://127.0.0.1:3000",
+        expect: () => ({}),
+        page: {
+          getByRole: () => ({ click: async () => undefined }),
+          waitForURL: async () => {
+            waitedForUrl = true;
+          },
+        },
+      },
+      startedAt: performance.now(),
+    };
+
+    try {
+      await captureSdk.scene(
+        "scene_one",
+        async ({
+          page,
+        }: {
+          page: {
+            getByRole(role: string): { click(): Promise<void> };
+            waitForURL(url: string): Promise<void>;
+          };
+        }) => {
+          await Promise.all([
+            page.waitForURL("http://127.0.0.1:3000/roles/new"),
+            page.getByRole("button").click(),
+          ]);
+        },
+      );
+
+      expect(waitedForUrl).toBe(true);
+      expect(actionMarkers).toEqual([
+        expect.objectContaining({
+          event: "started",
+          label: expect.stringContaining("locator.click"),
+        }),
+        expect.objectContaining({
+          event: "succeeded",
+          label: expect.stringContaining("locator.click"),
+        }),
+      ]);
+    } finally {
+      console.log = originalLog;
+      captureSdkGlobal.__makeademoCaptureSdk = undefined;
+    }
+  });
+
   it("injects validation timeouts without replacing optional Playwright arguments", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
     await writeGeneratedCaptureSdkHarness(workspace);

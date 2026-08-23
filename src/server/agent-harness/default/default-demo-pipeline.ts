@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { CaptureBrowserActionFailureError } from "../../pipeline/06-footage-capture/capture-runtime-protocol";
 import { captureScenesFromScript } from "../../pipeline/06-footage-capture/capture-scenes";
 import type { CaptureManifest } from "../../pipeline/06-footage-capture/capture-scenes";
 import { demoScriptLimits } from "../../pipeline/06-footage-capture/demo-script.schema";
@@ -21,6 +22,11 @@ import {
   type AgentHarnessPipelineResult,
   runAgentHarnessPipeline,
 } from "../orchestration/agent-harness";
+import {
+  type ValidationReport,
+  readValidationReport,
+} from "../schemas/artifacts";
+import type { BulkTransferLimiter } from "./bulk-transfer-limiter";
 import {
   type DefaultHarnessDependencies,
   createDefaultAgentHarnessDependencies,
@@ -64,10 +70,17 @@ export type DefaultDemoPipelineResult = {
 };
 
 export type DefaultDemoPipelineOptions = {
+  /**
+   * Shared by every pipeline in a batch to run bulk transfers (the clone
+   * plus archive, and the screened-archive upload) one at a time; solo runs
+   * omit it and transfer immediately.
+   */
+  bulkTransferLimiter?: BulkTransferLimiter;
   captureScenes?: typeof captureScenesFromScript;
   compositeVideo?: typeof compositeVideoFromScript;
   createHarnessDependencies?: (input: {
     artifactStore: LocalJsonArtifactStore;
+    bulkTransferLimiter?: BulkTransferLimiter;
     env?: Record<string, string | undefined>;
     logger: PipelineEventLogger;
     outputRoot: string;
@@ -130,24 +143,26 @@ export async function runDefaultDemoPipeline(
       ? undefined
       : (options.installationTokenProvider ??
         createGitHubAppIntegrationFromEnv());
-  const repoSnapshot = await (
-    options.readRepoSnapshot ?? readGithubRepoSnapshot
-  )(
-    {
-      ...(input.githubInstallationId === undefined
-        ? {}
-        : { githubInstallationId: input.githubInstallationId }),
-      log,
-      repoUrl: input.repoUrl,
-      runDirectory,
-    },
-    {
-      ...(installationTokenProvider === undefined
-        ? {}
-        : {
-            installationTokenProvider,
-          }),
-    },
+  const bulkTransferLimiter: BulkTransferLimiter =
+    options.bulkTransferLimiter ?? { run: (task) => task() };
+  const repoSnapshot = await bulkTransferLimiter.run(() =>
+    (options.readRepoSnapshot ?? readGithubRepoSnapshot)(
+      {
+        ...(input.githubInstallationId === undefined
+          ? {}
+          : { githubInstallationId: input.githubInstallationId }),
+        log,
+        repoUrl: input.repoUrl,
+        runDirectory,
+      },
+      {
+        ...(installationTokenProvider === undefined
+          ? {}
+          : {
+              installationTokenProvider,
+            }),
+      },
+    ),
   );
   await writeRepoSnapshotSummary(runDirectory, repoSnapshot);
 
@@ -156,6 +171,9 @@ export async function runDefaultDemoPipeline(
     options.createHarnessDependencies ?? createDefaultAgentHarnessDependencies
   )({
     artifactStore,
+    ...(options.bulkTransferLimiter === undefined
+      ? {}
+      : { bulkTransferLimiter: options.bulkTransferLimiter }),
     ...(options.env === undefined ? {} : { env: options.env }),
     logger,
     outputRoot: runDirectory,
@@ -169,12 +187,14 @@ export async function runDefaultDemoPipeline(
   let cleanupFailure: unknown;
   let completedResult: DefaultDemoPipelineResult | undefined;
   let primaryFailure: unknown;
+  let captureManifest: CaptureManifest | undefined;
 
   try {
     const pipelineResult = await (
       options.runHarnessPipeline ?? runAgentHarnessPipeline
     )(
       {
+        archiveSizeBytes: repoSnapshot.sourceArchive.sizeBytes,
         ...(repoSnapshot.commitSha === undefined
           ? {}
           : { commitSha: repoSnapshot.commitSha }),
@@ -204,6 +224,34 @@ export async function runDefaultDemoPipeline(
       },
       harnessDependencies.dependencies,
       {
+        captureAcceptedScript: async ({
+          captureRuntimeReset,
+          preparationManifest,
+          scriptCandidate,
+        }) => {
+          try {
+            captureManifest = await runFootageCapture({
+              baseUrl: preparationManifest.baseUrl,
+              captureRuntimeReset,
+              captureScenes: options.captureScenes ?? captureScenesFromScript,
+              externalResourceCache:
+                harnessDependencies.getExternalResourceCache?.(),
+              runDirectory,
+              scriptPackage: scriptCandidate.scriptJsonContent,
+              workspaceHandle: requireWorkspaceHandle(workspaceHandle()),
+            });
+            return createFootageCapturePassedReport(captureManifest);
+          } catch (error) {
+            if (!(error instanceof CaptureBrowserActionFailureError)) {
+              throw error;
+            }
+            return createFootageCaptureFailedReport(
+              error,
+              preparationManifest.baseUrl,
+              runDirectory,
+            );
+          }
+        },
         destroyWorkspaceOnCompletion: false,
         jobDeadlineMs: retryPolicy.jobDeadlineMinutes * 60_000,
         repoPreparationRepairLimit: retryPolicy.repoPreparationRepairs,
@@ -218,10 +266,12 @@ export async function runDefaultDemoPipeline(
     }
     await writeJsonFile(scriptPath, scriptPackage);
 
-    const captureManifest = await runFootageCapture({
+    captureManifest ??= await runFootageCapture({
+      baseUrl:
+        pipelineResult.preparationManifest?.baseUrl ?? "http://127.0.0.1:3000",
+      captureRuntimeReset: readCaptureRuntimeResetProof(pipelineResult),
       captureScenes: options.captureScenes ?? captureScenesFromScript,
       externalResourceCache: harnessDependencies.getExternalResourceCache?.(),
-      pipelineResult,
       runDirectory,
       scriptPackage,
       workspaceHandle: requireWorkspaceHandle(workspaceHandle()),
@@ -370,21 +420,24 @@ async function persistSandboxLogs(
 }
 
 async function runFootageCapture(input: {
+  baseUrl: string;
+  captureRuntimeReset: {
+    artifactPath: string;
+    stage: "capture-runtime-reset";
+    status: "passed";
+  };
   captureScenes: typeof captureScenesFromScript;
   externalResourceCache?: ReturnType<
     NonNullable<DefaultHarnessDependencies["getExternalResourceCache"]>
   >;
-  pipelineResult: AgentHarnessPipelineResult;
   runDirectory: string;
   scriptPackage: unknown;
   workspaceHandle: AgentHarnessWorkspaceHandle;
 }): Promise<CaptureManifest> {
   return await input.captureScenes({
-    baseUrl:
-      input.pipelineResult.preparationManifest?.baseUrl ??
-      "http://127.0.0.1:3000",
+    baseUrl: input.baseUrl,
     keepTemp: false,
-    captureRuntimeReset: readCaptureRuntimeResetProof(input.pipelineResult),
+    captureRuntimeReset: input.captureRuntimeReset,
     ...(input.externalResourceCache === undefined
       ? {}
       : { externalResourceCache: input.externalResourceCache }),
@@ -393,6 +446,93 @@ async function runFootageCapture(input: {
     scriptPackage: input.scriptPackage,
     tempRoot: input.runDirectory,
   });
+}
+
+function createFootageCapturePassedReport(
+  captureManifest: CaptureManifest,
+): ValidationReport {
+  return readValidationReport({
+    artifactReferences: [
+      captureManifest.manifestPath,
+      captureManifest.runDirectory,
+      ...[
+        captureManifest.markerLogPath,
+        captureManifest.stderrLogPath,
+        captureManifest.stdoutLogPath,
+      ].filter((path): path is string => path !== undefined),
+    ],
+    blockedNetworkAttempts: [],
+    browserObservations: [
+      `Captured ${captureManifest.scenes.length} browser Scene(s) in one continuous take.`,
+    ],
+    consoleErrors: [],
+    failureClassification: "none",
+    logsSummary: "Footage Capture completed successfully.",
+    networkAttempts: [],
+    pageErrors: [],
+    retryCount: 0,
+    screenshots: [],
+    stage: "footage-capture",
+    status: "passed",
+    stderrExcerpts:
+      captureManifest.stderrLogPath === undefined
+        ? []
+        : [captureManifest.stderrLogPath],
+    stdoutExcerpts:
+      captureManifest.stdoutLogPath === undefined
+        ? []
+        : [captureManifest.stdoutLogPath],
+    suggestedRepairHints: [],
+    urlChecked: captureManifest.baseUrl,
+  });
+}
+
+function createFootageCaptureFailedReport(
+  error: CaptureBrowserActionFailureError,
+  baseUrl: string,
+  runDirectory: string,
+): ValidationReport {
+  const failedAction = {
+    ...(error.actionId === undefined ? {} : { actionId: error.actionId }),
+    sceneId: error.sceneId,
+  };
+  return readValidationReport({
+    artifactReferences: [runDirectory],
+    blockedNetworkAttempts: [],
+    browserObservations: [error.message],
+    consoleErrors: [],
+    failedAction,
+    failureClassification: classifyFootageCaptureFailure(error),
+    logsSummary: error.message,
+    networkAttempts: [],
+    pageErrors: [],
+    retryCount: 0,
+    screenshots: [],
+    stage: "footage-capture",
+    status: "failed",
+    stderrExcerpts: [],
+    stdoutExcerpts: [],
+    suggestedRepairHints: [
+      `Browser action ${error.actionId ?? "unknown"} failed in Scene ${error.sceneId}; route the typed action failure through Script Repair and retake only after every script gate passes again.`,
+    ],
+    urlChecked: baseUrl,
+  });
+}
+
+function classifyFootageCaptureFailure(
+  error: CaptureBrowserActionFailureError,
+): string {
+  const evidence = `${error.label ?? ""} ${error.message}`;
+  if (/expect|assert/i.test(evidence)) {
+    return "assertion failure";
+  }
+  if (/page\.goto|\bgoto\b|navigat/i.test(evidence)) {
+    return "timing/state failure";
+  }
+  if (/locator|getBy|strict mode/i.test(evidence)) {
+    return "locator failure";
+  }
+  return "timing/state failure";
 }
 
 function readCaptureRuntimeResetProof(

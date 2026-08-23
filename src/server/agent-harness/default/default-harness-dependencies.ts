@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join, posix } from "node:path";
 import {
   BROWSER_ACTION_COMPILER_VERSION,
@@ -27,16 +27,25 @@ import {
 } from "../../shared/integrations/agents/opencode-provider-secrets";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
+import { withCpuLivenessHeartbeat } from "../../shared/shell/cpu-liveness";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
+import { stripAnsi, stripAnsiFileProgram } from "../../shared/text/strip-ansi";
+import {
+  hasAuthWallRouteShape,
+  isAuthDegradedClick,
+} from "../app-explorer/auth-wall";
+import { readLastErrorCauseLine } from "../app-explorer/stderr-error-signal";
 import {
   type SubmittedAppExplorationResult,
   exploreSubmittedApp,
   isExplicitAuthenticationFeature,
   readRouteDistinctContent,
 } from "../app-explorer/submitted-app-explorer";
+import { createDeadlineCappedWorkspace } from "../daytona/deadline-capped-workspace";
 import { downloadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
+import { selectSubmittedCodeSandboxClass } from "../daytona/submitted-code-sandbox-class";
 import {
   AgentHarnessAgentLaunchError,
   AgentHarnessCommandTimeoutError,
@@ -47,8 +56,10 @@ import {
   type AgentHarnessWorkspaceExecuteOptions,
   type AgentHarnessWorkspaceHandle,
   type AgentHarnessWorkspaceProvider,
+  type SubmittedCodeSandboxClass,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
+import { readGroundableFeatureIds } from "../flow-planning/feature-groundability";
 import { DefaultOpenCodeHarnessRunner } from "../opencode/default-opencode-harness-runner";
 import {
   type OpenCodeHarnessRunInput,
@@ -60,8 +71,22 @@ import {
 import type {
   AgentHarnessPipelineDependencies,
   AgentHarnessPipelineInput,
+  RepairFeatureVerification,
 } from "../orchestration/agent-harness";
-import { isDependencyRepairFailure } from "../repair/repair-router";
+import type {
+  RepairBudgetSnapshot,
+  RepairRoundLedger,
+} from "../repair/repair-round-ledger";
+import {
+  isDependencyRepairFailure,
+  runtimeConfigurationClassifications,
+} from "../repair/repair-router";
+import { createFeatureVerificationGuide } from "../repo-preparation/feature-verification-guide";
+import {
+  type FidelityCandidate,
+  readPatchSectionText,
+} from "../repo-preparation/preparation-fidelity";
+import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
 import {
   assertPreparedFeatureInventory,
   countNormalizedFeatures,
@@ -70,6 +95,7 @@ import {
 } from "../repo-preparation/prepared-feature-inventory";
 import { synthesizeRunPlan } from "../run-planner/run-plan-synthesis";
 import {
+  type ResolvedRuntimeTarget,
   findRuntimeConfigurationIssue,
   resolvePreparationRuntime,
 } from "../run-planner/runtime-target-resolution";
@@ -78,6 +104,12 @@ import {
   createExplicitRuntimeTargetSelection,
   readModelRuntimeTargetSelection,
 } from "../run-planner/runtime-target-selection";
+import {
+  createServiceProvisionCommand,
+  provisionableServices,
+  readProvisionedServicePlans,
+  sandboxServiceConnectionUrls,
+} from "../sandbox-services/sandbox-services";
 import {
   makeADemoArtifactPaths,
   makeADemoDirectory,
@@ -89,18 +121,29 @@ import {
   type FlowSpec,
   type NetworkAttempt,
   type PreparationManifest,
+  type PreparedDemoFeature,
   type RepoProfile,
+  type RepoWorkspacePackage,
   type RunPlan,
   type RuntimeProbeAttempt,
   type RuntimeProbeDiagnostics,
   type ScriptCandidate,
   type ValidationReport,
+  readFidelityAdjudicationVerdicts,
   readFlowSpec,
   readPreparationManifest,
 } from "../schemas/artifacts";
 import { createFlowSpecContract } from "../schemas/flow-spec-contract";
 import { createPreparationManifestContract } from "../schemas/preparation-manifest-contract";
 import { createPreparationManifestTemplate } from "../schemas/preparation-manifest-template";
+import {
+  type RepairAdvice,
+  readRepairAdvice,
+} from "../schemas/repair-advice.schema";
+import {
+  type RunTriageAdvice,
+  readRunTriageAdvice,
+} from "../schemas/run-triage-advice.schema";
 import { assembleDemoNarrative } from "../script-contract/demo-narrative";
 import {
   createDemoScriptContract,
@@ -113,6 +156,9 @@ import {
 import {
   createOfflineLifecycleCommand,
   hasNetworkInstallFailureSignature,
+  isOfflineLifecycleNetworkRefusal,
+  parseInstallCommand,
+  readYarnInstallVariant,
   runDependencyInstallThroughGate,
 } from "../tools/dependency-install-gate";
 import {
@@ -127,6 +173,7 @@ import {
   readRuntimeNetworkAttempts,
   runtimeNetworkGuardPath,
 } from "../validation/runtime-network-guard";
+import type { BulkTransferLimiter } from "./bulk-transfer-limiter";
 import {
   type JsonSyntaxDiagnostic,
   diagnoseJsonSyntax,
@@ -147,6 +194,8 @@ export type DefaultHarnessDependenciesOptions = {
   /** Spacing before the single relaunch after a zero-output agent exit; default 30s. */
   agentLaunchRetryDelayMs?: number;
   artifactStore: NonNullable<AgentHarnessPipelineDependencies["artifactStore"]>;
+  /** Serializes the screened-archive upload with the batch's other bulk transfers. */
+  bulkTransferLimiter?: BulkTransferLimiter;
   env?: Record<string, string | undefined>;
   externalResourceFetcher?: ExternalResourceFetcher;
   logger?: PipelineEventLogger;
@@ -174,6 +223,9 @@ const misplacedPreparationManifestPath =
   "/workspace/repo/.makeademo/preparation-manifest.json";
 const openCodeConfigDirectory = "/tmp/makeademo/opencode";
 const openCodeInactivityTimeoutMs = 5 * 60_000;
+const fidelityAdjudicationTimeoutMs = 10 * 60_000;
+const repairStrategyTimeoutMs = 3 * 60_000;
+const runTriageTimeoutMs = 3 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
 const preparationHashMarker = "\0MAKEADEMO_HASHES\0";
 const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
@@ -197,12 +249,19 @@ export async function createDefaultAgentHarnessDependencies(
   let opencodeSessionId: string | undefined;
   let repoMaterialized = false;
   let runtimeRepairArtifactAttempt = 0;
+  let repairStrategyAttempt = 0;
+  let runTriageAttempt = 0;
   let scriptWritingBaseline: ScriptWritingContentSnapshot = {};
   const externalResourceDirectory = join(
     options.outputRoot,
     "external-resources",
   );
   let externalResourceManifest: ExternalResourceManifest | undefined;
+  // N127: the command that actually installed, retry flags included. Rounds
+  // that reuse the install still re-run the offline lifecycle after their
+  // workspace re-sync, and the manifest's own command never carries the
+  // flags a retried install needed (directus's engine-strict bypass).
+  let lastExecutedInstallCommand: string | undefined;
   const policyDeniedExternalResourceUrls = new Set<string>();
   const externalResourceHydrationOutcomes: Array<{
     error?: string;
@@ -296,19 +355,30 @@ export async function createDefaultAgentHarnessDependencies(
         ? baseline.candidateFingerprint
         : undefined;
     let artifactError = stageInput.initialArtifactError;
+    // Every distinct rejection reason the stage has seen. Feeding only the
+    // latest lets a fresh-session retry satisfy the newest constraint while
+    // regressing one an earlier attempt already fixed (directus's
+    // flow-planning oscillated across three attempts, 2026-08-11); the agent
+    // must see every constraint at once.
+    const priorArtifactErrors: string[] = [];
     let stallRetriesRemaining = retryPolicy.agentStallRetries;
     // Stall retries repeat an attempt number, so "is this the first run"
     // must be tracked separately or a post-stall retry would lose the
     // accumulated error evidence (including the kill disclosure).
     let priorRunHappened = false;
     for (let attempt = 1; attempt <= attempts; ) {
+      if (priorRunHappened && !priorArtifactErrors.includes(artifactError)) {
+        priorArtifactErrors.push(artifactError);
+      }
       const result = await runOpenCode({
         availableTools: ["read", "write"],
         configDir: openCodeConfigDirectory,
         model: `${providerID}/${modelID}`,
         prompt: stageInput.prompt(
           attempt,
-          priorRunHappened ? artifactError : undefined,
+          priorRunHappened
+            ? accumulatedArtifactError(priorArtifactErrors)
+            : undefined,
         ),
         ...optionalSessionId(opencodeSessionId),
         stage: stageInput.stageForAttempt(attempt),
@@ -414,6 +484,9 @@ export async function createDefaultAgentHarnessDependencies(
   ) => {
     if (repoMaterialized) return;
     await materializeScreenedRepo({
+      ...(options.bulkTransferLimiter === undefined
+        ? {}
+        : { bulkTransferLimiter: options.bulkTransferLimiter }),
       repoProfile,
       sourceArchive: options.repoSourceArchive,
       workspace,
@@ -538,7 +611,12 @@ export async function createDefaultAgentHarnessDependencies(
   const validateRuntimeWithExternalResources = async (
     input: Omit<
       Parameters<typeof validateSubmittedCodeRuntime>[0],
-      "buildApp" | "externalResourceCache" | "onAppStart" | "resetWorkspace"
+      | "buildApp"
+      | "externalResourceCache"
+      | "onAppStart"
+      | "onInstallExecuted"
+      | "resetWorkspace"
+      | "reusedInstallCommand"
     >,
   ): Promise<ValidationReport> => {
     const runValidation = async (inputRun: {
@@ -562,7 +640,13 @@ export async function createDefaultAgentHarnessDependencies(
         onAppStart: (appStartInput) => {
           submittedCodeAppStartInput = appStartInput;
         },
+        onInstallExecuted: (executedCommand) => {
+          lastExecutedInstallCommand = executedCommand;
+        },
         resetWorkspace: inputRun.initialRun,
+        ...(lastExecutedInstallCommand === undefined
+          ? {}
+          : { reusedInstallCommand: lastExecutedInstallCommand }),
       });
     const readUncachedAttempts = (report: ValidationReport) =>
       readUncachedExternalResourceAttempts(report.blockedNetworkAttempts);
@@ -606,6 +690,10 @@ export async function createDefaultAgentHarnessDependencies(
   const runWithExternalResourceBroker = async <T>(input: {
     markUnresolved?: (result: T, attempts: NetworkAttempt[]) => T;
     readBlockedAttempts: (result: T) => NetworkAttempt[];
+    // Returns a verdict that must survive later passes unchanged. Hydrating an
+    // external resource can never fix the app's own route erroring, so an
+    // app-origin failure recognized here is never overwritten by a lucky retry.
+    readStickyFailure?: (result: T) => T | undefined;
     run: () => Promise<T>;
     stage: string;
     workspace: AgentHarnessWorkspace;
@@ -659,6 +747,13 @@ export async function createDefaultAgentHarnessDependencies(
     };
     const unresolved = (result: T, attempts: NetworkAttempt[]) =>
       input.markUnresolved?.(result, attempts) ?? result;
+    // The first sticky failure seen on any pass outranks every later verdict,
+    // success included: an app-origin server error is real no matter which
+    // lucky retry follows it.
+    let stickyFailure: T | undefined;
+    const rememberSticky = (result: T) => {
+      stickyFailure ??= input.readStickyFailure?.(result);
+    };
 
     for (
       let pass = 1;
@@ -666,8 +761,9 @@ export async function createDefaultAgentHarnessDependencies(
       pass += 1
     ) {
       const offlineResult = await runOffline();
+      rememberSticky(offlineResult);
       const uncached = await readUncachedAttempts(offlineResult);
-      if (uncached.length === 0) return offlineResult;
+      if (uncached.length === 0) return stickyFailure ?? offlineResult;
 
       const hydration = await hydrateExternalResources(
         uncached,
@@ -677,21 +773,430 @@ export async function createDefaultAgentHarnessDependencies(
       if (hydration.addedResources === 0) {
         const remainingAttempts =
           readUncachedExternalResourceAttempts(uncached);
-        return remainingAttempts.length === 0
-          ? offlineResult
-          : unresolved(offlineResult, remainingAttempts);
+        return (
+          stickyFailure ??
+          (remainingAttempts.length === 0
+            ? offlineResult
+            : unresolved(offlineResult, remainingAttempts))
+        );
       }
       await restartSubmittedCodeApp();
     }
 
     const finalResult = await runOffline();
+    rememberSticky(finalResult);
     const remainingAttempts = await readUncachedAttempts(finalResult);
-    return remainingAttempts.length === 0
-      ? finalResult
-      : unresolved(finalResult, remainingAttempts);
+    return (
+      stickyFailure ??
+      (remainingAttempts.length === 0
+        ? finalResult
+        : unresolved(finalResult, remainingAttempts))
+    );
+  };
+  // N108: once the runtime preflight passes, re-run the gate's own
+  // entry-route exploration against the live prepared app. A feature the
+  // gate would fail dies here — minutes in — with the gate's own verdict
+  // ledger, so the repair round targets the app instead of discovering the
+  // failure forty minutes later. The probe only ever surfaces verdicts:
+  // a crashed or hung explorer is weather, and the gate keeps the final
+  // authority over everything it has not judged.
+  const probePreparedFeatures = async (input: {
+    preparationManifest: PreparationManifest;
+    repairFeatureVerification?: RepairFeatureVerification;
+    report: ValidationReport;
+    workspace: AgentHarnessWorkspace;
+  }): Promise<ValidationReport> => {
+    const featureInventory =
+      input.preparationManifest.productContext.featureInventory;
+    if (featureInventory.length === 0) return input.report;
+    const exploreFeatures = (
+      features: PreparedDemoFeature[],
+      scope: "feature-entries" | "feature-proofs",
+    ) =>
+      runWithExternalResourceBroker({
+        readBlockedAttempts: (result: SubmittedAppExplorationResult) =>
+          result.validationReport.blockedNetworkAttempts,
+        run: () =>
+          exploreSubmittedApp({
+            baseUrl: input.preparationManifest.baseUrl,
+            ...(input.preparationManifest.dataStrategy === undefined
+              ? {}
+              : { dataStrategy: input.preparationManifest.dataStrategy }),
+            ...(externalResourceManifest === undefined
+              ? {}
+              : { externalResourceManifest }),
+            featureInventory: features,
+            preparationManifestId: input.preparationManifest.id,
+            // The coverage gate guarantees requestedFeature values mirror the
+            // demo brief, so the probe classifies requested-feature failures
+            // exactly as the gate will.
+            requestedFeatures: features.flatMap((feature) =>
+              feature.requestedFeature === undefined
+                ? []
+                : [feature.requestedFeature],
+            ),
+            scope,
+            workspace: input.workspace,
+          }),
+        stage: "preparation-preflight",
+        workspace: input.workspace,
+      });
+    const failedProbeReport = async (
+      probeReport: ValidationReport,
+      featureVerdicts = probeReport.featureVerdicts ?? [],
+    ): Promise<ValidationReport> => {
+      // The probe's screenshots and snapshots are the repair round's visual
+      // evidence; persist them under their own directory so the later gate
+      // run does not overwrite the record of what the repair agent saw.
+      await persistExplorationEvidence({
+        directoryName: "feature-probe-evidence",
+        logger: options.logger,
+        outputRoot: options.outputRoot,
+        workspace: input.workspace,
+      });
+      const failingFeatureIds = featureVerdicts
+        .filter(({ verdict }) => verdict === "failed")
+        .map(({ featureId }) => featureId);
+      return {
+        ...probeReport,
+        ...(failingFeatureIds.length === 0 ? {} : { failingFeatureIds }),
+        featureVerdicts,
+        logsSummary: `Feature verification probe failed after the runtime preflight passed: ${probeReport.logsSummary}`,
+        stage: "preparation-preflight",
+      };
+    };
+    const inconclusiveProbeReport = async (probeReport: ValidationReport) => {
+      await options.logger?.warn({
+        classification: probeReport.failureClassification,
+        event: "preparation.feature-probe.inconclusive",
+        message: probeReport.logsSummary.slice(0, 500),
+      });
+      return {
+        ...input.report,
+        logsSummary: `${input.report.logsSummary} Feature probe inconclusive (${probeReport.failureClassification ?? "unclassified"}); app exploration remains the authority.`,
+      };
+    };
+
+    if (input.repairFeatureVerification === undefined) {
+      const exploration = await exploreFeatures(
+        featureInventory,
+        "feature-entries",
+      );
+      const probeReport = exploration.validationReport;
+      const verdictFailed = (probeReport.featureVerdicts ?? []).some(
+        (verdict) => verdict.verdict === "failed",
+      );
+      if (probeReport.status === "failed" && verdictFailed) {
+        return await failedProbeReport(probeReport);
+      }
+      if (probeReport.status === "failed") {
+        return await inconclusiveProbeReport(probeReport);
+      }
+      return {
+        ...input.report,
+        logsSummary: `${input.report.logsSummary} Feature probe grounded all ${featureInventory.length} prepared feature(s) on their entry routes.`,
+      };
+    }
+
+    const priorVerdicts = new Map(
+      input.repairFeatureVerification.priorFeatureVerdicts.map((verdict) => [
+        verdict.featureId,
+        verdict,
+      ]),
+    );
+    const touchedFeatureIds = new Set(
+      input.repairFeatureVerification.touchedFeatureIds,
+    );
+    const fullExplorationIds = new Set<string>();
+    const cheapProbeCandidates: PreparedDemoFeature[] = [];
+    for (const feature of featureInventory) {
+      const priorVerdict = priorVerdicts.get(feature.id);
+      if (
+        priorVerdict?.verdict === "grounded" &&
+        !touchedFeatureIds.has(feature.id) &&
+        feature.expectedProof !== undefined
+      ) {
+        cheapProbeCandidates.push(feature);
+      } else {
+        fullExplorationIds.add(feature.id);
+      }
+    }
+
+    const entryProbeResults = await Promise.all(
+      cheapProbeCandidates.map(async (feature) => ({
+        feature,
+        serves: await preparedFeatureEntryRouteServes({
+          baseUrl: input.preparationManifest.baseUrl,
+          feature,
+          readinessReport: input.report,
+          workspace: input.workspace,
+        }),
+      })),
+    );
+    const proofCandidates = entryProbeResults.flatMap(({ feature, serves }) => {
+      if (serves) return [feature];
+      fullExplorationIds.add(feature.id);
+      return [];
+    });
+    const freshlyGrounded: NonNullable<ValidationReport["featureVerdicts"]> =
+      [];
+    if (proofCandidates.length > 0) {
+      const proofExploration = await exploreFeatures(
+        proofCandidates,
+        "feature-proofs",
+      );
+      const proofVerdicts = new Map(
+        (proofExploration.validationReport.featureVerdicts ?? []).map(
+          (verdict) => [verdict.featureId, verdict],
+        ),
+      );
+      for (const feature of proofCandidates) {
+        const verdict = proofVerdicts.get(feature.id);
+        if (verdict?.verdict === "grounded") {
+          freshlyGrounded.push(verdict);
+        } else {
+          fullExplorationIds.add(feature.id);
+        }
+      }
+    }
+
+    const fullExplorationFeatures = featureInventory.filter((feature) =>
+      fullExplorationIds.has(feature.id),
+    );
+    const fullExploration =
+      fullExplorationFeatures.length === 0
+        ? undefined
+        : await exploreFeatures(fullExplorationFeatures, "feature-entries");
+    const fullReport = fullExploration?.validationReport;
+    const freshVerdicts = new Map(
+      [...freshlyGrounded, ...(fullReport?.featureVerdicts ?? [])].map(
+        (verdict) => [verdict.featureId, verdict],
+      ),
+    );
+    const mergedVerdicts = featureInventory.flatMap((feature) => {
+      const verdict = freshVerdicts.get(feature.id);
+      return verdict === undefined ? [] : [verdict];
+    });
+    if (
+      fullReport?.status === "failed" &&
+      mergedVerdicts.some(({ verdict }) => verdict === "failed")
+    ) {
+      return await failedProbeReport(fullReport, mergedVerdicts);
+    }
+    const allFeaturesGrounded = featureInventory.every(
+      ({ id }) => freshVerdicts.get(id)?.verdict === "grounded",
+    );
+    if (!allFeaturesGrounded) {
+      return await inconclusiveProbeReport(
+        fullReport ?? {
+          ...input.report,
+          failureClassification: "feature re-probe inconclusive",
+          logsSummary:
+            "At least one prior grounded feature did not produce fresh replay evidence.",
+          status: "failed",
+        },
+      );
+    }
+    return {
+      ...input.report,
+      logsSummary: `${input.report.logsSummary} Repair feature probe freshly re-grounded ${freshlyGrounded.length} unchanged feature(s) and fully explored ${fullExplorationFeatures.length} failed or touched feature(s).`,
+    };
   };
 
   const dependencies: AgentHarnessPipelineDependencies = {
+    async adviseRepairStrategy(input) {
+      const workspace = workspaceHandle?.workspace;
+      if (workspace === undefined) return undefined;
+      repairStrategyAttempt += 1;
+      const attempt = repairStrategyAttempt;
+      const attemptPath = `${artifactPaths.agentArtifactAttempts}/repair-strategy/attempt-${attempt}.json`;
+      const persistAttempt = async (value: unknown) => {
+        try {
+          await options.artifactStore.writeJson(attemptPath, value);
+        } catch {
+          // Strategy and its audit copy are both advisory. Neither may fail
+          // the deterministic repair loop.
+        }
+      };
+      try {
+        await writeWorkspaceJson(
+          workspace,
+          artifactPaths.repairRoundLedger,
+          input.roundLedger,
+        );
+        await removeWorkspaceFile(workspace, artifactPaths.repairAdvice);
+        const result = await runOpenCode({
+          availableTools: ["read", "write"],
+          configDir: openCodeConfigDirectory,
+          model: `${providerID}/${modelID}`,
+          prompt: createRepairStrategyPrompt(input),
+          stage: "repair-strategy",
+          timeoutMs: repairStrategyTimeoutMs,
+          workingDirectory: workspaceRepoDirectory,
+          workspace,
+        });
+        if (result.exitCode !== 0) {
+          await persistAttempt({
+            attempt,
+            error:
+              result.timeoutError?.message ?? formatAgentCommandFailure(result),
+            status: "failed",
+          });
+          return undefined;
+        }
+        const readResult = await tryReadWorkspaceJson(
+          workspace,
+          artifactPaths.repairAdvice,
+        );
+        if (!readResult.ok) {
+          await persistAttempt({
+            attempt,
+            error: readResult.error,
+            status: "failed",
+          });
+          return undefined;
+        }
+        let advice: RepairAdvice;
+        try {
+          advice = readRepairAdvice(readResult.value);
+        } catch (error) {
+          await persistAttempt({
+            attempt,
+            candidate: readResult.value,
+            error: readErrorMessage(error),
+            status: "failed",
+          });
+          return undefined;
+        }
+        await persistAttempt({ advice, attempt, status: "passed" });
+        return advice;
+      } catch (error) {
+        await persistAttempt({
+          attempt,
+          error: readErrorMessage(error),
+          status: "failed",
+        });
+        return undefined;
+      }
+    },
+    async adviseRunTriage(input) {
+      const workspace = workspaceHandle?.workspace;
+      if (workspace === undefined) return undefined;
+      runTriageAttempt += 1;
+      const attempt = runTriageAttempt;
+      const attemptPath = `${artifactPaths.agentArtifactAttempts}/run-triage/attempt-${attempt}.json`;
+      const persistAttempt = async (value: unknown) => {
+        try {
+          await options.artifactStore.writeJson(attemptPath, value);
+        } catch {
+          // Triage and its audit copy are both advisory. Neither may fail
+          // or stall the run.
+        }
+      };
+      try {
+        // Triage runs before every other stage, so the screened repository
+        // may not exist in the sandbox yet; the strategist reads it to
+        // assess lifecycle weight.
+        await ensureRepoMaterialized(input.repoProfile, workspace);
+        await writeWorkspaceJson(
+          workspace,
+          artifactPaths.repoProfile,
+          input.repoProfile,
+        );
+        await removeWorkspaceFile(workspace, artifactPaths.runTriageAdvice);
+        const result = await runOpenCode({
+          availableTools: ["read", "write"],
+          configDir: openCodeConfigDirectory,
+          model: `${providerID}/${modelID}`,
+          prompt: createRunTriagePrompt(input),
+          stage: "run-triage",
+          timeoutMs: runTriageTimeoutMs,
+          workingDirectory: workspaceRepoDirectory,
+          workspace,
+        });
+        if (result.exitCode !== 0) {
+          await persistAttempt({
+            attempt,
+            error:
+              result.timeoutError?.message ?? formatAgentCommandFailure(result),
+            status: "failed",
+          });
+          return undefined;
+        }
+        const readResult = await tryReadWorkspaceJson(
+          workspace,
+          artifactPaths.runTriageAdvice,
+        );
+        if (!readResult.ok) {
+          await persistAttempt({
+            attempt,
+            error: readResult.error,
+            status: "failed",
+          });
+          return undefined;
+        }
+        let advice: RunTriageAdvice;
+        try {
+          advice = readRunTriageAdvice(readResult.value);
+        } catch (error) {
+          await persistAttempt({
+            attempt,
+            candidate: readResult.value,
+            error: readErrorMessage(error),
+            status: "failed",
+          });
+          return undefined;
+        }
+        await persistAttempt({ advice, attempt, status: "passed" });
+        return advice;
+      } catch (error) {
+        await persistAttempt({
+          attempt,
+          error: readErrorMessage(error),
+          status: "failed",
+        });
+        return undefined;
+      }
+    },
+    async adjudicateFidelityCandidates({
+      candidates,
+      preparationManifest,
+      workspace,
+      workspaceDiff,
+    }) {
+      try {
+        await removeWorkspaceFile(
+          workspace,
+          artifactPaths.fidelityAdjudication,
+        );
+        const result = await runOpenCode({
+          availableTools: ["read", "write"],
+          configDir: openCodeConfigDirectory,
+          model: `${providerID}/${modelID}`,
+          prompt: createFidelityAdjudicationPrompt({
+            candidates,
+            preparationManifest,
+            workspaceDiff,
+          }),
+          stage: "preparation-fidelity-adjudication",
+          timeoutMs: fidelityAdjudicationTimeoutMs,
+          workingDirectory: workspaceRepoDirectory,
+          workspace,
+        });
+        if (result.exitCode !== 0) return undefined;
+        const readResult = await tryReadWorkspaceJson(
+          workspace,
+          artifactPaths.fidelityAdjudication,
+        );
+        if (!readResult.ok) return undefined;
+        return readFidelityAdjudicationVerdicts(readResult.value);
+      } catch (error) {
+        // A failed judge must never veto or rescue anything: the caller
+        // treats undefined as "unadjudicated" and keeps every candidate.
+        if (isAgentHarnessInfrastructureError(error)) throw error;
+        return undefined;
+      }
+    },
     artifactStore: options.artifactStore,
     async capturePreparationWorkspaceDiff({ workspace }) {
       const patchStartedAt = Date.now();
@@ -764,8 +1269,10 @@ export async function createDefaultAgentHarnessDependencies(
         const patchPath = `${makeADemoDirectory}/accepted-preparation.patch`;
         await writeWorkspaceText(workspace, patchPath, workspaceDiff.patch);
         try {
+          // At-most-once: a masked success would double-apply the patch.
           const result = await workspace.execute(
             `git -C ${shellQuote(workspaceRepoDirectory)} apply --binary ${shellQuote(patchPath)}`,
+            { retry: "none" },
           );
           if (result.exitCode !== 0) {
             throw new Error(
@@ -783,7 +1290,7 @@ export async function createDefaultAgentHarnessDependencies(
       );
       opencodeSessionId = undefined;
     },
-    async createWorkspace() {
+    async createWorkspace({ jobDeadline, repoProfile }) {
       const provider =
         options.workspaceProvider ??
         (await createDaytonaWorkspaceProvider({
@@ -791,10 +1298,25 @@ export async function createDefaultAgentHarnessDependencies(
           logger: options.logger,
           providerID,
         }));
-      workspaceHandle = await provider.create();
+      const handle = await provider.create({
+        submittedCodeSandboxClass: selectSubmittedCodeSandboxClass(repoProfile),
+      });
+      // N156: every command this job runs — agent commands, lifecycle
+      // waits, install/build gates — is capped at the remaining wall-clock
+      // budget. The handle keeps the raw destroy so teardown outlives the
+      // deadline.
+      workspaceHandle = {
+        ...handle,
+        workspace: createDeadlineCappedWorkspace(handle.workspace, jobDeadline),
+      };
       return workspaceHandle.workspace;
     },
-    async exploreApp({ demoBrief, preparationManifest, workspace }) {
+    async exploreApp({
+      captureFailure,
+      demoBrief,
+      preparationManifest,
+      workspace,
+    }) {
       const result = await runWithExternalResourceBroker({
         markUnresolved: (result, attempts) => ({
           ...result,
@@ -809,6 +1331,10 @@ export async function createDefaultAgentHarnessDependencies(
         run: () =>
           exploreSubmittedApp({
             baseUrl: preparationManifest.baseUrl,
+            ...(captureFailure === undefined ? {} : { captureFailure }),
+            ...(preparationManifest.dataStrategy === undefined
+              ? {}
+              : { dataStrategy: preparationManifest.dataStrategy }),
             ...(externalResourceManifest === undefined
               ? {}
               : { externalResourceManifest }),
@@ -861,6 +1387,35 @@ export async function createDefaultAgentHarnessDependencies(
         artifactPaths.flowSpecContract,
         createFlowSpecContract(),
       );
+      // No valid FlowSpec exists without at least one groundable feature —
+      // every feature must select a tagged assert — so retrying the planner
+      // against an assert-free catalog burns attempts on an impossible task.
+      // The wall is exploration/catalog quality; fail there before the first
+      // agent attempt.
+      const groundableFeatureIds = readGroundableFeatureIds(
+        preparationManifest.productContext.featureInventory.map(
+          (feature) => feature.id,
+        ),
+        {
+          actionCatalog,
+          allowedAuthWallFeatureIds: new Set(
+            preparationManifest.productContext.featureInventory
+              .filter((feature) =>
+                isExplicitAuthenticationFeature(
+                  feature,
+                  demoBrief.keyProductFeatures ?? [],
+                ),
+              )
+              .map(({ id }) => id),
+          ),
+          authWallRoutes: new Set(appMap.loginOrAuthWalls),
+        },
+      );
+      if (groundableFeatureIds.length === 0) {
+        throw new Error(
+          "Flow Planning cannot start: no prepared feature has a tagged visible assertion in the ActionCatalog outside login/auth walls, so no valid FlowSpec exists. Repair App Exploration or the ActionCatalog so at least one feature carries assert evidence.",
+        );
+      }
       return await runAgentArtifactStage({
         artifactPath: artifactPaths.flowSpec,
         displayName: () => "Flow Planning",
@@ -904,6 +1459,7 @@ export async function createDefaultAgentHarnessDependencies(
     async prepareRepo({
       demoBrief,
       normalizedSupportingDocuments,
+      preparationStrategyHints,
       repoProfile,
       repoSourcePaths,
       runPlan,
@@ -920,6 +1476,7 @@ export async function createDefaultAgentHarnessDependencies(
       const preparationManifestTemplate = createPreparationManifestTemplate(
         runPlan,
         demoBrief,
+        repoProfile,
       );
       await writeWorkspaceJson(
         workspace,
@@ -930,6 +1487,11 @@ export async function createDefaultAgentHarnessDependencies(
         workspace,
         artifactPaths.preparationManifestTemplate,
         preparationManifestTemplate,
+      );
+      await writeWorkspaceText(
+        workspace,
+        artifactPaths.featureVerificationGuide,
+        createFeatureVerificationGuide(),
       );
       await writeWorkspaceJson(
         workspace,
@@ -958,11 +1520,17 @@ export async function createDefaultAgentHarnessDependencies(
             prompt: initialRun
               ? createRepoPreparationPrompt({
                   demoBrief,
+                  ...(preparationStrategyHints === undefined
+                    ? {}
+                    : { preparationStrategyHints }),
                   repoProfile,
                   runPlan,
                 })
               : createRepoPreparationRepairPrompt({
                   demoBrief,
+                  ...(preparationStrategyHints === undefined
+                    ? {}
+                    : { preparationStrategyHints }),
                   previousResult: previousResult ?? {
                     exitCode: 1,
                     stderr: "",
@@ -1128,6 +1696,7 @@ export async function createDefaultAgentHarnessDependencies(
       repoProfile,
       repoSourcePaths,
       runPlan,
+      strategyDirective,
       workspace,
     }) {
       const dependencyRepair = isDependencyRepairFailure(
@@ -1171,7 +1740,7 @@ export async function createDefaultAgentHarnessDependencies(
       await writeWorkspaceJson(
         workspace,
         artifactPaths.preparationManifestTemplate,
-        createPreparationManifestTemplate(runPlan, demoBrief),
+        createPreparationManifestTemplate(runPlan, demoBrief, repoProfile),
       );
       let artifactError: string | undefined;
       let stallRetriesRemaining = retryPolicy.agentStallRetries;
@@ -1185,7 +1754,9 @@ export async function createDefaultAgentHarnessDependencies(
             demoBrief,
             failureReport,
             preparationManifest,
+            repoProfile,
             runPlan,
+            ...(strategyDirective === undefined ? {} : { strategyDirective }),
           }),
           ...optionalSessionId(opencodeSessionId),
           stage: "repo-preparation-repair",
@@ -1256,10 +1827,27 @@ export async function createDefaultAgentHarnessDependencies(
           continue;
         }
         if (manifestResult.ok) {
-          return {
-            manifest: manifestResult.manifest,
-            ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
-          };
+          // On the final attempt the probe is skipped: with no retry left
+          // its signal could only gate, and the probe never gates (N100) —
+          // the runtime preflight judges the workspace instead.
+          const parseFailure =
+            attempt === retryPolicy.agentArtifactAttempts
+              ? undefined
+              : await readRepairedSourceParseFailure(workspace);
+          if (parseFailure === undefined) {
+            return {
+              candidateFingerprint: manifestResult.candidateFingerprint,
+              manifest: manifestResult.manifest,
+              ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
+            };
+          }
+          await options.logger?.warn({
+            event: "preparation.repair.parse-check-failed",
+            message: parseFailure.slice(0, 500),
+          });
+          artifactError = parseFailure;
+          attempt += 1;
+          continue;
         }
         artifactError = manifestResult.error;
         if (manifestResult.failureClassification === "missing") {
@@ -1349,14 +1937,24 @@ export async function createDefaultAgentHarnessDependencies(
       preparationManifest,
       repoProfile,
       runPlan,
+      scriptCandidate,
       workspace,
     }) {
-      return await validateRuntimeWithExternalResources({
+      const report = await validateRuntimeWithExternalResources({
         installDependencies: false,
         preparationManifest,
         repoProfile,
         runPlan,
         stage: "capture-runtime-reset",
+        workspace,
+      });
+      if (report.status !== "passed") {
+        return report;
+      }
+      return await confirmCaptureSceneRoutesServe({
+        baseUrl: preparationManifest.baseUrl,
+        passedReport: report,
+        sceneRoutes: readCaptureSceneRoutes(scriptCandidate),
         workspace,
       });
     },
@@ -1479,6 +2077,10 @@ export async function createDefaultAgentHarnessDependencies(
                   status: "failed" as const,
                 }),
                 readBlockedAttempts: (result) => result.blockedNetworkAttempts,
+                readStickyFailure: (result) =>
+                  result.failureClassification === "app server error"
+                    ? result
+                    : undefined,
                 run: async () => {
                   captureValidationRun += 1;
                   return await validatePreparedWorkspaceCapturePath({
@@ -1529,16 +2131,28 @@ export async function createDefaultAgentHarnessDependencies(
       installDependencies,
       preparationManifest,
       reconcileLockfile,
+      repairFeatureVerification,
       repoProfile,
       runPlan,
       workspace,
     }) {
-      return await validateRuntimeWithExternalResources({
+      const report = await validateRuntimeWithExternalResources({
         ...(installDependencies === undefined ? {} : { installDependencies }),
         preparationManifest,
         ...(reconcileLockfile === undefined ? {} : { reconcileLockfile }),
         repoProfile,
         runPlan,
+        workspace,
+      });
+      if (report.status !== "passed") return report;
+      // The runtime preflight leaves the app running; the probe explores it
+      // in place before preparation is allowed to hand off.
+      return await probePreparedFeatures({
+        preparationManifest,
+        ...(repairFeatureVerification === undefined
+          ? {}
+          : { repairFeatureVerification }),
+        report,
         workspace,
       });
     },
@@ -1741,12 +2355,16 @@ function appendTail(current: string, chunk: string, maxLength: number): string {
 }
 
 // A PTY line that is shell bootstrap rather than OpenCode output: a prompt
-// (optionally carrying the echoed command), a bare continuation prompt, the
+// (optionally carrying the echoed command), a continuation prompt (bare, or
+// carrying an echoed heredoc-script line — the sealed transport ships the
+// command as a heredoc, so racing echo puts script body on PS2 lines), the
 // command exit marker, the shell's own exec diagnostic ("bash: <path>:
-// Argument list too long" — the 2026-08-07 E2BIG launches), or the session
-// teardown echo. Each proves the shell spoke and OpenCode never did.
+// Argument list too long" — the 2026-08-07 E2BIG launches), the session
+// teardown echo, or a liveness beat (the CPU sampler's or the agent-liveness
+// plugin's — watchdog transport from the harness, never the model's own
+// output). Each proves the shell spoke and OpenCode never did.
 const ptyBootstrapLinePattern =
-  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout)$/;
+  /^(?:[^@\s]+@[^\n#]*#.*|>.*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout|\[makeademo:alive\] cpu \d+|\[makeademo:agent-alive\].*)$/;
 
 function hasOnlyPtyBootstrapOutput(result: {
   stderr: string;
@@ -1865,6 +2483,16 @@ async function createDaytonaWorkspaceProvider(input: {
     ...(input.logger === undefined ? {} : { logger: input.logger }),
   });
   return new DaytonaSdkPreparationWorkspaceProvider({
+    // Control-plane waits and failures must be attributable from the run's
+    // own pipeline log (the mini-matrix ran every daytona.* event dark
+    // because nothing carried the logger down, 2026-08-10).
+    ...(input.logger === undefined
+      ? {}
+      : {
+          controlPlaneLogger: input.logger.child({
+            component: "daytona-control-plane",
+          }),
+        }),
     secrets: createOpenCodeProviderSandboxSecrets({
       providerID: input.providerID,
       providerSecretName,
@@ -1881,10 +2509,18 @@ async function createDaytonaWorkspaceProvider(input: {
           submittedCodeSnapshot:
             input.env.MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT,
         }),
+    ...(input.env.MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT ===
+    undefined
+      ? {}
+      : {
+          submittedCodeSnapshotHeavyweight:
+            input.env.MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT,
+        }),
   });
 }
 
 async function materializeScreenedRepo(input: {
+  bulkTransferLimiter?: BulkTransferLimiter;
   repoProfile: RepoProfile;
   sourceArchive: RepoSourceArchive | undefined;
   workspace: AgentHarnessWorkspace;
@@ -1906,13 +2542,20 @@ async function materializeScreenedRepo(input: {
   if (!/^[0-9a-f]{64}$/.test(input.sourceArchive.sha256)) {
     throw new Error("Screened repository archive SHA-256 is malformed.");
   }
-  const remoteArchivePath = `${makeADemoDirectory}/screened-repo.tar`;
-  await input.workspace.uploadFiles([
-    {
-      destinationPath: remoteArchivePath,
-      sourcePath: input.sourceArchive.path,
-    },
-  ]);
+  const remoteArchivePath = `${makeADemoDirectory}/screened-repo.tar.gz`;
+  const sourceArchivePath = input.sourceArchive.path;
+  // The limiter holds the lock for exactly the uplink-bound upload; the
+  // sandbox-side extraction below costs the shared uplink nothing.
+  const uploadArchive = () =>
+    input.workspace.uploadFiles([
+      {
+        destinationPath: remoteArchivePath,
+        sourcePath: sourceArchivePath,
+      },
+    ]);
+  await (input.bulkTransferLimiter === undefined
+    ? uploadArchive()
+    : input.bulkTransferLimiter.run(uploadArchive));
   const result = await input.workspace.execute(
     `sh -lc ${shellQuote(
       [
@@ -1921,7 +2564,7 @@ async function materializeScreenedRepo(input: {
         `test "$actual_sha" = ${shellQuote(input.sourceArchive.sha256)}`,
         `rm -rf ${shellQuote(workspaceRepoDirectory)}`,
         `mkdir -p ${shellQuote(workspaceRepoDirectory)}`,
-        `tar --no-same-owner --no-same-permissions -xf ${shellQuote(remoteArchivePath)} -C ${shellQuote(workspaceRepoDirectory)}`,
+        `tar --no-same-owner --no-same-permissions -xzf ${shellQuote(remoteArchivePath)} -C ${shellQuote(workspaceRepoDirectory)}`,
         `git -C ${shellQuote(workspaceRepoDirectory)} init -q`,
         `git -C ${shellQuote(workspaceRepoDirectory)} add -f -A`,
         `git -C ${shellQuote(workspaceRepoDirectory)} -c user.name=MakeADemo -c user.email=makeademo@localhost commit -q --allow-empty -m ${shellQuote(`Screened source ${input.sourceArchive.commitSha}`)}`,
@@ -1968,10 +2611,19 @@ type SubmittedCodeRuntimeValidationInput = {
   };
   installDependencies?: boolean;
   onAppStart?: (input: AgentHarnessSubmittedCodeAppStartInput) => void;
+  /** Reports the command that actually installed, retry flags included. */
+  onInstallExecuted?: (executedCommand: string) => void;
   preparationManifest: PreparationManifest;
   reconcileLockfile?: boolean;
   repoProfile: RepoProfile;
   resetWorkspace?: boolean;
+  /**
+   * N127: the last executed install command, for rounds that reuse the
+   * install. The re-sync destroys in-tree lifecycle outputs while preserving
+   * node_modules, so the lifecycle re-runs from this command even when the
+   * install itself is skipped.
+   */
+  reusedInstallCommand?: string;
   runPlan: RunPlan;
   stage?: string;
   workspace: AgentHarnessWorkspace;
@@ -1991,7 +2643,7 @@ async function validateResolvedSubmittedCodeRuntime(
   if (runtimeConfigurationIssue !== undefined) {
     return failedPreparationValidation({
       attemptedCommand: manifest.startCommandUsed,
-      classification: "start failure",
+      classification: "runtime-configuration error",
       logsSummary: runtimeConfigurationIssue,
       manifest,
       stage,
@@ -2013,9 +2665,71 @@ async function validateResolvedSubmittedCodeRuntime(
     });
   }
 
+  const installDirectory = absoluteAppDirectory(
+    runtimeTarget?.install.cwd ?? manifest.appDir,
+  );
+  const manifestInstallCommand =
+    manifest.installCommandUsed || input.runPlan.installCommand;
+  // The disk fallback outlives one round only through its /root sentinel:
+  // every reset restores the repo's own .yarnrc.yml, and without the
+  // reapply each later round would pay a full out-of-disk install before
+  // rediscovering the switch. Lifecycle-only rounds need it too — a rebuild
+  // under the restored linker would not match the preserved node_modules.
+  const isBerryYarnInstall = (installCommand: string): boolean =>
+    parseInstallCommand(installCommand).packageManager === "yarn" &&
+    readYarnInstallVariant(installCommand, input.repoProfile.yarnVariant) ===
+      "berry";
+  const reapplyBerryDiskFallbackIfArmed = async (
+    installCommand: string,
+  ): Promise<boolean> => {
+    if (!isBerryYarnInstall(installCommand)) return false;
+    const sentinel = await executeSubmitted(
+      input.workspace,
+      `test -f ${shellQuote(berryDiskFallbackSentinelPath)}`,
+    );
+    if (sentinel.exitCode !== 0) return false;
+    await executeSubmitted(
+      input.workspace,
+      createBerryDiskFallbackLinkerCommand(installDirectory),
+    );
+    return true;
+  };
+  // N127: the re-sync above replaced every in-tree file while preserving
+  // node_modules and the package-manager caches, so a reused install is
+  // still whole but the lifecycle's in-tree codegen (calcom's generated
+  // Prisma client, 2026-08-13) is not. Whichever way this round obtained
+  // its dependencies, the offline lifecycle must run again on the freshly
+  // synced tree before anything starts against it.
+  let lifecycleInstallCommand: string | undefined;
   if (input.installDependencies !== false) {
-    const installCommand =
-      manifest.installCommandUsed || input.runPlan.installCommand;
+    const installCommand = manifestInstallCommand;
+    // The attempts that most need headroom are the failing ones: a failed
+    // install leaves its partial cache behind and never reaches the
+    // success-path prune, so the next attempt refetches into a full overlay
+    // (twenty's attempt-4 ENOSPC in fetch/zip-convert, 2026-08-08). Every
+    // install starts by dropping trees it provably cannot reuse and pruning
+    // the caches; the open window refetches what it needs. Best-effort by
+    // construction.
+    const staleTreeDrop = createStaleDependencyTreeDropCommand({
+      installCommand,
+      installDirectory,
+      ...(input.repoProfile.yarnVariant === undefined
+        ? {}
+        : { yarnVariant: input.repoProfile.yarnVariant }),
+    });
+    await executeSubmitted(
+      input.workspace,
+      [
+        ...(staleTreeDrop === undefined ? [] : [staleTreeDrop]),
+        packageManagerCachePruneCommand,
+        packageManagerStagingResetCommand,
+        `df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune before |"`,
+        "true",
+      ].join("; "),
+    );
+    let berryDiskFallbackActive =
+      await reapplyBerryDiskFallbackIfArmed(installCommand);
+    let installEvidenceLogPath: string | undefined;
     const runInstall = (command: string) =>
       runDependencyInstallThroughGate({
         closeNetwork: () =>
@@ -2027,18 +2741,23 @@ async function validateResolvedSubmittedCodeRuntime(
           : { yarnVariant: input.repoProfile.yarnVariant }),
         // The gate may append a lifecycle-script suppression flag, so the
         // executed string must be the gate's command, not the closure's.
-        runCommand: (gateCommand) =>
-          executeSubmittedWithDeadlineEvidence(
-            input.workspace,
-            withDiskMarkers(
+        runCommand: async (gateCommand) => {
+          const { evidenceLogPath, result } =
+            await executeGuardedSubmittedCommand(
+              input.workspace,
               commandInAppDirectory(
                 runtimeTarget?.install.cwd ?? manifest.appDir,
                 gateCommand,
               ),
               "deps",
-            ),
-            { timeoutMs: dependencyInstallTimeoutMs },
-          ),
+              {
+                env: { TMPDIR: packageManagerStagingDirectory },
+                timeoutMs: dependencyInstallTimeoutMs,
+              },
+            );
+          installEvidenceLogPath = evidenceLogPath;
+          return result;
+        },
       });
     type InstallResult = Awaited<ReturnType<typeof runInstall>>;
     const reconcileLockfile = async (
@@ -2128,6 +2847,41 @@ async function validateResolvedSubmittedCodeRuntime(
         result = await runInstall(engineRetryCommand);
       }
     }
+    if (
+      result.status === "failed" &&
+      isBerryYarnInstall(installCommand) &&
+      !berryDiskFallbackActive &&
+      diskExhaustionPattern.test(`${result.stderr}\n${result.stdout}`)
+    ) {
+      // Harness-owned storage dedup under the demo gate: the agent may not
+      // mutate manager identity, but the manager itself is unchanged — only
+      // its on-disk layout is deduped, and every downstream stage still runs
+      // against a real node_modules tree.
+      berryDiskFallbackActive = true;
+      try {
+        await input.workspace.writeSandboxLog({
+          event: "install.disk-pressure.berry-hardlink-fallback",
+          message:
+            "Yarn Berry install exhausted the disk; the harness is switching the workspace to nodeLinker: node-modules with nmMode: hardlinks-global (deduping the tree onto disk while keeping a real node_modules) and retrying the install once.",
+        });
+      } catch {
+        // The fallback must never be displaced by an observability failure.
+      }
+      await executeSubmitted(
+        input.workspace,
+        [
+          createBerryDiskFallbackLinkerCommand(installDirectory),
+          // The copy-mode tree is rebuilt hardlinked: dropping it lets the
+          // retry re-materialize node_modules deduped rather than layered on
+          // the footprint that just overflowed.
+          "find /workspace -mindepth 1 -name node_modules -prune -exec rm -rf {} + 2>/dev/null",
+          `mkdir -p ${berryDiskFallbackStateDirectory}`,
+          `touch ${shellQuote(berryDiskFallbackSentinelPath)}`,
+          "true",
+        ].join("; "),
+      );
+      result = await runInstall(installCommand);
+    }
     if (result.status === "denied") {
       return failedPreparationValidation({
         attemptedCommand: installCommand,
@@ -2152,7 +2906,7 @@ async function validateResolvedSubmittedCodeRuntime(
           attemptedCommand: result.executedCommand,
           classification: "external network required",
           exitCode: result.exitCode,
-          logsSummary: `Dependency install cannot reach ${unreachable.host}${unreachable.packageName === undefined ? "" : ` for package ${unreachable.packageName}`}; a retry inside the open install window failed with the same network error: ${result.stderr || result.stdout}`,
+          logsSummary: `Dependency install cannot reach ${unreachable.host}${unreachable.packageName === undefined ? "" : ` for package ${unreachable.packageName}`}; a retry inside the open install window failed with the same network error: ${legibleFailureExcerpt(result)}`,
           manifest,
           stage,
           stderr: result.stderr,
@@ -2162,15 +2916,45 @@ async function validateResolvedSubmittedCodeRuntime(
           ],
         });
       }
+      const installFileTail =
+        installEvidenceLogPath === undefined
+          ? ""
+          : await readCommandEvidenceTail(
+              input.workspace,
+              installEvidenceLogPath,
+            );
+      const installFailureEvidence = readCommandFailureEvidence({
+        ...result,
+        fileTail: installFileTail,
+      });
+      const diskPressure = readDiskPressureEvidence(
+        `${result.stderr}\n${result.stdout}\n${installFileTail}`,
+        installFailureEvidence.excerpt,
+      );
+      const installHints = [
+        ...(berryDiskFallbackActive ? [berryDiskFallbackRepairHint] : []),
+        ...(diskPressure.exhausted
+          ? [diskExhaustionRepairHint(diskPressure.markerLines)]
+          : []),
+      ];
       return failedPreparationValidation({
         attemptedCommand: result.executedCommand,
         classification: "install failure",
         exitCode: result.exitCode,
-        logsSummary: `Submitted-code dependency install failed: ${result.stderr || result.stdout}`,
+        logsSummary: [
+          formatCommandFailureSummary(
+            "Submitted-code dependency install failed",
+            installFailureEvidence,
+          ),
+          ...diskPressure.markerLines,
+        ].join("\n"),
         manifest,
         stage,
         stderr: result.stderr,
         stdout: result.stdout,
+        ...(installHints.length > 0
+          ? { suggestedRepairHints: installHints }
+          : {}),
       });
     }
     if (result.resealError !== undefined) {
@@ -2184,97 +2968,233 @@ async function validateResolvedSubmittedCodeRuntime(
         stage,
       });
     }
+    input.onInstallExecuted?.(result.executedCommand);
+    lifecycleInstallCommand = result.executedCommand;
+  } else if (input.resetWorkspace !== false) {
+    // An install-reuse round after a re-sync: node_modules survived, the
+    // in-tree lifecycle outputs did not. Fall back to the manifest command
+    // when no install ran in this process yet. The centralized lifecycle
+    // reset below purges TMPDIR whether the preceding round passed or died.
+    lifecycleInstallCommand =
+      input.reusedInstallCommand ?? manifestInstallCommand;
+    await reapplyBerryDiskFallbackIfArmed(lifecycleInstallCommand);
+  }
+
+  if (lifecycleInstallCommand !== undefined) {
     // The gate installed with lifecycle scripts suppressed; now that the
     // network is verifiably resealed, run the skipped lifecycle work offline
     // so native builds and postinstall codegen exist before preflight. The
     // executed command (not the manifest's) carries any retry flags the
-    // install needed, and the rebuild inherits them.
+    // install needed, and the rebuild inherits them. Install-reuse rounds
+    // run this too (N127): the lifecycle's outputs live in the tree the
+    // re-sync just replaced, and its failure keeps the install-failure
+    // classification, which also invalidates the reuse so the next round
+    // reinstalls from scratch.
     const lifecycleCommand = createOfflineLifecycleCommand({
-      installCommand: result.executedCommand,
+      installCommand: lifecycleInstallCommand,
+      ...(input.repoProfile.lifecycleScriptsDisabled === undefined
+        ? {}
+        : {
+            lifecycleScriptsDisabled:
+              input.repoProfile.lifecycleScriptsDisabled,
+          }),
       packageScripts: input.repoProfile.packageScripts,
       ...(input.repoProfile.yarnVariant === undefined
         ? {}
         : { yarnVariant: input.repoProfile.yarnVariant }),
     });
     if (lifecycleCommand !== undefined) {
-      const lifecycle = await executeSubmittedWithDeadlineEvidence(
+      // Installs and killed earlier lifecycle passes leave yarn xfs-* scratch
+      // in the persistent /root TMPDIR. Begin every lifecycle execution from
+      // an empty staging directory so repair rounds do not compound disk use.
+      await executeSubmitted(
         input.workspace,
-        withDiskMarkers(
+        packageManagerStagingResetCommand,
+      );
+      const { evidenceLogPath: lifecycleEvidenceLogPath, result: lifecycle } =
+        await executeGuardedSubmittedCommand(
+          input.workspace,
           commandInAppDirectory(
             runtimeTarget?.install.cwd ?? manifest.appDir,
             lifecycleCommand,
           ),
           "lifecycle",
-        ),
-        { timeoutMs: dependencyInstallTimeoutMs },
-      );
-      if (lifecycle.exitCode !== 0) {
-        const lifecycleOutput = `${lifecycle.stderr}\n${lifecycle.stdout}`;
-        // Yarn berry reports only "couldn't be built successfully (…logs can
-        // be found here: /tmp/xfs-*/build.log)" — each failed package's real
-        // error lives in that file (calcom, 2026-08-07). Harvest bounded
-        // tails so the report carries causes, not references.
-        const referencedBuildLogs = [
-          ...new Set(
-            [
-              ...lifecycleOutput.matchAll(
-                /logs can be found here: (\/[^\s)]+\/build\.log)/g,
-              ),
-            ]
-              .map((match) => match[1])
-              .filter((path): path is string => path !== undefined),
-          ),
-        ].slice(0, 3);
-        const buildLogEvidence: string[] = [];
-        for (const logPath of referencedBuildLogs) {
-          const logTail = await executeSubmitted(
-            input.workspace,
-            `tail -c 2000 ${shellQuote(logPath)}`,
-          );
-          if (logTail.exitCode === 0 && logTail.stdout.trim().length > 0) {
-            buildLogEvidence.push(
-              `Referenced build log ${logPath} (tail):\n${redactSecretText(logTail.stdout)}`,
-            );
-          }
-        }
-        const downloadFailure = isLifecycleDownloadFailure(
-          [lifecycleOutput, ...buildLogEvidence].join("\n"),
+          {
+            env: { TMPDIR: packageManagerStagingDirectory },
+            timeoutMs: dependencyInstallTimeoutMs,
+          },
         );
-        return failedPreparationValidation({
-          attemptedCommand: lifecycleCommand,
-          classification: "install failure",
-          exitCode: lifecycle.exitCode,
-          logsSummary: [
-            `Network-closed lifecycle scripts failed after the dependency install: ${lifecycle.stderr || lifecycle.stdout}`,
-            ...buildLogEvidence,
-            // Proves the record saw the command end: output that merely
-            // stops (killed child, dropped stream) has no such trailer.
-            `[makeademo:command-end] exit=${lifecycle.exitCode}`,
-          ].join("\n"),
-          manifest,
-          stage,
-          stderr: lifecycle.stderr,
-          stdout: lifecycle.stdout,
-          ...(downloadFailure
-            ? {
-                suggestedRepairHints: [
+      if (lifecycle.exitCode !== 0) {
+        // The stream is lossy (calcom's YN0009 failure report never arrived,
+        // 2026-08-09); the teed evidence file is the source of truth.
+        const lifecycleFileTail = await readCommandEvidenceTail(
+          input.workspace,
+          lifecycleEvidenceLogPath,
+        );
+        const lifecycleOutput = [
+          lifecycle.stderr,
+          lifecycle.stdout,
+          lifecycleFileTail,
+        ].join("\n");
+        if (isOfflineLifecycleNetworkRefusal(lifecycleOutput)) {
+          // The refusal is the offline enforcement the harness itself
+          // provoked (N160(3)): no candidate declared this command and no
+          // repair can change it, so failing the round would charge the
+          // agent for harness-owned work (outline lost three rounds and
+          // ~28 minutes to exactly this, 2026-08-20). Record the skip and
+          // let preflight measure the tree's real state — anything the
+          // pass would have built surfaces there as a specific,
+          // repairable failure.
+          try {
+            await input.workspace.writeSandboxLog({
+              event: "lifecycle.offline-refusal.skipped",
+              message: `Harness-owned offline lifecycle pass (${lifecycleCommand}) was refused by the package manager's offline enforcement and skipped; the sealed submitted-code network makes its downloads impossible by design.`,
+            });
+          } catch {
+            // The skip must never be displaced by an observability failure.
+          }
+        } else {
+          // Yarn berry reports only "couldn't be built successfully (…logs can
+          // be found here: /tmp/xfs-*/build.log)" — each failed package's real
+          // error lives in that file (calcom, 2026-08-07). Harvest bounded
+          // tails so the report carries causes, not references.
+          const referencedBuildLogs = [
+            ...new Set(
+              [
+                ...lifecycleOutput.matchAll(
+                  /logs can be found here: (\/[^\s)]+\/build\.log)/g,
+                ),
+              ]
+                .map((match) => match[1])
+                .filter((path): path is string => path !== undefined),
+            ),
+          ].slice(0, 3);
+          const buildLogEvidence: string[] = [];
+          for (const logPath of referencedBuildLogs) {
+            const logTail = await executeSubmitted(
+              input.workspace,
+              `tail -c 2000 ${shellQuote(logPath)}`,
+            );
+            if (logTail.exitCode === 0 && logTail.stdout.trim().length > 0) {
+              buildLogEvidence.push(
+                `Referenced build log ${logPath} (tail):\n${redactSecretText(logTail.stdout)}`,
+              );
+            }
+          }
+          // The reference harvest above needs the stream to have carried the
+          // reference — exactly what a dropped tail loses. The managers write
+          // their failure logs at documented locations regardless; harvest
+          // those unconditionally and skip paths already covered.
+          const managerLogEvidence = (
+            await harvestPackageManagerLogs(input.workspace)
+          ).filter(
+            (entry) =>
+              !referencedBuildLogs.some((logPath) => entry.includes(logPath)),
+          );
+          const downloadFailure = isLifecycleDownloadFailure(
+            [lifecycleOutput, ...buildLogEvidence, ...managerLogEvidence].join(
+              "\n",
+            ),
+          );
+          const lifecycleFailureEvidence = readCommandFailureEvidence({
+            additionalEvidence: [...buildLogEvidence, ...managerLogEvidence],
+            exitCode: lifecycle.exitCode,
+            fileTail: lifecycleFileTail,
+            stderr: lifecycle.stderr,
+            stdout: lifecycle.stdout,
+          });
+          const lifecycleDiskPressure = readDiskPressureEvidence(
+            lifecycleOutput,
+            lifecycleFailureEvidence.excerpt,
+          );
+          // Exit 124 is the deadline-evidence conversion of a timeout kill:
+          // the work in the tail completed and the hang began after its last
+          // line. Naming it "install failure" sent five ghost repair rounds
+          // chasing a phantom install with dependency-only edit rights
+          // (2026-08-09); "lifecycle timeout" keeps full repo latitude.
+          const timedOut = lifecycle.exitCode === 124;
+          // "no CPU progress" is a measurement claim: it is earned only when
+          // alive lines on this command's own record prove the heartbeat
+          // functions here, so silence afterward means a genuinely idle tree.
+          // Without them, silence is the only recorded fact (the heartbeat
+          // was silent batch-wide while commands worked, 2026-08-09).
+          const heartbeatSpoke = /\[makeademo:alive\] cpu \d+/.test(
+            `${lifecycle.stdout}`,
+          );
+          const timeoutSummary = `${lifecycle.stdout}`.includes(
+            "produced no output",
+          )
+            ? `Network-closed lifecycle scripts were killed after 5 minutes of silence${heartbeatSpoke ? " with no CPU progress" : ""}`
+            : "Network-closed lifecycle scripts were killed at their overall deadline";
+          const outputContradictsSuccessfulCompletion =
+            lifecycleFailureEvidence.killed ||
+            lifecycleFailureEvidence.nonzeroToolExit;
+          const lifecycleSummary = timedOut
+            ? outputContradictsSuccessfulCompletion
+              ? [
+                  `Network-closed lifecycle failure cause: ${lifecycleFailureEvidence.causeLine}`,
+                  `${timeoutSummary} (exit 124). The output records a kill or nonzero tool exit before the deadline, so no completed-success inference is safe.`,
+                ]
+              : [
+                  `${timeoutSummary} (exit 124): ${lifecycleFailureEvidence.causeLine}`,
+                  "Everything in the output below completed successfully — the hang began after its last line; repair the step that would have run next, not the completed work.",
+                ]
+            : [
+                `Network-closed lifecycle failure cause: ${lifecycleFailureEvidence.causeLine}`,
+              ];
+          const lifecycleHints = [
+            ...(downloadFailure
+              ? [
                   "This lifecycle step tries to download something, and the submitted-code network stays sealed after the install window closes — the download can never succeed, on any retry. Make the demo not need it: neutralize the downloading step for the demo, avoid the downloaded artifact at runtime, or vendor the artifact into the repo.",
-                ],
-              }
-            : {}),
-        });
+                ]
+              : []),
+            ...(lifecycleDiskPressure.exhausted
+              ? [diskExhaustionRepairHint(lifecycleDiskPressure.markerLines)]
+              : []),
+          ];
+          return failedPreparationValidation({
+            attemptedCommand: lifecycleCommand,
+            classification: timedOut ? "lifecycle timeout" : "install failure",
+            exitCode: lifecycle.exitCode,
+            logsSummary: [
+              ...lifecycleSummary,
+              ...(lifecycleFailureEvidence.excerpt.length === 0
+                ? []
+                : [`Command output:\n${lifecycleFailureEvidence.excerpt}`]),
+              ...[...buildLogEvidence, ...managerLogEvidence]
+                .map((evidence) =>
+                  removePromotedCauseLine(
+                    evidence,
+                    lifecycleFailureEvidence.causeLine,
+                  ),
+                )
+                .filter((evidence) => evidence.length > 0),
+              ...lifecycleDiskPressure.markerLines,
+              // Proves the record saw the command end: output that merely
+              // stops (killed child, dropped stream) has no such trailer.
+              `[makeademo:command-end] exit=${lifecycle.exitCode}`,
+            ].join("\n"),
+            manifest,
+            stage,
+            stderr: lifecycle.stderr,
+            stdout: lifecycle.stdout,
+            ...(lifecycleHints.length > 0
+              ? { suggestedRepairHints: lifecycleHints }
+              : {}),
+          });
+        }
       }
     }
-    // The package archives double-store next to node_modules (~1GB for a
-    // berry monorepo — twenty's ENOSPC, 2026-08-08) and nothing sealed
-    // reads them after the offline lifecycle: any future install reopens
-    // the network window and refetches. The corepack cache is untouched —
-    // sealed node-line swaps re-provision managers from it. Best-effort by
-    // construction.
-    await executeSubmitted(
-      input.workspace,
-      `rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store 2>/dev/null; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune after |"; true`,
-    );
+    if (input.installDependencies !== false) {
+      // Nothing sealed reads the archives after the offline lifecycle (the
+      // --immutable re-run needed them; this slots after it), so the space
+      // returns to build outputs and capture. Reuse rounds refilled no
+      // caches, so they have nothing to prune. Best-effort by construction.
+      await executeSubmitted(
+        input.workspace,
+        `${packageManagerCachePruneCommand}; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune after |"; true`,
+      );
+    }
   }
 
   if (input.externalResourceCache !== undefined) {
@@ -2308,7 +3228,19 @@ async function validateResolvedSubmittedCodeRuntime(
   const existingNodeOptions = manifest.envUsed.NODE_OPTIONS?.trim();
   const guardedRuntimeEnv = {
     ...manifest.envUsed,
-    NODE_OPTIONS: [existingNodeOptions, `--require=${runtimeNetworkGuardPath}`]
+    ...sealedRuntimeTelemetryOptOuts,
+    // Node 24 resolves localhost to IPv6 ::1 first, so a dev server that binds
+    // localhost (Vite's default) never listens on 127.0.0.1 — the address the
+    // readiness probe, the browser explorer, and capture all dial through
+    // baseUrl. Pinning the app's own DNS order to ipv4first makes localhost
+    // resolve to 127.0.0.1 first, so the server binds the family the pipeline
+    // reaches; a server that already binds 0.0.0.0 or an IP literal is
+    // unaffected. The runtime network guard require is preserved alongside it.
+    NODE_OPTIONS: [
+      existingNodeOptions,
+      "--dns-result-order=ipv4first",
+      `--require=${runtimeNetworkGuardPath}`,
+    ]
       .filter(
         (value): value is string => value !== undefined && value.length > 0,
       )
@@ -2321,44 +3253,165 @@ async function validateResolvedSubmittedCodeRuntime(
     npm_config_engine_strict: "false",
   };
 
-  if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
-    const buildResult = await executeSubmittedWithDeadlineEvidence(
+  // N122(5): provisioned services boot before the build so build-time schema
+  // introspection and the app both see a live database. Reset-then-boot on
+  // every validation round is the reseed contract — migrate and seed run
+  // against an empty service each time, so demo data cannot drift between
+  // rounds. The migrate/seed commands are the repo's own and run through the
+  // guarded wrapper (sealed network, teed evidence, lifecycle events);
+  // anything they would download must be vendored or install-window cached.
+  for (const plan of readProvisionedServicePlans(manifest.dataStrategy)) {
+    const provision = await executeSubmitted(
       input.workspace,
-      withDiskMarkers(
+      `sh -ec ${shellQuote(createServiceProvisionCommand(plan.service))}`,
+      { timeoutMs: serviceProvisionTimeoutMs },
+    );
+    if (provision.exitCode !== 0) {
+      return failedPreparationValidation({
+        classification: "service start failure",
+        exitCode: provision.exitCode,
+        logsSummary: `The sandbox could not boot the declared ${plan.service} service on loopback: ${legibleFailureExcerpt(provision)}`,
+        manifest,
+        stage,
+        stderr: provision.stderr,
+        stdout: provision.stdout,
+        suggestedRepairHints: [
+          `The harness boots provisioned services itself, so no repository change can fix this boot; if it repeats, move ${plan.service} to another dataStrategy rung the demo can stand on (embedded-config or client-stub).`,
+        ],
+      });
+    }
+    for (const step of [
+      {
+        classification: "service migration failure",
+        command: plan.migrationCommand,
+        kind: "migration",
+      },
+      {
+        classification: "service seed failure",
+        command: plan.seedCommand,
+        kind: "seed",
+      },
+    ] as const) {
+      if (step.command === undefined) continue;
+      const { evidenceLogPath, result } = await executeGuardedSubmittedCommand(
+        input.workspace,
+        commandInAppDirectory(manifest.appDir, step.command),
+        `${plan.service}-${step.kind}`,
+        { env: guardedRuntimeEnv, timeoutMs: serviceSetupTimeoutMs },
+      );
+      if (result.exitCode !== 0) {
+        const fileTail = await readCommandEvidenceTail(
+          input.workspace,
+          evidenceLogPath,
+        );
+        const failureEvidence = readCommandFailureEvidence({
+          exitCode: result.exitCode,
+          fileTail,
+          stderr: result.stderr,
+          stdout: result.stdout,
+        });
+        return failedPreparationValidation({
+          attemptedCommand: step.command,
+          classification: step.classification,
+          exitCode: result.exitCode,
+          logsSummary: `${
+            failureEvidence.killed
+              ? `The declared ${plan.service} ${step.kind} command was Killed against the freshly provisioned service`
+              : `The declared ${plan.service} ${step.kind} command failed against the freshly provisioned service`
+          }: ${failureEvidence.causeLine}${
+            failureEvidence.excerpt.length === 0
+              ? ""
+              : `\nCommand output:\n${failureEvidence.excerpt}`
+          }`,
+          manifest,
+          stage,
+          stderr: result.stderr,
+          stdout: result.stdout,
+          suggestedRepairHints: [
+            `Every validation round reprovisions ${plan.service} from an empty state and re-runs the declared commands, so the ${step.kind} command must succeed from an empty database with no manual steps. Repair the command or the files it runs; the service answers exactly at ${sandboxServiceConnectionUrls[plan.service]}.`,
+            ...(failureEvidence.killed
+              ? [
+                  "The command was killed at the sandbox's roughly 8 GB memory ceiling. Set a bounded Node heap through envUsed.NODE_OPTIONS (for example --max-old-space-size=6144, leaving headroom for native processes), and prefer a narrower migration or seed target with bounded worker concurrency; envUsed applies to every guarded runtime command.",
+                ]
+              : []),
+          ],
+        });
+      }
+    }
+  }
+
+  if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
+    const { evidenceLogPath: buildEvidenceLogPath, result: buildResult } =
+      await executeGuardedSubmittedCommand(
+        input.workspace,
         commandInAppDirectory(
           runtimeTarget?.build?.cwd ?? manifest.appDir,
           manifest.buildCommandUsed,
         ),
         "build",
-      ),
-      { env: guardedRuntimeEnv, timeoutMs: submittedCodeBuildTimeoutMs },
-    );
+        { env: guardedRuntimeEnv, timeoutMs: submittedCodeBuildTimeoutMs },
+      );
     const blockedBuildAttempts = readRuntimeNetworkAttempts(
       [buildResult.stderr, buildResult.stdout].filter(Boolean).join("\n"),
     );
     if (buildResult.exitCode !== 0 || blockedBuildAttempts.length > 0) {
-      const unbuiltWorkspaceHints = readUnbuiltWorkspacePackageHints(
-        `${buildResult.stderr}\n${buildResult.stdout}`,
+      const buildFileTail = await readCommandEvidenceTail(
+        input.workspace,
+        buildEvidenceLogPath,
       );
+      // The teed file is the source of truth for hints as well as excerpts:
+      // twenty's EvalError naming the unbuilt package survived only there
+      // while the PTY stream dropped it, and the N67 steering never fired
+      // (2026-08-09).
+      const buildOutput = `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`;
+      const unbuiltWorkspace = inspectUnbuiltWorkspacePackages(buildOutput, {
+        appDir: manifest.appDir,
+        packageManager: input.repoProfile.packageManager,
+        workspacePackages: input.repoProfile.workspacePackages,
+      });
+      const buildFailureEvidence = readCommandFailureEvidence({
+        exitCode: buildResult.exitCode,
+        fileTail: buildFileTail,
+        stderr: buildResult.stderr,
+        stdout: buildResult.stdout,
+      });
+      const buildDiskPressure = readDiskPressureEvidence(
+        `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`,
+        buildFailureEvidence.excerpt,
+      );
+      const buildHints = [
+        ...(buildDiskPressure.exhausted
+          ? [diskExhaustionRepairHint(buildDiskPressure.markerLines)]
+          : []),
+        ...unbuiltWorkspace.hints,
+      ];
+      const buildFailureClassification =
+        blockedBuildAttempts.length > 0
+          ? "external network attempted"
+          : unbuiltWorkspace.packageNames.length > 0
+            ? "unbuilt workspace dependency"
+            : "build failure";
       return failedPreparationValidation({
         attemptedCommand: manifest.buildCommandUsed,
         blockedNetworkAttempts: blockedBuildAttempts,
-        classification:
-          blockedBuildAttempts.length > 0
-            ? "external network attempted"
-            : "build failure",
+        classification: buildFailureClassification,
         exitCode: buildResult.exitCode,
-        logsSummary:
-          blockedBuildAttempts.length > 0
-            ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s): ${buildResult.stderr || buildResult.stdout}`
-            : `Submitted-code build failed: ${buildResult.stderr || buildResult.stdout}`,
+        logsSummary: [
+          formatCommandFailureSummary(
+            blockedBuildAttempts.length > 0
+              ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s)`
+              : unbuiltWorkspace.packageNames.length > 0
+                ? `Unbuilt workspace dependency ${unbuiltWorkspace.packageNames.join(", ")}`
+                : "Submitted-code build failed",
+            buildFailureEvidence,
+          ),
+          ...buildDiskPressure.markerLines,
+        ].join("\n"),
         manifest,
         stage,
         stderr: buildResult.stderr,
         stdout: buildResult.stdout,
-        ...(unbuiltWorkspaceHints.length > 0
-          ? { suggestedRepairHints: unbuiltWorkspaceHints }
-          : {}),
+        ...(buildHints.length > 0 ? { suggestedRepairHints: buildHints } : {}),
       });
     }
   }
@@ -2368,6 +3421,16 @@ async function validateResolvedSubmittedCodeRuntime(
     env: guardedRuntimeEnv,
   };
   input.onAppStart?.(appStartInput);
+  try {
+    await input.workspace.writeSandboxLog({
+      command: manifest.startCommandUsed,
+      event: "app.start.requested",
+      message:
+        "The managed submitted-code app start was requested; the readiness probe below carries its outcome.",
+    });
+  } catch {
+    // Attribution must never replace the operation it attributes.
+  }
   try {
     await input.workspace.startSubmittedCodeApp(appStartInput);
   } catch (error) {
@@ -2403,8 +3466,35 @@ async function validateResolvedSubmittedCodeRuntime(
     .join("\n");
   const probeSucceeded = probeResponded && appStatus?.running !== false;
   const blockedRuntimeNetworkAttempts = readRuntimeNetworkAttempts(appOutput);
+  const runtimeFailure = probeSucceeded
+    ? { classification: "none" as const }
+    : probeExecutionFailed
+      ? { classification: "harness/internal failure" as const }
+      : classifyPreparationRuntimeFailure({
+          appOutput,
+          exitCode: appStatus?.exitCode ?? preflightResult.exitCode,
+          manifest,
+          probe: preflightResult.runtimeProbe,
+          processExited: appStatus?.running === false,
+          processRunning: appStatus?.running === true,
+          repoProfile: input.repoProfile,
+        });
+  const failureClassification = runtimeFailure.classification;
+  const serveFailureHeadline =
+    failureClassification === "app server error"
+      ? readReadinessServeFailureHeadline({
+          appOutput,
+          manifest,
+          preflightUrl,
+          repoProfile: input.repoProfile,
+          runtimeProbe: preflightResult.runtimeProbe,
+          runtimeTarget,
+        })
+      : undefined;
   const failedLogs = [
-    `Prepared submitted-code runtime readiness failed: ${preflightResult.stderr || preflightResult.stdout}`,
+    runtimeFailure.headline ??
+      serveFailureHeadline ??
+      `Prepared submitted-code runtime readiness failed: ${preflightResult.stderr || preflightResult.stdout}`,
     appStatus === undefined
       ? undefined
       : appStatus.running
@@ -2417,16 +3507,6 @@ async function validateResolvedSubmittedCodeRuntime(
   ]
     .filter((value): value is string => value !== undefined)
     .join("\n");
-
-  const failureClassification = probeSucceeded
-    ? ("none" as const)
-    : probeExecutionFailed
-      ? ("harness/internal failure" as const)
-      : classifyPreparationRuntimeFailure(
-          preflightResult.runtimeProbe,
-          appOutput,
-          appStatus?.running === false,
-        );
   return validationReport({
     attemptedCommand: `curl ${preflightUrl}`,
     exitCode: preflightResult.exitCode,
@@ -2455,7 +3535,10 @@ async function validateResolvedSubmittedCodeRuntime(
               "The process is alive but nothing listens on the probed port and the captured app output stopped changing — the bind failure or crash is already in that output (a supervisor such as nodemon may be keeping the parent alive after its child crashed). Fix the cause shown there instead of adjusting ports or probes.",
             ]
           : []),
-        ...(probeSucceeded ? [] : readUnbuiltWorkspacePackageHints(appOutput)),
+        ...(probeSucceeded ? [] : (runtimeFailure.suggestedRepairHints ?? [])),
+        ...(probeSucceeded
+          ? []
+          : readMissingRequiredEnvHints(manifest, input.repoProfile)),
       ];
       return hints.length > 0 ? { suggestedRepairHints: hints } : {};
     })(),
@@ -2463,53 +3546,414 @@ async function validateResolvedSubmittedCodeRuntime(
   });
 }
 
-// Dependency install never builds internal workspace packages. A module
-// missing at an absolute path under the repo's own node_modules after a
-// successful install is workspace-linked with unproduced build output — a
-// registry package ships its files in the tarball (twenty's
+// Dependency install never builds internal workspace packages, and three
+// evidence shapes prove one is missing its build output (N67, N109). A
+// module missing at an absolute path under the repo's own node_modules
+// after a successful install is workspace-linked with unproduced output —
+// a registry package ships its files in the tarball (twenty's
 // twenty-shared/dist, directus's @directus/extensions, 2026-08-07 matrix).
-function readUnbuiltWorkspacePackageHints(output: string): string[] {
-  const packages = new Set<string>();
-  for (const match of output.matchAll(
-    /(?:can'?t resolve|cannot find module|could not resolve)\s+["'][^"']*node_modules\/((?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+)\/[^"']+["']/gi,
-  )) {
-    const name = match[1];
-    if (name !== undefined) {
-      packages.add(name);
+// An entry-resolution failure naming a known workspace package is the same
+// class without a file path: its package.json entry points at unbuilt
+// dist/. A runtime file missing under a sibling workspace's directory is
+// the asset variant: the file is that sibling's build product.
+function inspectUnbuiltWorkspacePackages(
+  output: string,
+  context: {
+    appDir: string;
+    packageManager: RepoProfile["packageManager"];
+    workspacePackages: RepoProfile["workspacePackages"];
+  },
+): { hints: string[]; packageNames: string[] } {
+  const workspacePackages = context.workspacePackages ?? [];
+  const appDir = normalizeRepoRelativeDir(context.appDir);
+  const packagesByName = new Map<string, RepoWorkspacePackage>();
+  for (const workspacePackage of workspacePackages) {
+    if (
+      workspacePackage.name !== undefined &&
+      normalizeRepoRelativeDir(workspacePackage.dir) !== appDir
+    ) {
+      packagesByName.set(workspacePackage.name, workspacePackage);
     }
   }
-  return [...packages].map(
-    (name) =>
-      `${name} resolves into the repo's own node_modules but the imported file does not exist — it is likely an internal workspace package whose build output was never produced, and dependency install builds no workspace member. Set buildCommandUsed to the repository's own target that builds ${name} before the app (check the repo's build, nx, or turbo scripts) instead of changing the import.`,
+  const matchedPackages = new Map<
+    string,
+    { evidencePath?: string; workspacePackage: RepoWorkspacePackage }
+  >();
+  const addPackage = (name: string | undefined, evidencePath?: string) => {
+    if (name === undefined) return;
+    const workspacePackage = packagesByName.get(name);
+    if (workspacePackage !== undefined) {
+      const existing = matchedPackages.get(name);
+      const resolvedEvidencePath = existing?.evidencePath ?? evidencePath;
+      matchedPackages.set(name, {
+        ...(resolvedEvidencePath === undefined
+          ? {}
+          : { evidencePath: resolvedEvidencePath }),
+        workspacePackage,
+      });
+    }
+  };
+
+  for (const match of output.matchAll(
+    /failed to resolve entry for package\s+["']([^"'\n]+)["']/gi,
+  )) {
+    addPackage(match[1]);
+  }
+
+  for (const match of output.matchAll(
+    /(?:can'?t resolve|cannot find module|could not resolve)\s+["']([^"'\n]+)["']/gi,
+  )) {
+    const reference = match[1];
+    if (reference === undefined) continue;
+    const nodeModulesPackage =
+      /(?:^|\/)node_modules\/((?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+)(?:\/|$)/i.exec(
+        reference,
+      )?.[1];
+    if (nodeModulesPackage !== undefined) {
+      addPackage(nodeModulesPackage, reference);
+      continue;
+    }
+    for (const name of packagesByName.keys()) {
+      if (reference === name || reference.startsWith(`${name}/`)) {
+        addPackage(name, reference);
+      }
+    }
+    const repoPath = normalizeSubmittedRepoPath(reference);
+    if (repoPath === undefined) continue;
+    for (const [name, workspacePackage] of packagesByName) {
+      const packageDir = normalizeRepoRelativeDir(workspacePackage.dir);
+      if (
+        packageDir !== "" &&
+        (repoPath === packageDir || repoPath.startsWith(`${packageDir}/`))
+      ) {
+        addPackage(name, repoPath);
+      }
+    }
+  }
+
+  // The root workspace directory would claim every repo path, so only
+  // named subdirectory siblings participate in asset matching.
+  const siblingWorkspaces = workspacePackages.flatMap((pkg) => {
+    const dir = normalizeRepoRelativeDir(pkg.dir);
+    return dir === "" || dir === appDir ? [] : [{ dir, name: pkg.name }];
+  });
+  const missingAssetPaths: string[] = [];
+  for (const match of output.matchAll(
+    /(?:ENOENT|no such file or directory)[^'"\n]*['"]([^'"\n]+)['"]/gi,
+  )) {
+    const rawPath = match[1];
+    if (rawPath === undefined) continue;
+    const path = rawPath.replace(/^\/workspace\/repo\//, "");
+    if (path.startsWith("/") || path.includes("node_modules/")) continue;
+    missingAssetPaths.push(path);
+    for (const [name, workspacePackage] of packagesByName) {
+      const packageDir = normalizeRepoRelativeDir(workspacePackage.dir);
+      if (path === packageDir || path.startsWith(`${packageDir}/`)) {
+        addPackage(name, path);
+      }
+    }
+  }
+
+  const hints = [...matchedPackages].map(([name, match]) =>
+    createUnbuiltWorkspacePackageHint({
+      ...(match.evidencePath === undefined
+        ? {}
+        : { evidencePath: match.evidencePath }),
+      name,
+      packageManager: context.packageManager,
+      workspacePackage: match.workspacePackage,
+    }),
   );
+  const missingAssetHints = new Map<string, string>();
+  const matchedPackageDirs = new Set(
+    [...matchedPackages.values()].map(({ workspacePackage }) =>
+      normalizeRepoRelativeDir(workspacePackage.dir),
+    ),
+  );
+  for (const path of missingAssetPaths) {
+    for (const sibling of siblingWorkspaces) {
+      if (
+        !matchedPackageDirs.has(sibling.dir) &&
+        !missingAssetHints.has(sibling.dir) &&
+        (path === sibling.dir || path.startsWith(`${sibling.dir}/`))
+      ) {
+        const label = sibling.name ?? sibling.dir;
+        missingAssetHints.set(
+          sibling.dir,
+          `${path} is missing at runtime and lives under the internal workspace ${label} — that file is its build output, and dependency install builds no workspace member. Extend buildCommandUsed with the repository's own target that builds ${label} before the app, naming ${label} in the command so the backend keeps it, instead of creating the file by hand.`,
+        );
+      }
+    }
+  }
+  hints.push(...missingAssetHints.values());
+  return { hints, packageNames: [...matchedPackages.keys()] };
 }
 
-function classifyPreparationRuntimeFailure(
-  probe: RuntimeProbeDiagnostics,
-  appOutput: string,
-  processExited = false,
+function createUnbuiltWorkspacePackageHint(input: {
+  evidencePath?: string;
+  name: string;
+  packageManager: RepoProfile["packageManager"];
+  workspacePackage: RepoWorkspacePackage;
+}): string {
+  const buildScript =
+    Object.entries(input.workspacePackage.scripts).find(
+      ([scriptName]) => scriptName === "build",
+    ) ??
+    Object.entries(input.workspacePackage.scripts).find(([scriptName]) =>
+      /^build(?::|$)/.test(scriptName),
+    );
+  const buildDirection =
+    buildScript === undefined
+      ? `Use the repository's own nx, turbo, or workspace target that builds ${input.name}`
+      : `${input.name}'s package.json declares ${JSON.stringify(buildScript[0])}: ${JSON.stringify(buildScript[1])}; run ${workspaceBuildInvocation(input.packageManager, input.name, buildScript[0])}`;
+  const missingEvidence =
+    input.evidencePath === undefined
+      ? `${input.name}'s entry or imported build output does not resolve`
+      : `${input.evidencePath} is missing from ${input.name}`;
+  return `${missingEvidence}; ${input.name} is an internal workspace package, and dependency install builds no workspace member. ${buildDirection} before the app through buildCommandUsed, or widen the repository's install/predev filter so it includes ${input.name}. Keep ${input.name} in the command so the backend preserves the build, even for development-server starts. Do not change the import.`;
+}
+
+function workspaceBuildInvocation(
+  packageManager: RepoProfile["packageManager"],
+  packageName: string,
+  scriptName: string,
 ): string {
+  const quotedName = JSON.stringify(packageName);
+  switch (packageManager) {
+    case "bun":
+      return `bun --filter ${quotedName} run ${scriptName}`;
+    case "npm":
+      return `npm run ${scriptName} --workspace ${quotedName}`;
+    case "pnpm":
+      return `pnpm --filter ${quotedName} run ${scriptName}`;
+    case "yarn":
+      return `yarn workspace ${quotedName} ${scriptName}`;
+    default:
+      return `the ${scriptName} script for ${packageName}`;
+  }
+}
+
+function normalizeRepoRelativeDir(dir: string): string {
+  const trimmed = dir.replace(/^\.\//, "").replace(/\/+$/, "");
+  return trimmed === "." ? "" : trimmed;
+}
+
+// requiredEnvHints are discovered candidates (.env examples, quarantined
+// keys), not proven requirements, so the hint points at the gap instead of
+// commanding a fix. The gap is known before the app starts; every failed
+// preflight states it (N109, calcom's silent NEXTAUTH_SECRET crash).
+function readMissingRequiredEnvHints(
+  manifest: PreparationManifest,
+  repoProfile: RepoProfile,
+): string[] {
+  const missing = repoProfile.requiredEnvHints.filter(
+    (name) => !(name in manifest.envUsed),
+  );
+  if (missing.length === 0) {
+    return [];
+  }
+  const shown = missing.slice(0, 8);
+  const suffix =
+    missing.length > shown.length
+      ? ` (and ${missing.length - shown.length} more in the repo profile)`
+      : "";
+  return [
+    `The repository reads environment variables that envUsed does not set: ${shown.join(", ")}${suffix}. If the failure traces to missing configuration, set the relevant ones in envUsed with local demo values before changing code.`,
+  ];
+}
+
+function classifyPreparationRuntimeFailure(input: {
+  appOutput?: string;
+  exitCode?: number;
+  manifest?: PreparationManifest;
+  probe: RuntimeProbeDiagnostics;
+  processExited?: boolean;
+  processRunning?: boolean;
+  repoProfile?: RepoProfile;
+}): {
+  classification: string;
+  headline?: string;
+  suggestedRepairHints?: string[];
+} {
+  const outcome = input.probe.attempts.at(-1)?.outcome;
+  if (
+    input.processRunning &&
+    outcome === "http-error" &&
+    (input.probe.httpStatus ?? 0) >= 500
+  ) {
+    return { classification: "app server error" };
+  }
+  const unbuiltWorkspace = input.repoProfile
+    ? inspectUnbuiltWorkspacePackages(input.appOutput ?? "", {
+        appDir: input.manifest?.appDir ?? ".",
+        packageManager: input.repoProfile.packageManager,
+        workspacePackages: input.repoProfile.workspacePackages,
+      })
+    : { hints: [], packageNames: [] };
+  if (unbuiltWorkspace.packageNames.length > 0) {
+    return {
+      classification: "unbuilt workspace dependency",
+      headline: formatCommandFailureSummary(
+        `Unbuilt workspace dependency ${unbuiltWorkspace.packageNames.join(", ")}`,
+        readCommandFailureEvidence({
+          exitCode: input.exitCode ?? 1,
+          stderr: input.appOutput ?? "",
+          stdout: "",
+        }),
+      ),
+      suggestedRepairHints: unbuiltWorkspace.hints,
+    };
+  }
+  const missingBuildOutputEntry = input.manifest
+    ? readMissingBuildOutputEntry({
+        appOutput: input.appOutput ?? "",
+        manifest: input.manifest,
+      })
+    : undefined;
+  if (missingBuildOutputEntry !== undefined) {
+    return {
+      classification: "runtime-configuration error",
+      headline: `Runtime-configuration error: startCommandUsed runs ${missingBuildOutputEntry} but no declared build produces it — declare the build that emits ${missingBuildOutputEntry}, or start the dev server instead.`,
+    };
+  }
   const missingSpecifiers = [
-    ...appOutput.matchAll(
-      /(?:can'?t resolve|cannot find module|could not resolve)\s+["']([^"']+)["']/gi,
+    ...(input.appOutput ?? "").matchAll(
+      /(?:can'?t resolve|cannot find module|could not resolve|failed to resolve entry for package)\s+["']([^"']+)["']/gi,
     ),
   ].map((match) => match[1] ?? "");
   if (missingSpecifiers.some(isBarePackageSpecifier)) {
-    return "missing dependency";
+    return { classification: "missing dependency" };
   }
-  if (missingSpecifiers.length > 0) return "build failure";
-  if (processExited) return "runtime crash";
-  const outcome = probe.attempts.at(-1)?.outcome;
-  if (outcome === "render-timeout") return "render timeout";
-  if (outcome === "runtime-exited") return "runtime crash";
-  if (outcome === "connection-refused") return "listen failure";
+  if (missingSpecifiers.length > 0) {
+    return { classification: "build failure" };
+  }
+  if (input.processExited) return { classification: "runtime crash" };
+  if (outcome === "render-timeout") return { classification: "render timeout" };
+  if (outcome === "runtime-exited") return { classification: "runtime crash" };
+  if (outcome === "connection-refused") {
+    return { classification: "listen failure" };
+  }
   if (outcome === "http-error") {
-    if (probe.httpStatus === 401 || probe.httpStatus === 403)
-      return "auth wall";
-    if (probe.httpStatus === 404) return "app route not discoverable";
-    if ((probe.httpStatus ?? 0) >= 500) return "build failure";
+    if (input.probe.httpStatus === 401 || input.probe.httpStatus === 403) {
+      return { classification: "auth wall" };
+    }
+    if (input.probe.httpStatus === 404) {
+      return { classification: "app route not discoverable" };
+    }
+    if ((input.probe.httpStatus ?? 0) >= 500) {
+      return { classification: "build failure" };
+    }
   }
-  return "start failure";
+  return { classification: "start failure" };
+}
+
+const buildOutputDirectoryNames = new Set([
+  ".next",
+  ".output",
+  "build",
+  "dist",
+  "out",
+]);
+
+function readMissingBuildOutputEntry(input: {
+  appOutput: string;
+  manifest: PreparationManifest;
+}): string | undefined {
+  if (input.manifest.buildCommandUsed?.trim()) return undefined;
+  const missingPaths = [
+    ...input.appOutput.matchAll(
+      /(?:cannot find module|module not found)\s+["']([^"'\n]+)["']/gi,
+    ),
+    ...input.appOutput.matchAll(
+      /(?:ENOENT|no such file or directory)[^"'\n]*["']([^"'\n]+)["']/gi,
+    ),
+  ].flatMap((match) => {
+    const path = normalizeSubmittedRepoPath(match[1] ?? "");
+    return path !== undefined &&
+      !path.split("/").includes("node_modules") &&
+      path.split("/").some((part) => buildOutputDirectoryNames.has(part))
+      ? [path]
+      : [];
+  });
+  if (missingPaths.length === 0) return undefined;
+
+  const startEntries = [
+    input.manifest.startCommandUsed,
+    ...input.appOutput.split("\n"),
+  ].flatMap((line) => {
+    const match =
+      /^\s*(?:>\s*)?(?:node|bun)\s+(?:--\S+\s+)*["']?([^"'\s]+)["']?/i.exec(
+        line,
+      );
+    const entry = normalizeSubmittedRepoPath(match?.[1] ?? "");
+    return entry === undefined ? [] : [entry];
+  });
+  return missingPaths.find(
+    (missingPath) =>
+      startEntries.some(
+        (entry) =>
+          entry === missingPath ||
+          entry.startsWith(`${missingPath}.`) ||
+          missingPath.startsWith(`${entry}.`),
+      ) || /requireStack\s*:\s*\[\s*\]/i.test(input.appOutput),
+  );
+}
+
+function normalizeSubmittedRepoPath(value: string): string | undefined {
+  const unprefixed = value
+    .trim()
+    .replace(/^file:\/\//, "")
+    .replace(/^\/workspace\/repo\//, "")
+    .replace(/^\.\//, "");
+  if (
+    unprefixed.length === 0 ||
+    unprefixed.startsWith("/") ||
+    unprefixed.split("/").includes("..")
+  ) {
+    return undefined;
+  }
+  return unprefixed;
+}
+
+function readReadinessServeFailureHeadline(input: {
+  appOutput: string;
+  manifest: PreparationManifest;
+  preflightUrl: string;
+  repoProfile: RepoProfile;
+  runtimeProbe: RuntimeProbeDiagnostics;
+  runtimeTarget: ResolvedRuntimeTarget | undefined;
+}): string {
+  const parsedPreflightUrl = new URL(input.preflightUrl);
+  const route = `${parsedPreflightUrl.pathname}${parsedPreflightUrl.search}`;
+  const status = input.runtimeProbe.httpStatus ?? "unknown";
+  const selectedCandidate = input.repoProfile.browserRuntimeCandidates?.find(
+    (candidate) =>
+      candidate.dir ===
+      (input.runtimeTarget?.targetId ?? input.manifest.appDir),
+  );
+  const viteEvidence = [
+    input.appOutput,
+    input.manifest.startCommandUsed,
+    input.runtimeTarget?.start.command,
+    ...(selectedCandidate === undefined
+      ? input.manifest.appDir === "."
+        ? [
+            ...input.repoProfile.detectedFrameworks,
+            ...Object.values(input.repoProfile.packageScripts),
+          ]
+        : []
+      : [
+          ...selectedCandidate.frameworks,
+          ...Object.values(selectedCandidate.scripts),
+        ]),
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join("\n");
+  const viteProxyExplanation =
+    status === 502 && /\bvite\b/i.test(viteEvidence)
+      ? " The Vite proxy may have minted this 502 because the route's backend is absent; repair the backend or data-delivery seam."
+      : "";
+  return `Prepared entry route ${route} returned HTTP ${status} while the managed app command was still running; this is a serve/backend failure, not a build or listen failure.${viteProxyExplanation}`;
 }
 
 function isBarePackageSpecifier(specifier: string): boolean {
@@ -2534,6 +3978,123 @@ function preparationProbeUrl(manifest: PreparationManifest): string {
   return entryPath === undefined
     ? manifest.baseUrl
     : new URL(entryPath, manifest.baseUrl).toString();
+}
+
+/**
+ * The distinct navigation routes a Demo Script films: every `goto` path across
+ * its setup actions and playwright-recording scenes. The capture reset probes
+ * these on the freshly restarted app so a route that reverted to failing is
+ * caught before it is filmed — not the single readiness route alone. Returns
+ * an empty list for a script with no browser navigation, or one that no longer
+ * parses (the contract stage already owns that failure).
+ */
+function readCaptureSceneRoutes(scriptCandidate: ScriptCandidate): string[] {
+  try {
+    const demoScript = parseDemoScript(scriptCandidate.scriptJsonContent);
+    const actions = [
+      ...(demoScript.setupActions ?? []),
+      ...demoScript.scenes.flatMap((scene) =>
+        scene.type === "playwright-recording" ? (scene.actions ?? []) : [],
+      ),
+    ];
+    return [
+      ...new Set(
+        actions.flatMap((action) =>
+          action.type === "goto" ? [action.path] : [],
+        ),
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Confirms every capture scene route still serves on the reset app. The
+ * readiness probe already proved the app binds, so each route takes a single
+ * shot with no cold-render budget; a route that does not respond fails the
+ * reset with the route named, so Footage Capture never films a broken surface.
+ * Returns the passed report untouched when every route serves.
+ */
+async function confirmCaptureSceneRoutesServe(input: {
+  baseUrl: string;
+  passedReport: ValidationReport;
+  sceneRoutes: string[];
+  workspace: AgentHarnessWorkspace;
+}): Promise<ValidationReport> {
+  const failures: { classification: string; detail: string }[] = [];
+  const normalizedPath = (url: URL) => {
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return `${pathname}${url.search}`;
+  };
+  const readUrl = (value: string | undefined): URL | undefined => {
+    if (value === undefined) return undefined;
+    try {
+      return new URL(value);
+    } catch {
+      return undefined;
+    }
+  };
+  for (const route of input.sceneRoutes) {
+    const probe = await probeSubmittedCodeRuntime(
+      input.workspace,
+      new URL(route, input.baseUrl).toString(),
+      0,
+    );
+    const requestedUrl = new URL(route, input.baseUrl);
+    const finalUrl = readUrl(probe.runtimeProbe.finalUrl);
+    const redirected =
+      finalUrl !== undefined &&
+      (finalUrl.origin !== requestedUrl.origin ||
+        normalizedPath(finalUrl) !== normalizedPath(requestedUrl));
+    const redirectedToAuth =
+      finalUrl !== undefined &&
+      !hasAuthWallRouteShape(
+        `${requestedUrl.pathname}${requestedUrl.search}${requestedUrl.hash}`,
+      ) &&
+      hasAuthWallRouteShape(
+        `${finalUrl.pathname}${finalUrl.search}${finalUrl.hash}`,
+      );
+    if (
+      probe.runtimeProbe.attempts.at(-1)?.outcome === "responded" &&
+      !redirected
+    ) {
+      continue;
+    }
+    failures.push({
+      classification: redirectedToAuth
+        ? "auth wall"
+        : redirected
+          ? "app route not discoverable"
+          : classifyPreparationRuntimeFailure({
+              probe: probe.runtimeProbe,
+            }).classification,
+      detail:
+        redirected && finalUrl !== undefined
+          ? `${route} redirected to ${normalizedPath(finalUrl)}${probe.runtimeProbe.httpStatus === undefined ? "" : ` (HTTP ${probe.runtimeProbe.httpStatus})`}`
+          : probe.runtimeProbe.httpStatus === undefined
+            ? route
+            : `${route} (HTTP ${probe.runtimeProbe.httpStatus})`,
+    });
+  }
+  if (failures.length === 0) {
+    return input.passedReport;
+  }
+  return {
+    ...input.passedReport,
+    failureClassification: failures[0]?.classification ?? "start failure",
+    logsSummary: `The reset app no longer serves ${failures.length} capture scene route(s): ${failures.map((failure) => failure.detail).join(", ")}. Footage Capture would film a broken route.`,
+    status: "failed",
+    suggestedRepairHints: [
+      ...input.passedReport.suggestedRepairHints,
+      "A route the Demo Script navigates stopped serving on the freshly reset app. Make every scene route render on a cold start; do not depend on state a prior validation pass warmed.",
+      ...(failures.some(({ classification }) => classification === "auth wall")
+        ? [
+            "A capture scene route redirected to authentication after reset. Repair the demo-gated identity/session seam so the requested product route remains signed in on a cold start.",
+          ]
+        : []),
+    ],
+  };
 }
 
 function unresolvedExternalResourceValidation(
@@ -2605,12 +4166,36 @@ async function executeSubmitted(
 }
 
 /**
+ * A lifecycle command that goes quiet is hanging, not working: ghostfolio's
+ * `prisma generate` finished in ~200ms and a post-generate phone-home child
+ * then held stdio open against the sealed network until the 20-minute hard
+ * deadline — twice (2026-08-09). Matches the agent-command no-output policy.
+ * Builds that legitimately go quiet longer can raise it per call.
+ */
+const sealedCommandInactivityTimeoutMs = 5 * 60_000;
+
+/**
+ * Ecosystem-standard telemetry opt-outs, declared by the sealed runtime for
+ * every heavy submitted-code command and the managed app itself: the sealed
+ * network makes phone-homes fail slowly instead of succeeding, and their
+ * children hold stdio open (ghostfolio's prisma checkpoint, 2026-08-09).
+ * Industry conventions honored across tools — not per-repo patches.
+ */
+const sealedRuntimeTelemetryOptOuts = {
+  CHECKPOINT_DISABLE: "1",
+  DO_NOT_TRACK: "1",
+  NEXT_TELEMETRY_DISABLED: "1",
+};
+
+/**
  * Runs a heavy submitted-code command (install, lifecycle, build) so that a
  * deadline kill leaves explicit evidence instead of an opaque thrown error:
  * the result carries the partial streamed output with a `[makeademo:timeout]`
  * marker and exit code 124. Killed records previously just stopped
  * mid-stream, indistinguishable from complete output (calcom, 2026-08-08).
- * Non-timeout errors still propagate.
+ * A command producing no output for the inactivity window dies early with a
+ * marker naming the silence, distinguishing hang-after-quiet from
+ * deadline-overrun. Non-timeout errors still propagate.
  */
 async function executeSubmittedWithDeadlineEvidence(
   workspace: AgentHarnessWorkspace,
@@ -2620,7 +4205,9 @@ async function executeSubmittedWithDeadlineEvidence(
   const streamed: string[] = [];
   try {
     return await workspace.executeSubmittedCode(command, {
+      inactivityTimeoutMs: sealedCommandInactivityTimeoutMs,
       ...options,
+      env: { ...options.env, ...sealedRuntimeTelemetryOptOuts },
       onStdout: (chunk) => {
         streamed.push(chunk);
         options.onStdout?.(chunk);
@@ -2628,25 +4215,500 @@ async function executeSubmittedWithDeadlineEvidence(
     });
   } catch (error) {
     if (!isAgentHarnessCommandTimeout(error)) throw error;
+    // The coda must not claim a kill the harness never issued: a transport
+    // loss means the PTY died with the outcome unobserved, and mislabeled
+    // evidence sends the diagnosis down the wrong seam.
+    const coda =
+      error instanceof AgentHarnessCommandTimeoutError &&
+      error.kind === "transport"
+        ? "The PTY transport was lost before the exit status arrived; output above is partial."
+        : "The command was killed at its deadline; output above is partial.";
     return {
       exitCode: 124,
       stderr: "",
-      stdout: `${streamed.join("")}\n[makeademo:timeout] ${readErrorMessage(error)} The command was killed at its deadline; output above is partial.`,
+      stdout: `${streamed.join("")}\n[makeademo:timeout] ${readErrorMessage(error)} ${coda}`,
     };
   }
 }
 
 /**
+ * Runs a heavy submitted-code command under the full evidence bracket
+ * (disk/memory markers, teed evidence file, CPU-liveness heartbeat,
+ * deadline-kill conversion) and refuses to report a false kill: when a
+ * timeout kill's teed record carries the command-end beacon, the command
+ * demonstrably finished and only the PTY sentinel was lost — the recorded
+ * exit code is the truth, so the caller sees the command's real outcome
+ * and no repair round or retry budget is ever charged for transport loss
+ * (ghostfolio's completed prisma generate was killed as exit 124 three
+ * times, charging two repair rounds, 2026-08-09).
+ */
+async function executeGuardedSubmittedCommand(
+  workspace: AgentHarnessWorkspace,
+  command: string,
+  label: string,
+  options: AgentHarnessWorkspaceExecuteOptions = {},
+): Promise<{
+  evidenceLogPath: string;
+  result: AgentHarnessWorkspaceCommandResult;
+}> {
+  // The sandbox log answers "did this command run, for how long, and with
+  // what exit" on its own: ghostfolio's phantom install (2026-08-12) took
+  // wall-clock archaeology across pipeline-log gaps because no record
+  // carried those facts. Best-effort by construction — attribution must
+  // never replace the operation it attributes.
+  const writeLifecycleLogBestEffort = async (
+    entry: Record<string, unknown>,
+  ) => {
+    try {
+      await workspace.writeSandboxLog(entry);
+    } catch {
+      // Attribution must never replace the operation it attributes.
+    }
+  };
+  await writeLifecycleLogBestEffort({
+    command: command.slice(0, 500),
+    event: "command.started",
+    label,
+    message: `The ${label} command started.`,
+  });
+  const startedAt = Date.now();
+  const outcome = await resolveGuardedSubmittedCommand(
+    workspace,
+    command,
+    label,
+    options,
+  );
+  // Written after transport-fault recovery so the recorded exit is the
+  // command's real outcome, never the kill that recovery overturned.
+  await writeLifecycleLogBestEffort({
+    durationMs: Date.now() - startedAt,
+    event: "command.finished",
+    exitCode: outcome.result.exitCode,
+    label,
+    message: `The ${label} command finished with exit ${outcome.result.exitCode}.`,
+  });
+  return outcome;
+}
+
+async function resolveGuardedSubmittedCommand(
+  workspace: AgentHarnessWorkspace,
+  command: string,
+  label: string,
+  options: AgentHarnessWorkspaceExecuteOptions,
+): Promise<{
+  evidenceLogPath: string;
+  result: AgentHarnessWorkspaceCommandResult;
+}> {
+  const guarded = withDiskMarkers(command, label);
+  const result = await executeSubmittedWithDeadlineEvidence(
+    workspace,
+    guarded.command,
+    options,
+  );
+  if (
+    result.exitCode !== 124 ||
+    !result.stdout.includes("[makeademo:timeout]")
+  ) {
+    return { evidenceLogPath: guarded.evidenceLogPath, result };
+  }
+  const recordedExit = readRecordedCommandEndExit(
+    await readCommandEvidenceTail(workspace, guarded.evidenceLogPath),
+  );
+  // exit=124 stays ambiguous (the command may run `timeout` itself), so
+  // only a distinguishable recorded status overrides the kill.
+  if (recordedExit === undefined || recordedExit === 124) {
+    return { evidenceLogPath: guarded.evidenceLogPath, result };
+  }
+  try {
+    await workspace.writeSandboxLog({
+      event: "command.transport-fault.recovered",
+      label,
+      message: `The ${label} command finished with exit ${recordedExit} but its PTY sentinel was lost; the recorded exit code replaces the timeout kill.`,
+      recoveredExitCode: recordedExit,
+    });
+  } catch {
+    // Recovery must never be replaced by an observability failure.
+  }
+  return {
+    evidenceLogPath: guarded.evidenceLogPath,
+    result: {
+      exitCode: recordedExit,
+      stderr: result.stderr,
+      stdout: `${result.stdout}\n[makeademo:transport-fault] PTY sentinel lost after the command finished; exit=${recordedExit} recovered from the teed evidence record.`,
+    },
+  };
+}
+
+/** Reads the last command-end beacon a teed evidence record carries. */
+function readRecordedCommandEndExit(evidenceTail: string): number | undefined {
+  const recorded = [
+    ...evidenceTail.matchAll(/\[makeademo:command-end\] exit=(\d+)/g),
+  ].at(-1)?.[1];
+  return recorded === undefined ? undefined : Number(recorded);
+}
+
+/**
  * Brackets a heavy submitted-code command with `[makeademo:disk]` df lines
  * so ENOSPC diagnoses read the budget off the record instead of guessing
- * (twenty died on a hard 10GB cap three matrices running, 2026-08-08). The
- * original exit code is preserved for the PTY sentinel via a subshell exit,
- * never a top-level `exit` (which would drop the sentinel).
+ * (twenty died on a hard 10GB cap three matrices running, 2026-08-08), and
+ * tees the command's combined output to `evidenceLogPath` so failure
+ * evidence survives a lossy PTY stream (calcom's yarn failure report never
+ * reached the record, 2026-08-09). The command runs with stdin sealed: its
+ * children must never drain the transport that carries the harness's own
+ * trailer lines (the stolen-sentinel false kills, ghostfolio 2026-08-09).
+ * The command's own exit code is preserved through the tee via PIPESTATUS
+ * and reaches the PTY sentinel via a subshell exit, never a top-level
+ * `exit` (which would drop the sentinel). The after-markers and a
+ * `[makeademo:command-end] exit=<status>` beacon append to the evidence
+ * file too, so the durable record alone proves the command finished and
+ * with what status even when the PTY stream or sentinel is lost.
  */
-function withDiskMarkers(command: string, label: string): string {
+function withDiskMarkers(
+  command: string,
+  label: string,
+): { command: string; evidenceLogPath: string } {
+  const evidenceLogPath = `/tmp/makeademo/${label}-${randomUUID()}.log`;
   const marker = (phase: string) =>
     `df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] ${label} ${phase} |"`;
-  return `${marker("before")}; ${command}; makeademo_disk_status=$?; ${marker("after")}; sh -c "exit \${makeademo_disk_status}"`;
+  // The cgroup's running memory peak (v2 first, v1 fallback), read after the
+  // command so capacity diagnoses see peaks on the transcript instead of
+  // inferring them (midday's dev-server OOM, 2026-08-09). Best-effort: a
+  // host without a readable cgroup emits no line.
+  const memoryMarker = `cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null | head -1 | sed "s|^|[makeademo:mem] ${label} peak-bytes |"`;
+  const commandEndBeacon = `printf '[makeademo:command-end] exit=%s\\n' "\${makeademo_disk_status}"`;
+  // The liveness bracket wraps the whole marker sequence: heartbeats go to
+  // the PTY stream (feeding the no-output watchdog) but never through the
+  // tee, so the evidence file stays clean of transport lines.
+  return {
+    command: withCpuLivenessHeartbeat(
+      `${marker("before")}; mkdir -p /tmp/makeademo; { ${command}; } </dev/null 2>&1 | tee ${shellQuote(evidenceLogPath)}; makeademo_disk_status=\${PIPESTATUS[0]}; { ${marker("after")}; ${memoryMarker}; ${commandEndBeacon}; } 2>&1 | tee -a ${shellQuote(evidenceLogPath)}; sh -c "exit \${makeademo_disk_status}"`,
+    ),
+    evidenceLogPath,
+  };
+}
+
+const failureEvidenceTailBytes = 4_096;
+/**
+ * Reads the bounded tail of a command's teed evidence file — the durable
+ * copy of the output that the PTY stream may have dropped. ANSI is removed
+ * before the byte tail is taken, so a cut can never turn the suffix of an
+ * escape sequence into fake prose. Best-effort by design: a missing or
+ * unreadable file yields the empty string so callers fall back to the
+ * streamed output.
+ */
+async function readCommandEvidenceTail(
+  workspace: AgentHarnessWorkspace,
+  evidenceLogPath: string,
+): Promise<string> {
+  try {
+    const result = await executeSubmitted(
+      workspace,
+      `node -e ${shellQuote(stripAnsiFileProgram)} ${shellQuote(evidenceLogPath)} 2>/dev/null | tail -c ${failureEvidenceTailBytes}`,
+    );
+    return result.exitCode === 0 ? result.stdout : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The legible core of a failure summary: ANSI-stripped and tail-biased,
+ * because failures conclude — they don't begin — and every surface of
+ * calcom's verdict showed `stty -echo` preamble garbage instead of the
+ * failing build. Synthesized stderr wins over the teed file (it carries
+ * harness context the file cannot), and the file wins over the streamed
+ * stdout (the stream drops tails; the file does not).
+ */
+function legibleFailureExcerpt(input: {
+  fileTail?: string;
+  stderr: string;
+  stdout: string;
+}): string {
+  const source =
+    input.stderr.trim().length > 0
+      ? input.stderr
+      : (input.fileTail?.trim().length ?? 0) > 0
+        ? (input.fileTail ?? "")
+        : input.stdout;
+  // Liveness beats (CPU sampler and agent-liveness plugin) are watchdog
+  // transport, never evidence — sampler output would dilute the bounded tail.
+  const cleaned = collapseRepeatedErrorBlocks(
+    stripAnsi(source)
+      .split("\n")
+      .filter((line) => !/^\[makeademo:(?:agent-)?alive\]/.test(line.trim()))
+      .join("\n"),
+  ).trim();
+  if (cleaned.length <= failureEvidenceTailBytes) {
+    return cleaned;
+  }
+  return `[earlier output elided]\n${cleaned.slice(-failureEvidenceTailBytes)}`;
+}
+
+function readCommandFailureEvidence(input: {
+  additionalEvidence?: string[];
+  exitCode: number;
+  fileTail?: string;
+  stderr: string;
+  stdout: string;
+}): {
+  causeLine: string;
+  excerpt: string;
+  killed: boolean;
+  nonzeroToolExit: boolean;
+} {
+  const combined = collapseRepeatedErrorBlocks(
+    stripAnsi(
+      [
+        input.stdout,
+        input.stderr,
+        input.fileTail ?? "",
+        ...(input.additionalEvidence ?? []),
+      ]
+        .filter((source) => source.trim().length > 0)
+        .join("\n"),
+    ),
+  );
+  const lines = combined
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.length > 0 && !/^\[makeademo:(?:agent-)?alive\]/.test(line),
+    );
+  const lastMatching = (pattern: RegExp) =>
+    lines.filter((line) => pattern.test(line)).at(-1);
+  const killedLine = lines
+    .filter(
+      (line) =>
+        !/^\[makeademo:timeout\]/.test(line) && /\bKilled\b/i.test(line),
+    )
+    .at(-1);
+  const moduleNotFoundLine = lastMatching(/\bERR_MODULE_NOT_FOUND\b/);
+  const nonzeroToolExitLine = lastMatching(
+    /\bcommand (?:failed|exited) with (?:exit )?code [1-9]\d*|\bexited with status [1-9]\d*|^\d+\s+verbose\s+(?:exit|code)\s+[1-9]\d*$/i,
+  );
+  const commandEndLine = lastMatching(
+    /\[makeademo:command-end\]\s+exit=[1-9]\d*/i,
+  );
+  const causeText = lines
+    .filter((line) => !/^\[same error block repeated \d+ times;/.test(line))
+    .join("\n");
+  const causeLine =
+    killedLine ??
+    readLastErrorCauseLine(causeText) ??
+    moduleNotFoundLine ??
+    nonzeroToolExitLine ??
+    commandEndLine ??
+    lines.at(-1) ??
+    `command exited with code ${input.exitCode}`;
+  const excerpt = removePromotedCauseLine(
+    legibleFailureExcerpt(input),
+    causeLine,
+  );
+  return {
+    causeLine,
+    excerpt,
+    killed: killedLine !== undefined,
+    nonzeroToolExit: nonzeroToolExitLine !== undefined,
+  };
+}
+
+function removePromotedCauseLine(excerpt: string, causeLine: string): string {
+  const lines = excerpt.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index]?.trim() !== causeLine) continue;
+    lines.splice(index, 1);
+    break;
+  }
+  return lines.join("\n").trim();
+}
+
+function formatCommandFailureSummary(
+  label: string,
+  evidence: Pick<
+    ReturnType<typeof readCommandFailureEvidence>,
+    "causeLine" | "excerpt"
+  >,
+): string {
+  return `${label}: ${evidence.causeLine}${evidence.excerpt.length === 0 ? "" : `\nCommand output:\n${evidence.excerpt}`}`;
+}
+
+function collapseRepeatedErrorBlocks(value: string): string {
+  const lines = value
+    .replace(/(\S)(?=AggregateError(?:\s+\[[A-Z0-9_]+\])?:)/g, "$1\n")
+    .split("\n");
+  const collapsed: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const anchor = lines[index]?.trim() ?? "";
+    if (!isRepeatedErrorBlockAnchor(anchor)) {
+      collapsed.push(lines[index] ?? "");
+      index += 1;
+      continue;
+    }
+    const nextAnchor = findNextMatchingLine(lines, index + 1, anchor);
+    if (nextAnchor === -1) {
+      collapsed.push(lines[index] ?? "");
+      index += 1;
+      continue;
+    }
+    const block = trimTrailingBlankLines(lines.slice(index, nextAnchor));
+    let cursor = nextAnchor;
+    let occurrences = 1;
+    while (cursor < lines.length) {
+      const blockEnd = findRepeatedErrorBlockEnd(lines, cursor, anchor);
+      const candidate = trimTrailingBlankLines(lines.slice(cursor, blockEnd));
+      if (!sameLines(block, candidate)) break;
+      occurrences += 1;
+      cursor = blockEnd;
+      if ((lines[cursor]?.trim() ?? "") !== anchor) break;
+    }
+    if (occurrences === 1) {
+      collapsed.push(lines[index] ?? "");
+      index += 1;
+      continue;
+    }
+    collapsed.push(
+      ...block,
+      `[same error block repeated ${occurrences} times; duplicate copies collapsed]`,
+    );
+    index = cursor;
+  }
+  return collapsed.join("\n");
+}
+
+function isRepeatedErrorBlockAnchor(line: string): boolean {
+  return /^(?:AggregateError(?:\s+\[[A-Z0-9_]+\])?:|(?:[A-Za-z][\w.]*Error)(?:\s+\[[A-Z0-9_]+\])?:|.*\bRequestError\b)/.test(
+    line,
+  );
+}
+
+function findNextMatchingLine(
+  lines: string[],
+  start: number,
+  expected: string,
+): number {
+  for (let index = start; index < lines.length; index += 1) {
+    if (lines[index]?.trim() === expected) return index;
+  }
+  return -1;
+}
+
+function findRepeatedErrorBlockEnd(
+  lines: string[],
+  start: number,
+  anchor: string,
+): number {
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]?.trim() ?? "";
+    if (
+      line === anchor ||
+      /\bKilled\b|^\[makeademo:|^(?:Package-manager|Referenced build) log\b/.test(
+        line,
+      )
+    ) {
+      return index;
+    }
+  }
+  return lines.length;
+}
+
+function trimTrailingBlankLines(lines: string[]): string[] {
+  let end = lines.length;
+  while (end > 0 && lines[end - 1]?.trim().length === 0) end -= 1;
+  return lines.slice(0, end);
+}
+
+function sameLines(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((line, index) => line === right[index])
+  );
+}
+
+const diskExhaustionPattern =
+  /\bENOSPC\b|no space left on device|disk quota exceeded/i;
+
+/**
+ * Disk evidence for a failed heavy command: the `[makeademo:disk]` and
+ * `[makeademo:mem]` marker lines that did not survive the tail-biased
+ * excerpt, filtered in explicitly — the before-marker is the one proving
+ * the budget was already spent when the command started, and it never
+ * survives a tail (twenty's markers recorded the whole arc and reached no
+ * verdict, 2026-08-08) — plus the ENOSPC verdict that turns them into a
+ * repair hint.
+ */
+function readDiskPressureEvidence(
+  output: string,
+  excerpt: string,
+): { exhausted: boolean; markerLines: string[] } {
+  const markerLines = [
+    ...new Set(
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(
+          (line) =>
+            /^\[makeademo:(?:disk|mem)\]/.test(line) && !excerpt.includes(line),
+        ),
+    ),
+  ].slice(0, 8);
+  return { exhausted: diskExhaustionPattern.test(output), markerLines };
+}
+
+/**
+ * The repair steering for a disk-exhausted command. Retrying is the one
+ * move guaranteed not to work, so the hint names the budget, the levers
+ * that actually shrink the footprint, and the recorded df/memory arc the
+ * agent should reason from.
+ */
+function diskExhaustionRepairHint(markerLines: string[]): string {
+  return [
+    "The sandbox disk filled up (ENOSPC): about 10GB must hold the repository, the package-manager cache, and node_modules at once, and retrying without freeing space fails the same way.",
+    "Cut dependency weight instead: in a workspace monorepo install only the demo app's subtree (yarn workspaces focus <app>, pnpm --filter <app> install, npm install --workspace <app>), and remove heavyweight devDependencies or generated artifacts the demo never uses.",
+    ...(markerLines.length === 0 ? [] : ["Disk record:", ...markerLines]),
+  ].join("\n");
+}
+
+/**
+ * Harvests bounded tails of the package managers' own failure logs —
+ * yarn berry's per-package build logs and npm's debug log — regardless of
+ * whether the streamed output referenced them. Manager-convention
+ * knowledge, not repo knowledge: these locations are documented behavior
+ * of the tools themselves.
+ */
+async function harvestPackageManagerLogs(
+  workspace: AgentHarnessWorkspace,
+): Promise<string[]> {
+  let result: AgentHarnessWorkspaceCommandResult;
+  try {
+    result = await executeSubmitted(
+      workspace,
+      `for f in $(ls -t ${packageManagerStagingDirectory}/xfs-*/build.log \${TMPDIR:-/tmp}/xfs-*/build.log 2>/dev/null | head -3) $(ls -t /root/.npm/_logs/*-debug-0.log 2>/dev/null | head -1); do printf '\\n[makeademo:manager-log] %s\\n' "$f"; tail -c 2000 "$f" 2>/dev/null; done`,
+    );
+  } catch {
+    return [];
+  }
+  if (result.exitCode !== 0) {
+    return [];
+  }
+  return result.stdout
+    .split(/\n?\[makeademo:manager-log\] /)
+    .slice(1, 5)
+    .flatMap((section) => {
+      const newline = section.indexOf("\n");
+      const path = (
+        newline === -1 ? section : section.slice(0, newline)
+      ).trim();
+      const content =
+        newline === -1 ? "" : stripAnsi(section.slice(newline + 1)).trim();
+      if (path.length === 0 || content.length === 0) {
+        return [];
+      }
+      return [
+        `Package-manager log ${path} (tail):\n${redactSecretText(content)}`,
+      ];
+    });
 }
 
 function commandInAppDirectory(appDir: string, command: string): string {
@@ -2663,17 +4725,25 @@ function absoluteAppDirectory(appDir: string): string {
 
 /**
  * Cold monorepo dev servers routinely compile for 60–120s before binding, so
- * connection-refused probes back off exponentially until this budget elapses.
- * Every other failure mode (HTTP error, crashed process, probe execution
- * failure) still terminates the probe immediately. A running process whose
- * port stays refused deliberately keeps the whole budget: from the outside a
- * supervisor idling after its child crashed is indistinguishable from a
- * compiler working silently, so the listen-failure repair hint — not an
- * early exit — is what stops repeated identical rounds.
+ * the readiness probe backs off exponentially while the failure is one a
+ * still-warming server produces: connection refused (nothing bound yet) or
+ * an HTTP error (bound, but the app behind the port is still compiling —
+ * ghostfolio's Angular dev server 404s every route for minutes before the
+ * first one exists, 2026-08-12). Crashed processes, probe execution
+ * failures, and connected render timeouts (which already held a 90s window
+ * open) terminate immediately; at budget end the last observed status
+ * classifies the failure. The budget slides while the managed app keeps
+ * writing output between polls — visible progress is proof of life and buys
+ * more time, up to the absolute cap. A running process whose port stays
+ * refused with static output deliberately keeps the base budget: from the
+ * outside a supervisor idling after its child crashed is indistinguishable
+ * from a compiler working silently, so the listen-failure repair hint — not
+ * an early exit — is what stops repeated identical rounds.
  */
 const runtimeReadinessBudgetMs = 180_000;
 const runtimeReadinessInitialDelayMs = 2_000;
 const runtimeReadinessMaxDelayMs = 15_000;
+const runtimeReadinessProgressCapMs = 600_000;
 
 /**
  * Explicit ceilings for the two heaviest submitted-code commands, replacing
@@ -2681,11 +4751,160 @@ const runtimeReadinessMaxDelayMs = 15_000;
  * classified timeout instead of an opaque provider error.
  */
 const dependencyInstallTimeoutMs = 20 * 60_000;
+
+// The package archives double-store next to node_modules (~1GB for a berry
+// monorepo — twenty's ENOSPC, 2026-08-08) and nothing sealed reads them
+// between installs: any future install reopens the network window and
+// refetches. The corepack cache is untouched — sealed node-line swaps
+// re-provision managers from it.
+// Package managers stage fetch/convert scratch in $TMPDIR, and /tmp shares
+// the 10GiB overlay with the repo — yarn's xfs-* zip staging raced twenty's
+// own tree for the same blocks, and killed installs leave their staging
+// debris behind where nothing reclaims it (2026-08-08). Staging under the
+// harness's own pruned path puts that churn on the same lever as the caches.
+const packageManagerStagingDirectory = "/root/.makeademo-staging";
+
+const packageManagerStagingResetCommand = `rm -rf -- ${packageManagerStagingDirectory} && mkdir -p ${packageManagerStagingDirectory}`;
+
+const packageManagerCachePruneCommand = `rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store ${packageManagerStagingDirectory} 2>/dev/null`;
+
+// The berry pnp fallback's decision record. /root survives workspace resets
+// (a reset re-extracts /workspace only), unlike the repo's own .yarnrc.yml,
+// which every reset restores to the linker that already ran out of disk.
+const berryDiskFallbackStateDirectory = "/root/.makeademo-install-state";
+const berryDiskFallbackSentinelPath = `${berryDiskFallbackStateDirectory}/berry-hardlink-fallback`;
+
+// nodeLinker: node-modules keeps a real tree so npm- and npx-based build and
+// start scripts resolve, while nmMode: hardlinks-global dedupes that tree's
+// files against a shared store to shrink the footprint an ordinary copy-mode
+// install exhausted. The earlier pnp fallback fit twenty's install but left
+// no node_modules, so its npx build (npx nx, npx concurrently) fetched from
+// the sealed registry and died (2026-08-11); a resolution-preserving linker
+// never trades an install failure for that opaquer build one.
+function createBerryDiskFallbackLinkerCommand(
+  installDirectory: string,
+): string {
+  return `cd ${shellQuote(installDirectory)} && yarn config set nodeLinker node-modules && yarn config set nmMode hardlinks-global`;
+}
+
+const berryDiskFallbackRepairHint =
+  "After an out-of-disk install the harness switched this Yarn Berry workspace to nodeLinker: node-modules with nmMode: hardlinks-global — a real node_modules tree is kept and its files are hardlinked to a shared store to save disk, so npm- and npx-based build and start scripts still resolve. Keep this linker; do not switch to PnP. If the install still runs out of disk, cut the installed footprint: install only the demo app's workspace subtree and drop dev-only dependencies the demo never runs.";
+
+// The state file each manager writes inside node_modules when it owns the
+// tree; its absence proves another manager built what is there. Bun leaves
+// no in-tree marker, so bun trees are never judged foreign.
+const dependencyTreeReuseMarkers: Record<string, string> = {
+  npm: ".package-lock.json",
+  pnpm: ".modules.yaml",
+};
+
+/**
+ * The workspace reset deliberately preserves node_modules so a same-manager
+ * install can reuse the prior attempt's tree. A tree built by a different
+ * package manager is never reused — the current manager rebuilds around it
+ * while the old tree holds the space (one of twenty's three coexisting
+ * dependency-tree copies, 2026-08-08) — so when the install directory's
+ * tree lacks the current manager's own state marker, every preserved tree
+ * is dead weight and is dropped before the install. Returns undefined when
+ * the manager leaves no in-tree marker to check or is unrecognized.
+ */
+function createStaleDependencyTreeDropCommand(input: {
+  installCommand: string;
+  installDirectory: string;
+  yarnVariant?: "berry" | "classic";
+}): string | undefined {
+  const manager = parseInstallCommand(input.installCommand).packageManager;
+  const marker =
+    manager === "yarn"
+      ? readYarnInstallVariant(input.installCommand, input.yarnVariant) ===
+        "berry"
+        ? ".yarn-state.yml"
+        : ".yarn-integrity"
+      : manager === undefined
+        ? undefined
+        : dependencyTreeReuseMarkers[manager];
+  if (marker === undefined) {
+    return undefined;
+  }
+  const tree = `${input.installDirectory}/node_modules`;
+  return `if [ -d ${shellQuote(tree)} ] && [ ! -e ${shellQuote(`${tree}/${marker}`)} ]; then find /workspace -mindepth 1 -name node_modules -prune -exec rm -rf {} + 2>/dev/null; echo "[makeademo:disk] stale-tree dropped node_modules not built by ${manager}"; fi`;
+}
 const submittedCodeBuildTimeoutMs = 15 * 60_000;
+// A service boot is init + bind + health check — seconds when healthy, and a
+// service that has not bound in three minutes never will. Migrate/seed run
+// repo code (schema DDL, fixture loads) and get build-class headroom.
+const serviceProvisionTimeoutMs = 3 * 60_000;
+const serviceSetupTimeoutMs = 10 * 60_000;
+
+async function preparedFeatureEntryRouteServes(input: {
+  baseUrl: string;
+  feature: PreparedDemoFeature;
+  readinessReport: ValidationReport;
+  workspace: AgentHarnessWorkspace;
+}): Promise<boolean> {
+  const entryPath = input.feature.entryPaths[0];
+  if (entryPath === undefined) return false;
+  let baseUrl: URL;
+  let requestedUrl: URL;
+  try {
+    baseUrl = new URL(input.baseUrl);
+    requestedUrl = new URL(entryPath, input.baseUrl);
+  } catch {
+    return false;
+  }
+  if (requestedUrl.origin !== baseUrl.origin) return false;
+  const routeIdentity = (url: URL) =>
+    `${url.pathname.replace(/\/+$/, "") || "/"}${url.search}`;
+  const probeServes = (runtimeProbe: RuntimeProbeDiagnostics) => {
+    if (runtimeProbe.attempts.at(-1)?.outcome !== "responded") return false;
+    let finalUrl: URL;
+    try {
+      finalUrl = new URL(runtimeProbe.finalUrl ?? requestedUrl.toString());
+    } catch {
+      return false;
+    }
+    const requestedRoute = `${requestedUrl.pathname}${requestedUrl.search}${requestedUrl.hash}`;
+    const finalRoute = `${finalUrl.pathname}${finalUrl.search}${finalUrl.hash}`;
+    return (
+      finalUrl.origin === requestedUrl.origin &&
+      routeIdentity(finalUrl) === routeIdentity(requestedUrl) &&
+      !(
+        !hasAuthWallRouteShape(requestedRoute) &&
+        hasAuthWallRouteShape(finalRoute)
+      )
+    );
+  };
+  if (
+    input.readinessReport.runtimeProbe !== undefined &&
+    input.readinessReport.urlChecked !== undefined
+  ) {
+    try {
+      const checkedUrl = new URL(input.readinessReport.urlChecked);
+      if (
+        checkedUrl.origin === requestedUrl.origin &&
+        routeIdentity(checkedUrl) === routeIdentity(requestedUrl)
+      ) {
+        return probeServes(input.readinessReport.runtimeProbe);
+      }
+    } catch {
+      // A malformed readiness URL cannot prove this entry route; probe it.
+    }
+  }
+  const probe = await probeSubmittedCodeRuntime(
+    input.workspace,
+    requestedUrl.toString(),
+    0,
+  );
+  return probeServes(probe.runtimeProbe);
+}
 
 async function probeSubmittedCodeRuntime(
   workspace: AgentHarnessWorkspace,
   url: string,
+  // The readiness probe absorbs a cold dev server's compile window; a route
+  // check against an already-bound app wants no backoff, so callers pass 0 to
+  // take a single shot.
+  budgetMs = runtimeReadinessBudgetMs,
 ): Promise<
   AgentHarnessWorkspaceCommandResult & {
     runtimeProbe: RuntimeProbeDiagnostics;
@@ -2700,17 +4919,27 @@ async function probeSubmittedCodeRuntime(
   let responseMetadata: { httpStatus: number; url: string } | undefined;
   let waitedMs = 0;
   let delayMs = runtimeReadinessInitialDelayMs;
+  let budgetEndMs = budgetMs;
+  let lastAppOutputLength: number | undefined;
+  const singleShot = budgetMs === 0;
+  const responseOutputPath = singleShot
+    ? "/dev/null"
+    : "/tmp/makeademo/preflight.html";
   for (let attempt = 1; ; attempt += 1) {
     const startedAt = new Date().toISOString();
     const startedAtMs = Date.now();
     result = await executeSubmitted(
       workspace,
-      `curl -fsS --location --max-redirs 5 --connect-timeout 2 --max-time 90 --write-out ${shellQuote(`\n[makeademo:probe] {"httpStatus":%{http_code},"url":"%{url_effective}"}\n`)} ${shellQuote(url)} -o /tmp/makeademo/preflight.html`,
+      `curl -fsS --location --max-redirs 5 --connect-timeout 2 --max-time ${singleShot ? 15 : 90} --write-out ${shellQuote(`\n[makeademo:probe] {"httpStatus":%{http_code},"url":"%{url_effective}"}\n`)} ${shellQuote(url)} -o ${responseOutputPath}`,
+      // The probe loop already re-issues this GET by design (N120), so a
+      // transient control-plane loss may retry it too.
+      { retry: "transient" },
     );
     responseMetadata = readRuntimeProbeResponseMetadata(result.stdout);
     const status = await readSubmittedCodeAppStatusSafely(workspace);
     const process =
       status === undefined ? undefined : runtimeProcessObservation(status);
+    const outcome = readRuntimeProbeOutcome(result, process);
     attempts.push({
       attempt,
       ...(result.stderr || result.stdout
@@ -2722,16 +4951,29 @@ async function probeSubmittedCodeRuntime(
         : {}),
       durationMs: Date.now() - startedAtMs,
       exitCode: result.exitCode,
-      outcome: readRuntimeProbeOutcome(result, process),
+      outcome,
       startedAt,
       ...(process === undefined ? {} : { process }),
     });
+    const appOutputLength =
+      status === undefined
+        ? undefined
+        : (status.stdout?.length ?? 0) + (status.stderr?.length ?? 0);
     if (
-      result.exitCode === 0 ||
+      appOutputLength !== undefined &&
+      lastAppOutputLength !== undefined &&
+      appOutputLength > lastAppOutputLength
+    ) {
+      budgetEndMs = Math.min(
+        runtimeReadinessProgressCapMs,
+        waitedMs + budgetMs,
+      );
+    }
+    lastAppOutputLength = appOutputLength ?? lastAppOutputLength;
+    if (
       isReadinessProbeExecutionFailure(result) ||
-      !isConnectionRefused(result) ||
-      process?.running === false ||
-      waitedMs >= runtimeReadinessBudgetMs
+      (outcome !== "connection-refused" && outcome !== "http-error") ||
+      waitedMs >= budgetEndMs
     ) {
       break;
     }
@@ -2860,6 +5102,31 @@ function assertFlowSpecGrounded(input: {
       feature,
     ]),
   );
+  const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
+  const explicitAuthenticationFeatureIds = new Set(
+    input.preparationManifest.productContext.featureInventory
+      .filter((feature) =>
+        isExplicitAuthenticationFeature(feature, requestedFeatures),
+      )
+      .map(({ id }) => id),
+  );
+  const inventoryIds =
+    input.preparationManifest.productContext.featureInventory.map(
+      (feature) => feature.id,
+    );
+  const groundableFeatureIds = readGroundableFeatureIds(inventoryIds, {
+    actionCatalog: input.actionCatalog,
+    allowedAuthWallFeatureIds: explicitAuthenticationFeatureIds,
+    authWallRoutes,
+  });
+  const groundableSet = new Set(groundableFeatureIds);
+  const expectedFeatureCount = Math.min(3, groundableFeatureIds.length);
+  const isAuthDegradedForFeature = (
+    featureId: string,
+    action: ActionCatalog["actions"][number],
+  ) =>
+    !explicitAuthenticationFeatureIds.has(featureId) &&
+    isAuthDegradedClick(action);
   const distinctContentByRoute = readRouteDistinctContent(
     input.appMap.discoveredRoutes,
   );
@@ -2989,17 +5256,35 @@ function assertFlowSpecGrounded(input: {
           `FlowSpec action ${actionId} is not grounded for feature ${feature.featureId}. ${taggedActionSummary(feature.featureId)}`,
         );
       }
+      if (isAuthDegradedForFeature(feature.featureId, action)) {
+        throw new Error(
+          `FlowSpec feature ${feature.featureId} references auth-degraded click ${action.id}, whose observed navigation destination is ${action.navigationDestination}; remove it because an interaction that lands on authentication cannot ground product behavior`,
+        );
+      }
       selectedActions.push(action);
       selectedActionKinds.add(action.kind);
     }
     const exercisedActions = input.actionCatalog.actions.filter(
       (action) =>
         action.exercised === true &&
+        !isAuthDegradedForFeature(feature.featureId, action) &&
+        action.featureIds?.includes(feature.featureId),
+    );
+    const authDegradedExercisedActions = input.actionCatalog.actions.filter(
+      (action) =>
+        action.exercised === true &&
+        isAuthDegradedForFeature(feature.featureId, action) &&
         action.featureIds?.includes(feature.featureId),
     );
     if (!selectedActionKinds.has("assert")) {
+      // An ungroundable feature has no tagged assert to select — demanding
+      // one loops the planner on an impossible instruction (homer's three
+      // byte-identical attempts, 2026-08-13). On inferred flows the
+      // actionable repair is dropping the feature, so say exactly that.
       violations.push(
-        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
+        requestedFeatures.length === 0 && !groundableSet.has(feature.featureId)
+          ? `FlowSpec feature ${feature.featureId} has no tagged visible assertion in the ActionCatalog, so no valid FlowSpec may select it. Remove it from features, record it in droppedFeatures with a reason, and select exactly ${expectedFeatureCount} grounded features: ${groundableFeatureIds.join(", ")}.`
+          : `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
       );
     }
     // A revealed assert's text exists only after its revealing interaction
@@ -3062,10 +5347,43 @@ function assertFlowSpecGrounded(input: {
             .join(", ")}`,
         );
       }
-    } else if (!selectedActionKinds.has("navigate")) {
+    } else if (authDegradedExercisedActions.length > 0) {
       violations.push(
-        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
+        `FlowSpec feature ${feature.featureId} has only auth-degraded browser interactions: ${authDegradedExercisedActions
+          .slice(0, 3)
+          .map((action) => `${action.id} → ${action.navigationDestination}`)
+          .join(
+            ", ",
+          )}. These clicks ground nothing; repair a requested feature's demo session or record an inferred feature in droppedFeatures.`,
       );
+    } else {
+      // Without a browser-exercised interaction every tagged interaction is
+      // speculative, so the feature must at least anchor on a navigate — the
+      // one action that provably reaches the route. The rejection must name
+      // that requirement: directus wedged on fresh identical attempts
+      // (2026-08-12) because this branch reused the pairing-rule wording the
+      // candidate already satisfied. Enforced only when the catalog tags a
+      // navigate the feature may legally reference (auth-wall navigates
+      // would ping-pong against the route rule), so the planning retry loop
+      // can never wedge on a navigate-free catalog.
+      const usableNavigates = input.actionCatalog.actions.filter(
+        (action) =>
+          action.kind === "navigate" &&
+          action.featureIds?.includes(feature.featureId) &&
+          (!authWallRoutes.has(action.route) ||
+            isExplicitAuthenticationFeature(
+              preparedFeature,
+              input.demoBrief.keyProductFeatures ?? [],
+            )),
+      );
+      if (usableNavigates.length > 0 && !selectedActionKinds.has("navigate")) {
+        violations.push(
+          `FlowSpec feature ${feature.featureId} must select its navigate action when the catalog offers no browser-exercised interaction; tagged navigate candidates: ${usableNavigates
+            .slice(0, 3)
+            .map(({ id }) => id)
+            .join(", ")}.${referencedActionsSummary(feature)}`,
+        );
+      }
     }
   }
   const actionReferenceCounts = new Map<string, number>();
@@ -3096,6 +5414,7 @@ function assertFlowSpecGrounded(input: {
     const uniqueCandidates = input.actionCatalog.actions.filter(
       (action) =>
         action.featureIds?.includes(feature.featureId) &&
+        !isAuthDegradedForFeature(feature.featureId, action) &&
         !otherFeatureReferences.has(action.id),
     );
     if (uniqueCandidates.length > 0) {
@@ -3111,8 +5430,12 @@ function assertFlowSpecGrounded(input: {
     throw new Error(violations.join("\n"));
   }
 
-  const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
   if (requestedFeatures.length > 0) {
+    if ((input.flowSpec.droppedFeatures ?? []).length > 0) {
+      throw new Error(
+        "FlowSpec droppedFeatures must be empty when the maker requested features; every requested feature must be covered",
+      );
+    }
     assertExactRequestedFeatureCoverage(
       requestedFeatures,
       input.flowSpec.features.map(
@@ -3121,13 +5444,38 @@ function assertFlowSpecGrounded(input: {
       ),
     );
   } else {
-    const expectedFeatureCount = Math.min(
-      3,
-      input.preparationManifest.productContext.featureInventory.length,
-    );
+    // Selection counts groundable features, never raw inventory length: a
+    // navigate-only feature cannot appear in any valid FlowSpec, so
+    // demanding it be selected wedges the planner on an impossible spec
+    // (homer, 2026-08-13 matrix). Ungroundable features are conceded in
+    // droppedFeatures instead so the omission stays a recorded decision.
     if (input.flowSpec.features.length !== expectedFeatureCount) {
       throw new Error(
-        `FlowSpec must select exactly ${expectedFeatureCount} grounded features when the maker supplied no feature list`,
+        `FlowSpec must select exactly ${expectedFeatureCount} grounded features when the maker supplied no feature list. Groundable features (a tagged ActionCatalog assert exists outside auth walls): ${groundableFeatureIds.join(", ")}. Record each ungroundable inventory feature in droppedFeatures instead of selecting it.`,
+      );
+    }
+    const dropped = input.flowSpec.droppedFeatures ?? [];
+    const inventorySet = new Set(inventoryIds);
+    for (const { featureId } of dropped) {
+      if (!inventorySet.has(featureId)) {
+        throw new Error(
+          `FlowSpec droppedFeatures names unknown prepared feature ${featureId}`,
+        );
+      }
+      if (groundableSet.has(featureId)) {
+        throw new Error(
+          `FlowSpec droppedFeatures must not drop groundable feature ${featureId}; droppedFeatures records only features the ActionCatalog cannot ground`,
+        );
+      }
+    }
+    const droppedIds = new Set(dropped.map(({ featureId }) => featureId));
+    const unrecordedDrops = inventoryIds.filter(
+      (featureId) =>
+        !groundableSet.has(featureId) && !droppedIds.has(featureId),
+    );
+    if (unrecordedDrops.length > 0) {
+      throw new Error(
+        `FlowSpec must record every ungroundable inventory feature in droppedFeatures with the reason it cannot be demonstrated; missing: ${unrecordedDrops.join(", ")}`,
       );
     }
     if (
@@ -3334,6 +5682,85 @@ function readUnknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// `git status` cannot rank changed files by relevance, so the parse probe
+// bounds its work by count; real preparations change far fewer files.
+const parseProbeFileLimit = 24;
+// Distinguishes "a checked file failed to parse" from environmental
+// nonzero exits (git absent, cd failed), which carry no parse evidence.
+const parseProbeFailureExitCode = 65;
+const parseProbeMarker = "[makeademo:parse] ";
+
+function readParseProbeCandidatePaths(porcelainStatus: string): string[] {
+  return porcelainStatus
+    .split("\n")
+    .flatMap((line) => {
+      // Porcelain v1: two status columns, a space, then the path (renames
+      // list `old -> new`). Deletions leave nothing to parse.
+      if (line.length < 4 || line.slice(0, 2).includes("D")) {
+        return [];
+      }
+      const rawPath = line.slice(3);
+      const path = rawPath.includes(" -> ")
+        ? (rawPath.split(" -> ").at(-1) ?? rawPath)
+        : rawPath;
+      return /\.(?:cjs|js|json|mjs)$/.test(path) &&
+        !path.startsWith('"') &&
+        !/(?:^|\/)(?:node_modules|\.git|\.makeademo|\.opencode)\//.test(path)
+        ? [path]
+        : [];
+    })
+    .slice(0, parseProbeFileLimit);
+}
+
+/**
+ * Probes whether the files preparation changed still parse, using cheap
+ * parsers the sandbox already carries: `node --check` for CommonJS/ESM
+ * sources and a JSON.parse round-trip for JSON. Returns steering prose for
+ * the first file that provably fails, and undefined when everything parses
+ * or no parser applies (missing node, unparseable status, exotic paths) —
+ * the probe steers repairs, it never gates them (N100).
+ */
+async function readRepairedSourceParseFailure(
+  workspace: AgentHarnessWorkspace,
+): Promise<string | undefined> {
+  const status = await workspace.execute(
+    `git -C ${shellQuote(workspaceRepoDirectory)} status --porcelain -uall`,
+  );
+  if (status.exitCode !== 0) {
+    return undefined;
+  }
+  const paths = readParseProbeCandidatePaths(status.stdout);
+  if (paths.length === 0) {
+    return undefined;
+  }
+  const checks = paths.map((path) => {
+    const check = path.endsWith(".json")
+      ? `node -e 'JSON.parse(require("fs").readFileSync(process.argv.pop(),"utf8"))' ${shellQuote(path)}`
+      : `node --check ${shellQuote(path)}`;
+    return `${check} || { echo ${shellQuote(`${parseProbeMarker}${path}`)}; exit ${parseProbeFailureExitCode}; }`;
+  });
+  const probe = await workspace.execute(
+    [
+      `cd ${shellQuote(workspaceRepoDirectory)} || exit 0`,
+      "command -v node >/dev/null 2>&1 || exit 0",
+      ...checks,
+      "exit 0",
+    ].join("\n"),
+  );
+  if (probe.exitCode !== parseProbeFailureExitCode) {
+    return undefined;
+  }
+  const failedPath = probe.stdout
+    .split("\n")
+    .reverse()
+    .find((line) => line.startsWith(parseProbeMarker))
+    ?.slice(parseProbeMarker.length);
+  const diagnostic = probe.stderr.trim().split("\n").slice(-12).join("\n");
+  return `The repaired workspace no longer parses: ${
+    failedPath ?? "a changed file"
+  } fails its syntax check.\n${diagnostic}\nFix the syntax in that file in place. The rest of the repair and the preparation manifest are preserved and will be re-read as-is.`;
+}
+
 async function writeWorkspaceJson(
   workspace: AgentHarnessWorkspace,
   path: string,
@@ -3486,6 +5913,13 @@ async function tryReadPreparationManifest(
   try {
     const manifest = readPreparationManifest(json.value);
     if (featureValidation !== undefined) {
+      const runtimeConfigurationIssue = findRuntimeConfigurationIssue({
+        preparationManifest: manifest,
+        repoProfile: featureValidation.repoProfile,
+      });
+      if (runtimeConfigurationIssue !== undefined) {
+        throw new Error(runtimeConfigurationIssue);
+      }
       assertPreparedFeatureInventory({
         demoBrief: featureValidation.demoBrief,
         preparationManifest: manifest,
@@ -3521,11 +5955,15 @@ async function tryReadPreparationManifest(
  * failure into an infrastructure error.
  */
 async function persistExplorationEvidence(input: {
+  directoryName?: string;
   logger: PipelineEventLogger | undefined;
   outputRoot: string;
   workspace: AgentHarnessWorkspace;
 }): Promise<void> {
-  const localDirectory = join(input.outputRoot, "exploration-evidence");
+  const localDirectory = join(
+    input.outputRoot,
+    input.directoryName ?? "exploration-evidence",
+  );
   try {
     await downloadSubmittedCodeArchive({
       archiveName: "exploration-evidence.tar",
@@ -3823,6 +6261,26 @@ function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Folds the distinct rejection reasons a stage has accumulated into the
+ * feedback the next attempt receives. A single reason passes through
+ * unchanged; several are framed so the agent satisfies every constraint at
+ * once instead of correcting the newest and regressing an earlier fix.
+ */
+function accumulatedArtifactError(priorErrors: string[]): string {
+  const latest = priorErrors[priorErrors.length - 1] ?? "";
+  if (priorErrors.length <= 1) {
+    return latest;
+  }
+  return [
+    "Each earlier attempt was rejected for a different reason. A valid artifact must satisfy ALL of these constraints at once — correcting one must not reintroduce another:",
+    ...priorErrors.map(
+      (error, index) => `- Attempt ${index + 1} was rejected: ${error}`,
+    ),
+    `Resolve the most recent rejection while keeping every earlier one satisfied: ${latest}`,
+  ].join("\n");
+}
+
 function readErrorDiagnostic(error: unknown): {
   details: string[];
   summary: string;
@@ -4000,7 +6458,47 @@ const sealedNetworkWorldRulesInstruction =
   "(4) 'It works in this sandbox' proves nothing about the demo runtime: this agent sandbox has an open network and different caches. Validate assumptions against these rules instead of by running the app here. " +
   "(5) The backend fixes the demo runtime's Node version from the repository's own pin (engines, devEngines, .nvmrc) before any repo command runs — never install, download, or reconfigure Node, and never edit those pins to dodge a version check. " +
   "(6) Packages the app validates at boot — themes, plugins, bundled dashboards — are prerequisite builds: produce their assets through declared build commands, adding any missing tooling to devDependencies. The gated install re-runs with the network open whenever your changes touch dependency inputs (package.json, lockfiles, the install command), so tooling installs are always achievable during preparation and repair; runtime downloads never are. " +
-  "(7) A replaced API must reproduce the client's expected response envelope exactly — copy the shape from the app's own client/store/transport code (pagination wrappers, array-vs-object data, required entity fields such as user.email) and cover every endpoint the demo routes call. A partially covered or mis-shaped adapter renders skeletons and error toasts and fails exploration as an empty app.";
+  "(7) A replaced API must reproduce the client's expected response envelope exactly — copy the shape from the app's own client/store/transport code (pagination wrappers, array-vs-object data, required entity fields such as user.email) and cover every endpoint the demo routes call. A partially covered or mis-shaped adapter renders skeletons and error toasts and fails exploration as an empty app. " +
+  "(8) The demo runtime has a hard memory ceiling around 8GB and kills whatever crosses it. When a production build is required, keep it under the ceiling: disable sourcemaps for the demo build, set a bounded NODE_OPTIONS --max-old-space-size (for example 6144) in envUsed, and prefer the narrowest app-scoped build target with limited parallel workers. A build that grows to the ceiling dies at the ceiling on every retry. " +
+  "(9) The demo runtime's disk is a hard ceiling around 10GB that must hold the repository, the package-manager cache, and node_modules at the same time — /tmp shares it. Do not add dependency or artifact weight the demo never runs: in a workspace monorepo prefer a focused install for the demo app (yarn workspaces focus, pnpm --filter, npm --workspace), and prune dev-only artifacts instead of duplicating them. A footprint that grows to the ceiling dies with ENOSPC on every retry. " +
+  "(10) The demo browser blocks Service Worker registration in every exploration and capture context, so service-worker-based request mocking (MSW's browser worker, Workbox runtime caching) can never activate — an app waiting on the worker renders only shells on every route, on every retry. Provide demo data at the fetch/API-client layer instead: gate the app's own data client or fetch wrapper to return deterministic in-code fixtures, and keep service-worker registration out of the demo path.";
+
+const dataFixturePlaybookInstruction =
+  "In-code fixture playbook for every data-backed feature — the fixture is the data; nothing is fetched: " +
+  "(1) Find the exact function the UI calls for the feature's data surface (server query function, API route handler, or client fetch hook). " +
+  "(2) Author the fixture as an in-code literal typed by that function's declared return type, in its own module. " +
+  "(3) Under the demo gate, return that fixture from the function immediately (a resolved value, not a pending transport). Never leave the original database, ORM, HTTP, or RPC call in the demo path, and never make the store 'optional' with an empty-on-missing fallback — a query left pending renders skeleton rows forever and fails exploration. " +
+  "(4) Declare each wired surface in that feature's dataSeams entries: path and functionName of the function returning fixtures, and fixtureModule of the fixture file. The backend verifies these files exist in your diff. " +
+  "(5) In a TypeScript repo, prove each fixture's shape with the repo's own compiler before finishing: write a temporary probe file inside the app (for example .makeademo-fixture-probe.ts) containing `const check: Awaited<ReturnType<typeof theFunction>> = theFixture;` per seam, typecheck it with the app's tsconfig (a temporary config that extends it with a files entry for the probe, run through the repo's own tsc --noEmit), record the outcome in that seam's shapeProbe field ('passed', 'failed: <first diagnostic>', or 'not-run: <reason>'), fix failures, and delete the probe and temporary config afterwards. " +
+  "(6) Then check what no compiler can: fixture dates inside the surface's default visible range, status/enum values that survive its default filters, and consistent relations between fixture entities — a shape-correct fixture that the default view filters out still renders an empty table. " +
+  "(7) The demo gate must be provably readable where the seam runs. Browser-side seams cannot read plain process environment variables: bundlers expose only allowlisted values to client code (Vite delivers import.meta.env.VITE_* or config-level define entries; other bundlers have equivalent allowlists), so a gate reading an undelivered variable leaves the stub dead code with every original transport live. Gate browser-side seams on a channel the bundler demonstrably delivers, and confirm the fixtures actually render before finishing.";
+
+/**
+ * Interpolated only when detection found required data services (prompt
+ * diet, N65): names each detected service with its evidence so the agent
+ * answers the exact inventory the manifest validator will enforce (N122),
+ * and states the rung ladder in preference order with the product decision
+ * that data-backed features are never dropped or steered away from.
+ */
+function createDataStrategyInstruction(repoProfile: RepoProfile): string[] {
+  const services = repoProfile.servicesRequired ?? [];
+  if (services.length === 0) return [];
+  const inventory = services
+    .map(
+      (service) =>
+        `${service.service} (evidence: ${service.evidencePaths.join(", ")}${
+          (service.embeddedAlternativeEvidencePaths?.length ?? 0) > 0
+            ? `; embedded driver available: ${(
+                service.embeddedAlternativeEvidencePaths ?? []
+              ).join(", ")}`
+            : ""
+        })`,
+    )
+    .join("; ");
+  return [
+    `This repository requires data services: ${inventory}. Answer every one in the manifest's dataStrategy (the template pre-filled one entry per service) with the highest workable rung, in this preference order: (1) embedded-config — when an embedded driver exists (sqlite dependency, multi-driver config) or can be added as a dependency, configure the app onto it and seed deterministic demo data through the repo's own migration/seed path; (2) provisioned-service — for ${provisionableServices.join(", ")} the harness boots the real service on loopback before the build: point the app's connection env at ${sandboxServiceConnectionUrls.postgres} (postgres), ${sandboxServiceConnectionUrls.mysql} (mysql), or ${sandboxServiceConnectionUrls.redis} (redis) through envUsed, and declare the repo's own migrationCommand and seedCommand in the entry so schema and demo data load deterministically on every validation round; (3) client-stub — serve deterministic in-code fixtures from the app's own fetch/API-client layer per the fixture playbook, never a service worker; (4) declared-stub — demo the feature on generated deterministic data and describe the substitution in the entry's detail. Every client-stub or declared-stub claim must also record its concrete delivery mechanism in mocksAndFixturesAdded or localDemoModeChanges, or activate the MakeADemo delivery gate in envUsed; a word-only declaration is rejected structurally. Never drop a data-backed feature, steer the demo away from it, or leave its queries pending; the demo must show the feature working on deterministic data.`,
+  ];
+}
 
 const appDirShapeInstruction =
   'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.';
@@ -4014,8 +6512,69 @@ const sceneDescriptionOptionalInstruction =
 const scenePresentationDefaultsInstruction =
   "presentation.music, presentation.textOverlays, and presentation.transitions are optional; when omitted they default to disabled music, no overlays, and direct back-to-back Scene playback.";
 
+function createFidelityAdjudicationPrompt(input: {
+  candidates: FidelityCandidate[];
+  preparationManifest: PreparationManifest;
+  workspaceDiff: PreparationWorkspaceDiff;
+}): string {
+  const candidateSections = input.candidates.map((candidate, index) => {
+    const section =
+      candidate.path === undefined
+        ? undefined
+        : readPatchSectionText(input.workspaceDiff.patch, candidate.path);
+    return [
+      `Candidate ${index}: ${candidate.message}`,
+      ...(candidate.path === undefined ? [] : [`File: ${candidate.path}`]),
+      ...(section === undefined
+        ? []
+        : ["Diff section:", elideMiddle(section, 16_000)]),
+    ].join("\n");
+  });
+  const manifestContext = {
+    authBypassOrDemoIdentity:
+      input.preparationManifest.authBypassOrDemoIdentity,
+    envUsed: input.preparationManifest.envUsed,
+    localDemoModeChanges: input.preparationManifest.localDemoModeChanges,
+    mocksAndFixturesAdded: input.preparationManifest.mocksAndFixturesAdded,
+  };
+  return createStagePrompt({
+    artifactPaths: [artifactPaths.fidelityAdjudication],
+    instructions: [
+      "Preparation-fidelity candidates below are heuristic proposals, not verdicts. Judge each one against the actual prepared workspace: does the flagged change replace or fabricate product experience, or is it a legitimate demo adaptation (gating, fixtures, local adapters, configuration) that preserves the original product?",
+      "You may read any file under /workspace/repo to understand the change in context. Do not modify any file; your only write is the verdict artifact.",
+      'For each candidate, return {"candidateIndex": <number>, "verdict": "confirm" | "overturn", "quotedEvidence": [<strings>], "steering": <string, optional>}.',
+      "A confirm verdict must quote at least one verbatim line from that candidate's own diff section as quotedEvidence — the caller mechanically verifies every quote against the diff and discards verdicts whose quotes do not appear — and should include steering that tells the repair agent what to change.",
+      "An overturn verdict clears a false positive: use it when the flagged change is a faithful demo adaptation. Include steering explaining why, so later validation rounds keep the context.",
+      `Write only the completed JSON object {"verdicts": [...]} to ${artifactPaths.fidelityAdjudication}. After writing it, do not call another tool.`,
+      "",
+      `Preparation manifest context: ${elideMiddle(JSON.stringify(manifestContext), 8_000)}`,
+      "",
+      ...candidateSections,
+    ].join("\n"),
+    stage: "preparation-fidelity-adjudication",
+  });
+}
+
+/**
+ * Formats run-triage strategy hints for a preparation prompt. Hints are
+ * additive steering: they compete with default approach guidance and never
+ * relax the stage's contract rules, so the label says exactly that.
+ */
+function createRunTriageHintInstructions(
+  hints: readonly string[] | undefined,
+): string[] {
+  if (hints === undefined || hints.length === 0) {
+    return [];
+  }
+  return [
+    "Run-triage strategy hints (advisory, from pre-run capacity triage; they add to and never override the rules above):",
+    ...hints.map((hint) => `- ${hint}`),
+  ];
+}
+
 function createRepoPreparationPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
+  preparationStrategyHints?: readonly string[];
   repoProfile: RepoProfile;
   runPlan: RunPlan;
 }): string {
@@ -4027,10 +6586,12 @@ function createRepoPreparationPrompt(input: {
       artifactPaths.supportingDocuments,
       artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
+      artifactPaths.featureVerificationGuide,
       artifactPaths.preparationManifest,
     ],
     instructions: [
       "Prepare the cloned app in /workspace/repo for a local MakeADemo run.",
+      `Read ${artifactPaths.featureVerificationGuide} before selecting or declaring features: it explains how the backend verifies each prepared feature in a real browser and how to declare proofs that pass.`,
       "Before editing, inspect the README and package metadata, then use route definitions to follow only the page components, state/API layers, authentication guards, and fixtures needed for browser-demonstrable flows.",
       `The RunPlan has locked the demo to ${input.runPlan.appDir}. Prepare only that browser application and its internal dependencies; never substitute a marketing, docs, showcase, or other runnable sibling. appDir must remain ${input.runPlan.appDir}.`,
       "You may modify app files in /workspace/repo only when needed to make a deterministic local demo mode.",
@@ -4048,6 +6609,9 @@ function createRepoPreparationPrompt(input: {
       "When keyProductFeatures is empty, select and fully prepare up to three strong source-backed browser features. Each selected feature must be reachable with deterministic local authentication and data fixtures where needed; candidate identification alone is not sufficient.",
       offCameraAuthenticationInstruction,
       offlineFeatureStateInstruction,
+      dataFixturePlaybookInstruction,
+      ...createDataStrategyInstruction(input.repoProfile),
+      ...createRunTriageHintInstructions(input.preparationStrategyHints),
       sealedNetworkWorldRulesInstruction,
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
@@ -4072,11 +6636,54 @@ function createRepoPreparationPrompt(input: {
 
 function createRepoPreparationRepairPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
+  preparationStrategyHints?: readonly string[];
   previousResult: { stderr: string; stdout: string };
   readError: string;
   repoProfile: RepoProfile;
   runPlan: RunPlan;
 }): string {
+  const approach = [
+    "Repo Preparation completed without producing the required artifact /workspace/.makeademo/preparation-manifest.json.",
+    `Read ${artifactPaths.featureVerificationGuide} for how the backend verifies each prepared feature and how to declare proofs that pass.`,
+    "The artifact may be missing, unreadable, invalid JSON, or schema-invalid.",
+    `Backend artifact validation failed with: ${input.readError}`,
+    "Inspect /workspace/repo and the durable artifacts before rebuilding the Repo Preparation output.",
+    "Inspect the source paths needed to replace productContext placeholders.",
+    offCameraAuthenticationInstruction,
+    offlineFeatureStateInstruction,
+    dataFixturePlaybookInstruction,
+    ...createDataStrategyInstruction(input.repoProfile),
+    ...createRunTriageHintInstructions(input.preparationStrategyHints),
+    `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
+    `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
+    `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
+    // Build SHAPE is strategy, not law (N159): a strategist directive may
+    // lawfully prescribe a broader or explicit build, so this stays out of
+    // the contract section.
+    "If a monorepo build is required, select an app-scoped package script instead of the root aggregate build.",
+    `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
+      input.previousResult,
+    )}`,
+    `Demo brief: ${JSON.stringify(input.demoBrief)}`,
+    // Never inline the repo profile: large monorepos serialize past the
+    // kernel argv limit (N65) and the file is already a listed artifact.
+    `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
+  ];
+  const contract = [
+    `The RunPlan target is immutable: prepare only ${input.runPlan.appDir}, keep appDir equal to ${input.runPlan.appDir}, and do not use evidence from a runnable sibling application.`,
+    "Repair only the Repo Preparation output contract. Write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
+    "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
+    "Do not patch only the named field. Rebuild and validate every productContext.featureInventory entry against the complete contract before finishing.",
+    "Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
+    "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
+    "Do not finish until the manifest exists at that exact path.",
+    "Do not write secrets into files. Replace external services with local fixtures or mocks.",
+    "Omit buildCommandUsed for development-server starts.",
+    "Do not add command-level working directory flags; workspace command resolution is backend-owned.",
+    "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
+    appDirShapeInstruction,
+    envUsedShapeInstruction,
+  ];
   return createStagePrompt({
     artifactPaths: [
       artifactPaths.repoProfile,
@@ -4084,38 +6691,10 @@ function createRepoPreparationRepairPrompt(input: {
       artifactPaths.demoBrief,
       artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
+      artifactPaths.featureVerificationGuide,
       artifactPaths.preparationManifest,
     ],
-    instructions: [
-      "Repo Preparation completed without producing the required artifact /workspace/.makeademo/preparation-manifest.json.",
-      "The artifact may be missing, unreadable, invalid JSON, or schema-invalid.",
-      `The RunPlan target is immutable: prepare only ${input.runPlan.appDir}, keep appDir equal to ${input.runPlan.appDir}, and do not use evidence from a runnable sibling application.`,
-      `Backend artifact validation failed with: ${input.readError}`,
-      "Repair only the Repo Preparation output contract. Inspect /workspace/repo and the durable artifacts, then write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
-      "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
-      "Do not patch only the named field. Rebuild and validate every productContext.featureInventory entry against the complete contract before finishing.",
-      "Inspect the source paths needed to replace productContext placeholders. Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
-      offCameraAuthenticationInstruction,
-      offlineFeatureStateInstruction,
-      "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
-      "Do not finish until the manifest exists at that exact path.",
-      "Do not write secrets into files. Replace external services with local fixtures or mocks.",
-      "Omit buildCommandUsed for development-server starts. If a monorepo build is required, select an app-scoped package script instead of the root aggregate build.",
-      "Do not add command-level working directory flags; workspace command resolution is backend-owned.",
-      `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
-      `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
-      `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
-      "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
-      appDirShapeInstruction,
-      envUsedShapeInstruction,
-      `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
-        input.previousResult,
-      )}`,
-      `Demo brief: ${JSON.stringify(input.demoBrief)}`,
-      // Never inline the repo profile: large monorepos serialize past the
-      // kernel argv limit (N65) and the file is already a listed artifact.
-      `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
-    ].join("\n"),
+    instructions: createRepairPromptInstructions({ approach, contract }),
     stage: "repo-preparation-repair",
   });
 }
@@ -4125,13 +6704,114 @@ function createRuntimePreparationRepairPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
   failureReport: ValidationReport;
   preparationManifest: PreparationManifest;
+  repoProfile: RepoProfile;
   runPlan: RunPlan;
+  strategyDirective?: string;
 }): string {
   const dependencyRepair = isDependencyRepairFailure(
     input.failureReport.failureClassification,
   );
+  const runtimeConfigurationRepair = runtimeConfigurationClassifications.has(
+    input.failureReport.failureClassification?.trim() ?? "",
+  );
+  // N159 (outline): when the classifier names a build-output entry the start
+  // command consumes, the omit-build-for-dev default is the exact rule the
+  // classifier is overruling — repeating it deadlocks the repair loop.
+  const missingBuildOutputRepair =
+    runtimeConfigurationRepair &&
+    /no declared build produces/.test(input.failureReport.logsSummary);
   const rebuildFromScreenedSource =
     input.failureReport.stage === "preparation-fidelity";
+  const approach = [
+    "Backend-owned submitted-code validation failed. Repair the prepared repo and update the PreparationManifest; do not claim success yourself.",
+    `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
+    `Failure summary: ${elideMiddle(input.failureReport.logsSummary, 16_000)}`,
+    `Browser observations: ${elideMiddle(JSON.stringify(input.failureReport.browserObservations), 8_000)}`,
+    `Blocked network attempts: ${elideMiddle(JSON.stringify(input.failureReport.blockedNetworkAttempts), 8_000)}`,
+    `Console errors: ${elideMiddle(JSON.stringify(input.failureReport.consoleErrors), 8_000)}`,
+    `Page errors: ${elideMiddle(JSON.stringify(input.failureReport.pageErrors), 8_000)}`,
+    `stderr evidence: ${elideMiddle(JSON.stringify(input.failureReport.stderrExcerpts), 8_000)}`,
+    `stdout evidence: ${elideMiddle(JSON.stringify(input.failureReport.stdoutExcerpts), 8_000)}`,
+    `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
+    ...(input.failureReport.featureVerdicts === undefined
+      ? []
+      : [
+          `The failure summary lists one verdict per prepared feature; read ${artifactPaths.featureVerificationGuide} for what each verdict means and the repair it calls for.`,
+        ]),
+    ...(input.artifactError === undefined
+      ? []
+      : [
+          `The previous repaired manifest was rejected: ${elideMiddle(input.artifactError, 8_000)}`,
+        ]),
+    ...(rebuildFromScreenedSource
+      ? [
+          "The repository was restored from the immutable screened source and the failed manifest was removed. Rebuild the complete preparation candidate and manifest from this clean baseline; no prior workspace edit remains.",
+        ]
+      : []),
+    ...(missingBuildOutputRepair
+      ? [
+          "The failure summary names a build-output entry the start command consumes but no declared build produces. Declare the buildCommandUsed that emits that exact entry; the omit-build-for-dev-server default does not apply to this failure.",
+        ]
+      : [
+          "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
+        ]),
+    ...(runtimeConfigurationRepair
+      ? [
+          "The backend classified this as a runtime-configuration error. Correct the backend-resolved build/start command fields that caused it; keep appDir, install, port, and base URL unchanged unless the same structured failure names one of them.",
+        ]
+      : [
+          "Preserve backend-resolved appDir, install, build, start, port, and base URL fields.",
+        ]),
+    ...(dependencyRepair
+      ? [
+          "Change only package manifests or recognized package-manager configuration required to resolve the reported dependency failure.",
+        ]
+      : []),
+    "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
+    "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams.",
+    offCameraAuthenticationInstruction,
+    offlineFeatureStateInstruction,
+    // The playbook is long; interpolate it only for the data-surface
+    // failure class it exists to repair (prompt diet, N65).
+    ...(input.failureReport.failureClassification ===
+    "empty/unmeaningful app state"
+      ? [dataFixturePlaybookInstruction]
+      : []),
+    ...createDataStrategyInstruction(input.repoProfile),
+    sealedNetworkWorldRulesInstruction,
+    ...(rebuildFromScreenedSource
+      ? []
+      : [`Current manifest: ${JSON.stringify(input.preparationManifest)}`]),
+    `Run plan: ${JSON.stringify(input.runPlan)}`,
+    `Demo brief: ${JSON.stringify(input.demoBrief)}`,
+    // Never inline the repo profile: large monorepos serialize past the
+    // kernel argv limit and OpenCode fails to launch (E2BIG, exit 126).
+    `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
+  ];
+  const contract = [
+    "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
+    `The selected browser application remains ${input.runPlan.appDir}; validation difficulty never authorizes switching to a runnable sibling.`,
+    ...(dependencyRepair
+      ? [
+          "Do not edit executable source, application scripts, workspace topology, or presentation files.",
+          "Do not rewrite the PreparationManifest; the accepted runtime, authentication, fixtures, and Product Context remain authoritative for an install repair.",
+        ]
+      : []),
+    "Do not edit lockfiles (bun.lock, package-lock.json, pnpm-lock.yaml, yarn.lock) in any repair; the backend regenerates and verifies them with the detected package manager after your changes.",
+    "Any authentication or integration change must be conditionally selected by the repository's active MAKEADEMO_DEMO gate and must keep the original behavior reachable on the non-demo branch; deleting original behavior fails fidelity validation.",
+    ...(dependencyRepair
+      ? ["Edit only the dependency files under /workspace/repo."]
+      : [
+          "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
+        ]),
+    "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
+    "Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
+    "Preserve every selected productContext feature, including every requested feature, and retain its source evidence and entryPaths.",
+    "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
+    "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
+    appDirShapeInstruction,
+    envUsedShapeInstruction,
+  ];
   return createStagePrompt({
     artifactPaths: [
       artifactPaths.repoProfile,
@@ -4139,68 +6819,84 @@ function createRuntimePreparationRepairPrompt(input: {
       artifactPaths.demoBrief,
       artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
+      artifactPaths.featureVerificationGuide,
       artifactPaths.preparationManifest,
       validationArtifactPath(input.failureReport.stage),
     ],
-    instructions: [
-      "Backend-owned submitted-code validation failed. Repair the prepared repo and update the PreparationManifest; do not claim success yourself.",
-      `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
-      `Failure summary: ${elideMiddle(input.failureReport.logsSummary, 16_000)}`,
-      `Browser observations: ${elideMiddle(JSON.stringify(input.failureReport.browserObservations), 8_000)}`,
-      `Blocked network attempts: ${elideMiddle(JSON.stringify(input.failureReport.blockedNetworkAttempts), 8_000)}`,
-      `Console errors: ${elideMiddle(JSON.stringify(input.failureReport.consoleErrors), 8_000)}`,
-      `Page errors: ${elideMiddle(JSON.stringify(input.failureReport.pageErrors), 8_000)}`,
-      `stderr evidence: ${elideMiddle(JSON.stringify(input.failureReport.stderrExcerpts), 8_000)}`,
-      `stdout evidence: ${elideMiddle(JSON.stringify(input.failureReport.stdoutExcerpts), 8_000)}`,
-      `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
-      ...(input.artifactError === undefined
-        ? []
-        : [
-            `The previous repaired manifest was rejected: ${elideMiddle(input.artifactError, 8_000)}`,
-          ]),
-      ...(rebuildFromScreenedSource
-        ? [
-            "The repository was restored from the immutable screened source and the failed manifest was removed. Rebuild the complete preparation candidate and manifest from this clean baseline; no prior workspace edit remains.",
-          ]
-        : []),
-      "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
-      "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
-      "Preserve backend-resolved appDir, install, build, start, port, and base URL fields unless the failure summary explicitly reports a runtime-configuration error.",
-      `The selected browser application remains ${input.runPlan.appDir}; validation difficulty never authorizes switching to a runnable sibling.`,
-      ...(dependencyRepair
-        ? [
-            "Change only package manifests or recognized package-manager configuration required to resolve the reported dependency failure. Do not edit executable source, application scripts, workspace topology, or presentation files.",
-            "Do not rewrite the PreparationManifest; the accepted runtime, authentication, fixtures, and Product Context remain authoritative for an install repair.",
-          ]
-        : []),
-      "Do not edit lockfiles (bun.lock, package-lock.json, pnpm-lock.yaml, yarn.lock) in any repair; the backend regenerates and verifies them with the detected package manager after your changes.",
-      "Any authentication or integration change must be conditionally selected by the repository's active MAKEADEMO_DEMO gate and must keep the original behavior reachable on the non-demo branch; deleting original behavior fails fidelity validation.",
-      "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
-      ...(dependencyRepair
-        ? ["Edit only the dependency files under /workspace/repo."]
-        : [
-            "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
-          ]),
-      "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
-      "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams. Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
-      "Preserve every selected productContext feature, including every requested feature, and retain its source evidence and entryPaths.",
-      offCameraAuthenticationInstruction,
-      offlineFeatureStateInstruction,
-      sealedNetworkWorldRulesInstruction,
-      "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
-      "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
-      appDirShapeInstruction,
-      envUsedShapeInstruction,
-      ...(rebuildFromScreenedSource
-        ? []
-        : [`Current manifest: ${JSON.stringify(input.preparationManifest)}`]),
-      `Run plan: ${JSON.stringify(input.runPlan)}`,
-      `Demo brief: ${JSON.stringify(input.demoBrief)}`,
-      // Never inline the repo profile: large monorepos serialize past the
-      // kernel argv limit and OpenCode fails to launch (E2BIG, exit 126).
-      `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
-    ].join("\n"),
+    instructions: createRepairPromptInstructions({
+      approach,
+      contract,
+      ...(input.strategyDirective === undefined
+        ? {}
+        : { directive: input.strategyDirective }),
+    }),
     stage: "repo-preparation-repair",
+  });
+}
+
+function createRepairPromptInstructions(input: {
+  approach: readonly string[];
+  contract: readonly string[];
+  directive?: string;
+}): string {
+  return [
+    "Approach guidance (default repair strategy):",
+    ...input.approach,
+    "",
+    ...(input.directive === undefined
+      ? []
+      : [
+          "Repair Strategy Directive (this round only):",
+          "This directive supersedes conflicting approach guidance above for this round. It never supersedes the repair contract below.",
+          input.directive,
+          "",
+        ]),
+    "Repair contract (always applies):",
+    ...input.contract,
+  ].join("\n");
+}
+
+function createRepairStrategyPrompt(input: {
+  budgets: RepairBudgetSnapshot;
+  failureReport: ValidationReport;
+  preparationManifest: PreparationManifest;
+  roundLedger: RepairRoundLedger;
+}): string {
+  return createStagePrompt({
+    artifactPaths: [
+      artifactPaths.repairRoundLedger,
+      artifactPaths.preparationManifest,
+      validationArtifactPath(input.failureReport.stage),
+      artifactPaths.repairAdvice,
+    ],
+    instructions: [
+      `Read ${artifactPaths.repairRoundLedger} as the complete comparative record of prior repair rounds.`,
+      `Read ${validationArtifactPath(input.failureReport.stage)} and ${artifactPaths.preparationManifest} for the current failure and resolved runtime.`,
+      `Current repair budget: ${JSON.stringify(input.budgets)}`,
+      "Choose exactly one bounded next move. You may not edit the repo, run commands, rewrite classifications, relax gates, or modify the manifest.",
+      'Write one JSON object in exactly one of these shapes: {"kind":"continue"}; {"kind":"escalate-hint","hint":"..."}; {"kind":"directive","directive":"..."}; {"kind":"stop","reason":"..."}; {"kind":"spend-bonus-round"}.',
+      "Use escalate-hint for additive evidence. Use directive only when the default repair approach itself must change; it lasts one round and never overrides the repair contract. Recommend stop only for repeated resource exhaustion or a wedged target; deterministic code retains the stop veto.",
+      `Write only the completed JSON object to ${artifactPaths.repairAdvice}. After writing it, do not call another tool.`,
+    ].join("\n"),
+    stage: "repair-strategy",
+  });
+}
+
+function createRunTriagePrompt(input: {
+  repoProfile: RepoProfile;
+  submittedCodeSandboxClass: SubmittedCodeSandboxClass;
+}): string {
+  return createStagePrompt({
+    artifactPaths: [artifactPaths.repoProfile, artifactPaths.runTriageAdvice],
+    instructions: [
+      `Read ${artifactPaths.repoProfile} for the backend-resolved repository profile. You may also read the repository under /workspace/repo to assess lifecycle weight: workspace-graph breadth, build requirements, service migrations, and seed paths.`,
+      `This run's submitted-code sandbox class is ${input.submittedCodeSandboxClass}. The standard class reserves roughly 2 vCPUs and 4 GiB of memory; the heavyweight class is the larger bounded reservation for capacity-classified repositories.`,
+      "Advise how Repo Preparation should shape a demo runtime that fits this envelope. Prefer lighter lifecycles: a development server over a production build, the narrowest workspace closure that serves the demo, and fixtures or seeds over service migrations.",
+      "You may not edit the repository, run lifecycle commands, change the run plan, or fail the run; your advice is purely additive steering.",
+      `Write one JSON object of the shape {"preparationStrategyHints":["..."],"envelopeFitWarning":"..."} to ${artifactPaths.runTriageAdvice}. Use at most 8 short hints. envelopeFitWarning is optional; include it only to state a concrete risk that the default lifecycle will not fit the sandbox envelope.`,
+      "After writing it, do not call another tool.",
+    ].join("\n"),
+    stage: "run-triage",
   });
 }
 
@@ -4230,10 +6926,11 @@ function createFlowPlanningPrompt(artifactError?: string): string {
     instructions: [
       "Plan one feature-scoped flow entry for every maker-requested feature using PreparationManifest productContext, AppMap, and ActionCatalog evidence.",
       "When the maker supplied requested features, include exactly that normalized set with no omissions or extra feature entries. Duration is a pacing target and never permission to drop a feature.",
-      "When the maker supplied no features, select exactly min(3, productContext.featureInventory.length) source-backed features with the strongest browser evidence.",
+      "When the maker supplied no features, select exactly min(3, groundable feature count) source-backed features with the strongest browser evidence. A feature is groundable only when the ActionCatalog tags a visible assertion plus a usable interaction for it outside login/auth walls; a click whose navigationDestination has an auth-wall route shape is auth-degraded and unusable.",
+      "Record every ungroundable inventory feature in droppedFeatures with the reason it cannot be demonstrated. Never select an ungroundable feature and never drop a groundable one.",
       "Each feature must use its prepared featureId and only ActionCatalog actions tagged with that featureId.",
       "Preserve each selected feature's prepared display label so backend-owned feature introduction cards remain source-grounded.",
-      "For each feature, select a browser-exercised ActionCatalog interaction (exercised=true) and a visible assertion. Navigation does not replace an available exercised interaction. Only when no exercised action exists for a genuinely read-only feature may you use navigation plus a unique visible assertion. At least one selected action must not be reused by another feature.",
+      "For each feature, select a non-auth-degraded browser-exercised ActionCatalog interaction (exercised=true) and a visible assertion. A maker-requested authentication feature is the sole exception for auth-destination evidence. Navigation does not replace an available exercised interaction. Only when no exercised action exists for a genuinely read-only feature may you use navigation plus a unique visible assertion. At least one selected action must not be reused by another feature.",
       "Read /workspace/.makeademo/flow-spec-contract.json and satisfy every required field, property type, and invariant it defines.",
       "Write a valid FlowSpec JSON object to /workspace/.makeademo/flow-spec.json.",
       "Do not invent alternate field names or object-shaped steps. Every steps entry and every repairConstraints entry must be a string.",

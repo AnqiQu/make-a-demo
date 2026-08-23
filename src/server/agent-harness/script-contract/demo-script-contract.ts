@@ -32,7 +32,10 @@ import {
   readScriptCandidate,
   readValidationReport,
 } from "../schemas/artifacts";
-import { findRoutePlaceholder } from "../tools/route-placeholders";
+import {
+  findMissingValueSegment,
+  findRoutePlaceholder,
+} from "../tools/route-placeholders";
 import { assertCanonicalDemoNarrative } from "./demo-narrative";
 import { assertCaptureReadyScriptQuality } from "./script-quality";
 
@@ -245,6 +248,7 @@ export function createDemoScriptContract(): DemoScriptContract {
       "scene",
       "step",
       "page.goto",
+      "page.waitForURL",
       "page.locator",
       "page.getByRole",
       "page.getByLabel",
@@ -310,11 +314,10 @@ export function createDemoScriptContract(): DemoScriptContract {
 }
 
 /**
- * Prepends a grounded goto to every browser Scene that does not begin with
- * one: a Scene's route is already known from its first action's ActionCatalog
- * evidence, so navigation is backend-derived infrastructure and script agents
- * never have to author it. Idempotent; Scenes whose route has no observed
- * navigate action are left untouched.
+ * Adds backend-owned navigation metadata: a grounded goto for every browser
+ * Scene that needs one, plus the observed destination for every click that
+ * changed URL during exploration. Idempotent; agents never have to infer or
+ * author either piece of navigation infrastructure.
  */
 export function ensureSceneNavigation(input: {
   actionCatalog: ActionCatalog;
@@ -337,6 +340,36 @@ export function ensureSceneNavigation(input: {
       .map((action) => [action.route, action]),
   );
   let changed = false;
+  const enrichClickNavigation = (actions: unknown[]): unknown[] => {
+    let actionsChanged = false;
+    const enriched = actions.map((action) => {
+      if (typeof action !== "object" || action === null) return action;
+      const record = action as Record<string, unknown>;
+      if (record.type !== "click") return action;
+      const source =
+        typeof record.sourceActionId === "string"
+          ? actionsById.get(record.sourceActionId)
+          : undefined;
+      // N158: a catalog destination carrying a missing-value interpolation
+      // is unreachable — strip it instead of injecting a guaranteed-dead
+      // waitForURL the repair loop could never fix.
+      const sourceDestination =
+        source?.kind === "click" ? source.navigationDestination : undefined;
+      const destination =
+        sourceDestination !== undefined &&
+        findMissingValueSegment(sourceDestination) !== undefined
+          ? undefined
+          : sourceDestination;
+      if (record.navigationDestination === destination) return action;
+      actionsChanged = true;
+      changed = true;
+      const { navigationDestination: _ignored, ...withoutDestination } = record;
+      return destination === undefined
+        ? withoutDestination
+        : { ...withoutDestination, navigationDestination: destination };
+    });
+    return actionsChanged ? enriched : actions;
+  };
   const augmentedScenes = scenes.map((scene) => {
     if (typeof scene !== "object" || scene === null) {
       return scene;
@@ -348,14 +381,14 @@ export function ensureSceneNavigation(input: {
     ) {
       return scene;
     }
-    const actions = record.actions as unknown[];
+    const actions = enrichClickNavigation(record.actions as unknown[]);
     const first = actions[0];
     if (
       typeof first === "object" &&
       first !== null &&
       (first as Record<string, unknown>).type === "goto"
     ) {
-      return scene;
+      return actions === record.actions ? scene : { ...record, actions };
     }
     const firstGrounded = actions.find(
       (action): action is Record<string, unknown> =>
@@ -370,7 +403,7 @@ export function ensureSceneNavigation(input: {
     const navigate =
       route === undefined ? undefined : navigateByRoute.get(route);
     if (navigate === undefined) {
-      return scene;
+      return actions === record.actions ? scene : { ...record, actions };
     }
     changed = true;
     return {
@@ -386,6 +419,10 @@ export function ensureSceneNavigation(input: {
       ],
     };
   });
+  const setupActions = (script as { setupActions?: unknown }).setupActions;
+  const augmentedSetupActions = Array.isArray(setupActions)
+    ? enrichClickNavigation(setupActions)
+    : setupActions;
   if (!changed) {
     return input.scriptCandidate;
   }
@@ -394,6 +431,9 @@ export function ensureSceneNavigation(input: {
     scriptJsonContent: {
       ...(script as Record<string, unknown>),
       scenes: augmentedScenes,
+      ...(Array.isArray(setupActions)
+        ? { setupActions: augmentedSetupActions }
+        : {}),
     },
   };
 }
@@ -730,6 +770,26 @@ function assertActionMatchesCatalog(
       `Browser action ${action.id} targets ${action.path} but its observed ActionCatalog route is ${sourceAction.route}`,
     );
   }
+  // N158 (excalidraw, 2026-08-19): the app interpolated a missing value into
+  // its own href and the capture waited forever on /undefined/plus. Catalog
+  // agreement is no defense — the compiled waitForURL would never resolve.
+  if (action.type === "click" && action.navigationDestination !== undefined) {
+    const missingValue = findMissingValueSegment(action.navigationDestination);
+    if (missingValue !== undefined) {
+      throw new Error(
+        `Browser action ${action.id} navigationDestination ${action.navigationDestination} carries a missing-value interpolation ("${missingValue}"); the app never serves that path, so the click must omit its navigation destination`,
+      );
+    }
+  }
+  if (
+    action.type === "click" &&
+    action.navigationDestination !== undefined &&
+    action.navigationDestination !== sourceAction.navigationDestination
+  ) {
+    throw new Error(
+      `Browser action ${action.id} navigationDestination does not match its ActionCatalog evidence`,
+    );
+  }
   // Catalog agreement is no defense: when both carry a placeholder the
   // capture would navigate it verbatim into a guaranteed 404 (outline,
   // 2026-08-08).
@@ -809,8 +869,11 @@ function assertActionMatchesCatalog(
         );
       }
       if (!browserLocatorsEqual(action.locator, candidate.locator)) {
+        // Both locators are named (N125): without them the repair agent
+        // must guess which side drifted, and the ping-pong breaker keys on
+        // this message's stable prefix.
         throw new Error(
-          `Browser action ${action.id} locator does not match browser-verified candidate ${candidate.id}`,
+          `Browser action ${action.id} locator does not match browser-verified candidate ${candidate.id}: the script wrote ${JSON.stringify(action.locator)} but the verified candidate is ${JSON.stringify(candidate.locator)}`,
         );
       }
     } else {

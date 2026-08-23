@@ -1,9 +1,27 @@
-import type { SubmittedAppExplorationResult } from "../app-explorer/submitted-app-explorer";
+import { createHash } from "node:crypto";
+import {
+  type BrowserAction,
+  readBrowserActions,
+} from "../../pipeline/06-footage-capture/browser-action-plan";
+import { readLastErrorCauseLine } from "../app-explorer/stderr-error-signal";
+import type {
+  CaptureLocatorFailure,
+  SubmittedAppExplorationResult,
+} from "../app-explorer/submitted-app-explorer";
+import type { WorkspaceJobDeadline } from "../daytona/deadline-capped-workspace";
+import { selectSubmittedCodeSandboxClass } from "../daytona/submitted-code-sandbox-class";
 import {
   AgentHarnessJobDeadlineError,
   type AgentHarnessWorkspace,
+  type SubmittedCodeSandboxClass,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
+import {
+  type RepairBudgetSnapshot,
+  type RepairRoundLedger,
+  type RepairRoundSource,
+  createRepairRoundLedger,
+} from "../repair/repair-round-ledger";
 import {
   classifyRepairRoute,
   isDependencyRepairFailure,
@@ -11,9 +29,12 @@ import {
   repairBudgetExhaustedMessage,
 } from "../repair/repair-router";
 import {
+  type FidelityCandidate,
+  createPreparationFidelityReport,
   isPackageManagerLockfilePath,
   readDependencyRepairDelta,
-  validatePreparationFidelity,
+  readPreparationFidelityCandidates,
+  reconcileFidelityAdjudication,
 } from "../repo-preparation/preparation-fidelity";
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
 import { assertPreparedFeatureInventory } from "../repo-preparation/prepared-feature-inventory";
@@ -21,6 +42,7 @@ import { profileRepo } from "../repo-profiler/repo-profiler";
 import type { SecretQuarantineManifest } from "../repo-security/secret-quarantine";
 import { screenStaticRepoSecurity } from "../repo-security/static-repo-security";
 import {
+  createWorkspaceGraphBuildCommand,
   expandPreparationInstallScopeForMissingWorkspace,
   resolvePreparationRuntime,
 } from "../run-planner/runtime-target-resolution";
@@ -29,6 +51,8 @@ import {
   type ActionCatalog,
   type AppMap,
   DEMO_SCRIPT_OUTPUT_PATH,
+  type FeatureVerdict,
+  type FidelityAdjudicationVerdict,
   type FlowSpec,
   type PipelineRunManifest,
   type PreparationManifest,
@@ -45,6 +69,8 @@ import {
   readScriptCandidate,
   readValidationReport,
 } from "../schemas/artifacts";
+import type { RepairAdvice } from "../schemas/repair-advice.schema";
+import type { RunTriageAdvice } from "../schemas/run-triage-advice.schema";
 import { ensureSceneNavigation } from "../script-contract/demo-script-contract";
 import { readDisallowedScriptWritingChanges } from "../script-generation/read-only-boundary";
 import {
@@ -58,6 +84,7 @@ import {
 } from "./preparation-fallback";
 
 export type AgentHarnessPipelineInput = {
+  archiveSizeBytes?: number;
   commitSha?: string;
   demoBrief: {
     demoLengthSeconds?: number;
@@ -78,7 +105,56 @@ type AgentHarnessArtifactStore = {
   writeJson(path: string, value: unknown): Promise<void>;
 };
 
+/**
+ * Evidence scope for a preparation validation that follows a repair.
+ * Implementations must freshly re-probe prior grounded features, fully
+ * explore prior failures and diff-touched features, and never carry a prior
+ * verdict when its re-probe fails or is inconclusive.
+ */
+export type RepairFeatureVerification = {
+  priorFeatureVerdicts: readonly FeatureVerdict[];
+  touchedFeatureIds: readonly string[];
+};
+
 export type AgentHarnessPipelineDependencies = {
+  /**
+   * Advises one bounded next move from the completed repair ledger.
+   * Implementations must return undefined for absence, timeout, execution
+   * failure, or schema-invalid output so deterministic repair behavior stands.
+   */
+  adviseRepairStrategy?(input: {
+    budgets: RepairBudgetSnapshot;
+    failureReport: ValidationReport;
+    preparationManifest: PreparationManifest;
+    roundLedger: RepairRoundLedger;
+  }): Promise<RepairAdvice | undefined>;
+  /**
+   * Advises pre-run preparation strategy once, at run start, for a run whose
+   * deterministic capacity classification is heavyweight. Advisory only:
+   * hints steer the Repo Preparation prompt and the envelope-fit warning
+   * annotates the run report. Implementations must return undefined for
+   * absence, timeout, execution failure, or schema-invalid output; triage
+   * can never fail, block, or stall a run.
+   */
+  adviseRunTriage?(input: {
+    repoProfile: RepoProfile;
+    submittedCodeSandboxClass: SubmittedCodeSandboxClass;
+  }): Promise<RunTriageAdvice | undefined>;
+  /**
+   * Adjudicates preparation-fidelity candidate vetoes with one agent judge
+   * command in the preparation sandbox. Implementations must source verdicts
+   * from a schema-validated artifact the judge wrote and return one verdict
+   * per candidate index they judged; returning undefined (or throwing a
+   * non-infrastructure error) reports the stage unadjudicated and every
+   * candidate verdict stands. The judge can only rescue false vetoes — its
+   * absence must never weaken the gate.
+   */
+  adjudicateFidelityCandidates?(input: {
+    candidates: FidelityCandidate[];
+    preparationManifest: PreparationManifest;
+    workspace: AgentHarnessWorkspace;
+    workspaceDiff: PreparationWorkspaceDiff;
+  }): Promise<FidelityAdjudicationVerdict[] | undefined>;
   artifactStore?: AgentHarnessArtifactStore;
   /**
    * Fingerprints every workspace path Script Writing may have touched. The
@@ -98,7 +174,13 @@ export type AgentHarnessPipelineDependencies = {
   capturePreparationWorkspaceDiff: (input: {
     workspace: AgentHarnessWorkspace;
   }) => Promise<PreparationWorkspaceDiff>;
+  /**
+   * Creates the paired agent/submitted-code workspace. Implementations must
+   * cap every command they run for this job at `jobDeadline.atMs` (N156): a
+   * stage may never be granted more time than the job has left.
+   */
   createWorkspace(input: {
+    jobDeadline: WorkspaceJobDeadline;
     repoProfile: RepoProfile;
   }): Promise<AgentHarnessWorkspace>;
   /**
@@ -109,11 +191,25 @@ export type AgentHarnessPipelineDependencies = {
     preparationManifest: PreparationManifest;
     repoProfile: RepoProfile;
     runPlan: RunPlan;
+    /**
+     * The Demo Script about to be filmed. The reset re-probes every scene's
+     * navigation route on the freshly restarted app, so a route that reverted
+     * to failing after the reset fails the gate instead of being filmed.
+     */
+    scriptCandidate: ScriptCandidate;
     workspace: AgentHarnessWorkspace;
   }): Promise<ValidationReport>;
   exploreApp(input: {
     actionCatalogPath: string;
     appMapPath: string;
+    /**
+     * Present only on locator-regrounding calls (N125): the typed identity
+     * of the capture-failed action — its verified locator and candidate id,
+     * the scene's action prefix ahead of it, and the failure screenshot —
+     * so exploration can re-verify the candidate in the context capture
+     * will replay it in, instead of from a fresh route load.
+     */
+    captureFailure?: CaptureLocatorFailure;
     demoBrief: AgentHarnessPipelineInput["demoBrief"];
     preparationManifest: PreparationManifest;
     preparationValidation: ValidationReport;
@@ -130,11 +226,21 @@ export type AgentHarnessPipelineDependencies = {
   prepareRepo(input: {
     demoBrief: AgentHarnessPipelineInput["demoBrief"];
     normalizedSupportingDocuments: AgentHarnessPipelineInput["normalizedSupportingDocuments"];
+    /**
+     * Advisory strategy hints from run triage. Implementations should
+     * surface them to the preparation agent as additive guidance that never
+     * supersedes standing contract text.
+     */
+    preparationStrategyHints?: readonly string[];
     repoProfile: RepoProfile;
     repoSourcePaths: string[];
     runPlan: RunPlan;
     workspace: AgentHarnessWorkspace;
-  }): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }>;
+  }): Promise<{
+    candidateFingerprint?: string;
+    manifest: PreparationManifest;
+    opencodeSessionId?: string;
+  }>;
   repairPreparation?(input: {
     demoBrief: AgentHarnessPipelineInput["demoBrief"];
     failureReport: ValidationReport;
@@ -143,8 +249,18 @@ export type AgentHarnessPipelineDependencies = {
     repoProfile: RepoProfile;
     repoSourcePaths: string[];
     runPlan: RunPlan;
+    /**
+     * One-round repair-strategy steering. Implementations should place this
+     * after default approach guidance and before the invariant repair
+     * contract, and must not retain it for later rounds.
+     */
+    strategyDirective?: string;
     workspace: AgentHarnessWorkspace;
-  }): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }>;
+  }): Promise<{
+    candidateFingerprint?: string;
+    manifest: PreparationManifest;
+    opencodeSessionId?: string;
+  }>;
   /**
    * Restores the last Preparation candidate accepted by backend fidelity
    * validation. Implementations must verify the screened-source revision and
@@ -189,6 +305,8 @@ export type AgentHarnessPipelineDependencies = {
     installDependencies?: boolean;
     /** Regenerate the package-manager lockfile before frozen installation. */
     reconcileLockfile?: boolean;
+    /** Scope browser verification from the immediately preceding repair. */
+    repairFeatureVerification?: RepairFeatureVerification;
     preparationManifest: PreparationManifest;
     repoProfile: RepoProfile;
     runPlan: RunPlan;
@@ -229,6 +347,22 @@ export type AgentHarnessPipelineResult = {
 };
 
 export type AgentHarnessPipelineOptions = {
+  /**
+   * Films the statically and dynamically accepted Demo Script from the fresh
+   * capture runtime. A failed browser action returns the same typed
+   * ValidationReport shape as Capture Path Validation so the orchestrator can
+   * spend the bounded Script Repair lane, re-run every gate, and retake.
+   */
+  captureAcceptedScript?(input: {
+    captureRuntimeReset: {
+      artifactPath: string;
+      stage: "capture-runtime-reset";
+      status: "passed";
+    };
+    preparationManifest: PreparationManifest;
+    scriptCandidate: ScriptCandidate;
+    workspace: AgentHarnessWorkspace;
+  }): Promise<ValidationReport>;
   destroyWorkspaceOnCompletion?: boolean;
   /** Wall-clock budget for the whole job; default 90 minutes. */
   jobDeadlineMs?: number;
@@ -289,6 +423,7 @@ export async function runAgentHarnessPipeline(
     }
   };
   let primaryError: unknown;
+  let runTriage: RunTriageAdvice | undefined;
   let preparationWorkspaceDiff: PreparationWorkspaceDiff | undefined;
   let preparationWorkspaceDiffCaptureAttempted = false;
   let preparationWorkspaceMutated = false;
@@ -343,6 +478,9 @@ export async function runAgentHarnessPipeline(
       dependencies,
       artifactPaths.repoProfile,
       profileRepo({
+        ...(input.archiveSizeBytes === undefined
+          ? {}
+          : { archiveSizeBytes: input.archiveSizeBytes }),
         ...optionalString("commitSha", input.commitSha),
         files: input.files,
         ...(input.secretQuarantineManifest === undefined
@@ -358,7 +496,11 @@ export async function runAgentHarnessPipeline(
       }),
     );
 
-    workspace = await dependencies.createWorkspace({ repoProfile });
+    workspace = await dependencies.createWorkspace({
+      jobDeadline: { atMs: jobDeadlineAtMs, totalMs: jobDeadlineMs },
+      repoProfile,
+    });
+    runTriage = await consultRunTriage({ dependencies, repoProfile });
     runPlan = await runAsyncStage(
       "run-plan-synthesis",
       stageStatuses,
@@ -388,6 +530,7 @@ export async function runAgentHarnessPipeline(
     try {
       await persistRunManifest({
         dependencies,
+        ...optionalString("envelopeFitWarning", runTriage?.envelopeFitWarning),
         input,
         opencodeSessionIds,
         stageStatuses,
@@ -420,6 +563,12 @@ export async function runAgentHarnessPipeline(
         dependencies.prepareRepo({
           demoBrief: input.demoBrief,
           normalizedSupportingDocuments: input.normalizedSupportingDocuments,
+          ...(runTriage === undefined ||
+          runTriage.preparationStrategyHints.length === 0
+            ? {}
+            : {
+                preparationStrategyHints: runTriage.preparationStrategyHints,
+              }),
           repoProfile,
           repoSourcePaths: input.files.map((file) => file.path),
           runPlan,
@@ -448,9 +597,23 @@ export async function runAgentHarnessPipeline(
       bonusRounds: 0,
       totalAttempts: 0,
     };
+    const repairRoundSources: RepairRoundSource[] = [];
     const preparationRepairAttemptsByPhase: Record<string, number> = {};
     const scriptRepairAttemptsByPhase: Record<string, number> = {};
     const dynamicActionFailureCounts: Record<string, number> = {};
+    const captureProtocolFailureCounts: Record<string, number> = {};
+    // N125(4): the ping-pong breaker's chain state. A capture-path locator
+    // failure arms `pendingCaptureLocatorFailure`; a static locator-equality
+    // rejection naming the same action completes one alternation pair. Two
+    // pairs on one action mean the two validation channels contradict each
+    // other — capture rejects the browser-verified candidate at replay while
+    // the static contract rejects every locator that differs from it — so
+    // the run stops with the combined diagnosis instead of silently
+    // exhausting both repair budgets.
+    let pendingCaptureLocatorFailure:
+      | { actionId: string; summary: string }
+      | undefined;
+    let locatorAlternation: { actionId: string; pairs: number } | undefined;
     const excludedCatalogActionIds = new Set<string>();
     const withoutExcludedActions = (catalog: ActionCatalog): ActionCatalog =>
       excludedCatalogActionIds.size === 0
@@ -471,6 +634,7 @@ export async function runAgentHarnessPipeline(
       preparationManifest,
       preparationRepairBudget,
       preparationRepairAttemptsByPhase,
+      repairRoundSources,
       recordOpenCodeSessionId,
       repoPreparationRepairLimit,
       repoProfile,
@@ -497,6 +661,7 @@ export async function runAgentHarnessPipeline(
         preparationManifest,
         preparationRepairBudget,
         preparationRepairAttemptsByPhase,
+        repairRoundSources,
         recordOpenCodeSessionId,
         repoPreparationRepairLimit,
         repoProfile,
@@ -692,6 +857,32 @@ export async function runAgentHarnessPipeline(
           staticRepairAttempts,
         );
         if (staticContractValidation.status === "failed") {
+          const equalityRejectionActionId =
+            /Browser action ([A-Za-z0-9_][A-Za-z0-9_-]*) locator does not match browser-verified candidate/.exec(
+              staticContractValidation.logsSummary,
+            )?.[1];
+          if (
+            equalityRejectionActionId !== undefined &&
+            pendingCaptureLocatorFailure?.actionId === equalityRejectionActionId
+          ) {
+            const pairs =
+              locatorAlternation?.actionId === equalityRejectionActionId
+                ? locatorAlternation.pairs + 1
+                : 1;
+            locatorAlternation = {
+              actionId: equalityRejectionActionId,
+              pairs,
+            };
+            if (pairs >= 2) {
+              throw new Error(
+                `Locator ping-pong on browser action ${equalityRejectionActionId}: capture-path validation keeps failing its browser-verified locator at replay, while static contract validation rejects every locator that differs from that candidate. The two channels contradict each other — the candidate's evidence does not hold at replay, so the fix is re-grounded evidence or preparation repair, not another script repair. Capture failure: ${pendingCaptureLocatorFailure.summary} Static rejection: ${staticContractValidation.logsSummary}`,
+              );
+            }
+          } else if (equalityRejectionActionId === undefined) {
+            // A static failure of any other shape breaks the alternation.
+            locatorAlternation = undefined;
+          }
+          pendingCaptureLocatorFailure = undefined;
           scriptCandidate = await repairScriptCandidate({
             actionCatalog,
             appMap,
@@ -731,6 +922,7 @@ export async function runAgentHarnessPipeline(
               preparationManifest,
               repoProfile,
               runPlan,
+              scriptCandidate,
               workspace: requireWorkspace(workspace),
             })),
             stage: "capture-path-preflight",
@@ -762,7 +954,87 @@ export async function runAgentHarnessPipeline(
           captureRepairAttempts,
         );
         if (capturePathValidation.status === "passed") {
-          break;
+          const resetValidation = await runValidationStage(
+            "capture-runtime-reset",
+            dependencies,
+            artifactPaths.captureRuntimeReset,
+            validationReports,
+            stageStatuses,
+            stageTimings,
+            () =>
+              dependencies.resetCaptureRuntime({
+                preparationManifest,
+                repoProfile,
+                runPlan,
+                scriptCandidate,
+                workspace: requireWorkspace(workspace),
+              }),
+            validationAttemptCounts,
+          );
+          assertValidationPassed(resetValidation);
+          const captureAcceptedScript = options.captureAcceptedScript;
+          if (captureAcceptedScript === undefined) {
+            break;
+          }
+
+          assertJobWithinDeadline();
+          const footageRepairAttempts =
+            scriptRepairAttemptsByPhase["footage-capture"] ?? 0;
+          const footageCaptureValidation = await runValidationStage(
+            "footage-capture",
+            dependencies,
+            artifactPaths.footageCaptureValidation,
+            validationReports,
+            stageStatuses,
+            stageTimings,
+            () =>
+              captureAcceptedScript({
+                captureRuntimeReset: {
+                  artifactPath: artifactPaths.captureRuntimeReset,
+                  stage: "capture-runtime-reset",
+                  status: "passed",
+                },
+                preparationManifest,
+                scriptCandidate,
+                workspace: requireWorkspace(workspace),
+              }),
+            validationAttemptCounts,
+            footageRepairAttempts,
+          );
+          if (footageCaptureValidation.status === "passed") {
+            break;
+          }
+          if (
+            classifyRepairRoute(footageCaptureValidation) ===
+            "repo-preparation-repair"
+          ) {
+            await revalidatePreparation(footageCaptureValidation);
+            continue pipelineAttempt;
+          }
+
+          scriptCandidate = await repairScriptCandidate({
+            actionCatalog,
+            appMap,
+            dependencies,
+            failureReport: footageCaptureValidation,
+            flowSpec,
+            preparationManifest,
+            repoProfile,
+            scriptCandidate,
+            scriptRepairAttempts: footageRepairAttempts,
+            scriptRepairLimit,
+            stageStatuses,
+            stageTimings,
+            workspace: requireWorkspace(workspace),
+          });
+          scriptRepairAttemptsByPhase["footage-capture"] =
+            footageRepairAttempts + 1;
+          await writeArtifact(
+            dependencies,
+            artifactPaths.scriptCandidate,
+            scriptCandidate,
+          );
+          continue;
         }
 
         if (
@@ -772,6 +1044,45 @@ export async function runAgentHarnessPipeline(
         ) {
           transientCaptureRetries += 1;
           continue;
+        }
+
+        const captureProtocolFingerprint =
+          readCaptureProtocolFailureFingerprint(capturePathValidation);
+        if (captureProtocolFingerprint !== undefined) {
+          const failures =
+            (captureProtocolFailureCounts[captureProtocolFingerprint] ?? 0) + 1;
+          captureProtocolFailureCounts[captureProtocolFingerprint] = failures;
+          if (failures > 1) {
+            throw new Error(
+              `${capturePathValidation.stage} failed: ${capturePathValidation.logsSummary}. ${repairBudgetExhaustedMessage(
+                {
+                  attempts: 1,
+                  budgetLabel: "repeated failure",
+                  route: "script-repair",
+                },
+              )}`,
+            );
+          }
+        }
+
+        // N125(4): a locator failure arms the breaker's pending half-pair;
+        // any other capture verdict breaks the alternation chain.
+        if (capturePathValidation.failureClassification === "locator failure") {
+          const failedActionId =
+            capturePathValidation.failedAction?.actionId ??
+            /Browser action ([A-Za-z0-9_][A-Za-z0-9_-]*) failed/.exec(
+              capturePathValidation.logsSummary,
+            )?.[1];
+          pendingCaptureLocatorFailure =
+            failedActionId === undefined
+              ? undefined
+              : {
+                  actionId: failedActionId,
+                  summary: capturePathValidation.logsSummary,
+                };
+        } else {
+          pendingCaptureLocatorFailure = undefined;
+          locatorAlternation = undefined;
         }
 
         if (
@@ -812,6 +1123,10 @@ export async function runAgentHarnessPipeline(
           !flowReplanned &&
           capturePathValidation.failureClassification === "locator failure"
         ) {
+          const captureFailure = readCaptureLocatorFailure(
+            capturePathValidation,
+            scriptCandidate,
+          );
           const regrounding = await runAsyncStage(
             "locator-regrounding",
             stageStatuses,
@@ -820,6 +1135,7 @@ export async function runAgentHarnessPipeline(
               dependencies.exploreApp({
                 actionCatalogPath: artifactPaths.actionCatalog,
                 appMapPath: artifactPaths.appMap,
+                ...(captureFailure === undefined ? {} : { captureFailure }),
                 demoBrief: input.demoBrief,
                 preparationManifest,
                 preparationValidation,
@@ -851,6 +1167,19 @@ export async function runAgentHarnessPipeline(
               regroundingValidation,
             ),
           ]);
+          // N125(3): a regrounding that honestly reports app-state
+          // divergence (the candidate stayed missing after prefix replay)
+          // is a preparation defect, not a reason to kill the run — the
+          // pipeline re-enters from validated preparation like every other
+          // preparation-routed capture failure.
+          if (
+            regroundingValidation.status === "failed" &&
+            classifyRepairRoute(regroundingValidation) ===
+              "repo-preparation-repair"
+          ) {
+            await revalidatePreparation(regroundingValidation);
+            continue pipelineAttempt;
+          }
           assertValidationPassed(regroundingValidation);
           if (regrounding.kind !== "artifacts") {
             throw new Error(
@@ -896,23 +1225,6 @@ export async function runAgentHarnessPipeline(
         );
       }
 
-      const resetValidation = await runValidationStage(
-        "capture-runtime-reset",
-        dependencies,
-        artifactPaths.captureRuntimeReset,
-        validationReports,
-        stageStatuses,
-        stageTimings,
-        () =>
-          dependencies.resetCaptureRuntime({
-            preparationManifest,
-            repoProfile,
-            runPlan,
-            workspace: requireWorkspace(workspace),
-          }),
-        validationAttemptCounts,
-      );
-      assertValidationPassed(resetValidation);
       break;
     }
 
@@ -922,6 +1234,7 @@ export async function runAgentHarnessPipeline(
 
     const pipelineRunManifest = await persistRunManifest({
       dependencies,
+      ...optionalString("envelopeFitWarning", runTriage?.envelopeFitWarning),
       input,
       opencodeSessionIds,
       stageStatuses,
@@ -1014,6 +1327,7 @@ export async function runAgentHarnessPipeline(
     try {
       await persistRunManifest({
         dependencies,
+        ...optionalString("envelopeFitWarning", runTriage?.envelopeFitWarning),
         input,
         opencodeSessionIds,
         stageStatuses,
@@ -1044,6 +1358,10 @@ export async function runAgentHarnessPipeline(
           try {
             await persistRunManifest({
               dependencies,
+              ...optionalString(
+                "envelopeFitWarning",
+                runTriage?.envelopeFitWarning,
+              ),
               input,
               opencodeSessionIds,
               stageStatuses,
@@ -1290,6 +1608,7 @@ async function ensureValidPreparation(input: {
   preparationManifest: PreparationManifest;
   preparationRepairBudget: PreparationRepairBudget;
   preparationRepairAttemptsByPhase: Record<string, number>;
+  repairRoundSources: RepairRoundSource[];
   recordOpenCodeSessionId: (sessionId?: string) => void;
   repoPreparationRepairLimit: number;
   repoProfile: RepoProfile;
@@ -1308,9 +1627,31 @@ async function ensureValidPreparation(input: {
   let failure = input.initialFailure;
   let acceptedPreparation = input.acceptedPreparation;
   let activeRepairFailure: ValidationReport | undefined;
+  let pendingLedgerRound:
+    | {
+        advice: RepairAdvice | undefined;
+        adviceApplied: boolean;
+        candidateFingerprint: string;
+        candidateManifest: PreparationManifest;
+        failureReport: ValidationReport;
+        fingerprint: string;
+      }
+    | undefined;
+  let chargedLedgerRound:
+    | (NonNullable<typeof pendingLedgerRound> & {
+        resolvedManifest: PreparationManifest;
+        workspaceDiff: PreparationWorkspaceDiff;
+      })
+    | undefined;
   let dependencyRepair = false;
   let reconcileLockfile = false;
   let repairBaseline: PreparationWorkspaceDiff | undefined;
+  let manifestBaseline: PreparationManifest | undefined;
+  // Set when a repair ran this round; applied only once the repair proves
+  // real. A no-op repair is a non-attempt and spends no budget (N109),
+  // apart from the grace-bounded safeguard below.
+  let pendingRepairCharge: (() => void) | undefined;
+  let unchargedNoopRepairs = 0;
   let lastWorkspaceDiff = acceptedPreparation?.workspaceDiff;
   // The preflight attempt whose gated install last succeeded in this
   // sandbox. Repair rounds whose diff leaves dependency inputs unchanged
@@ -1358,41 +1699,94 @@ async function ensureValidPreparation(input: {
         );
         failure = undefined;
       } else {
+        const repairFailure = appendWorkspaceGraphBuildEscalation({
+          failure,
+          preparationRepairBudget: input.preparationRepairBudget,
+          repoProfile: input.repoProfile,
+          runPlan: input.runPlan,
+        });
         const manifestBeforeRepair = preparationManifest;
         const workspaceDiffBeforeRepair = lastWorkspaceDiff;
         const repairingDependencies = isDependencyRepairFailure(
-          failure.failureClassification,
+          repairFailure.failureClassification,
         );
-        const phase = failure.stage;
-        const fingerprint = preparationFailureFingerprint(failure);
+        const phase = repairFailure.stage;
+        const fingerprint = preparationFailureFingerprint(repairFailure);
         const fingerprintRepairAttempts =
           input.preparationRepairBudget.attemptsByFingerprint[fingerprint] ?? 0;
         const phaseRepairAttempts =
           input.preparationRepairAttemptsByPhase[phase] ?? 0;
-        recordFailingFeatureProgress(input.preparationRepairBudget, failure);
+        recordFailingFeatureProgress(
+          input.preparationRepairBudget,
+          repairFailure,
+        );
+        const advice = await consultRepairStrategy({
+          dependencies: input.dependencies,
+          failureReport: repairFailure,
+          fingerprintRepairAttempts,
+          preparationManifest,
+          preparationRepairBudget: input.preparationRepairBudget,
+          repairRoundSources: input.repairRoundSources,
+        });
+        const adviceApplication = applyRepairSteeringAdvice({
+          advice,
+          failedValidationRounds:
+            input.repairRoundSources.filter(
+              (round) => round.outcomeOfAdvice !== "resolved",
+            ).length + 1,
+          failureReport: repairFailure,
+          preparationRepairBudget: input.preparationRepairBudget,
+        });
         const repair = await repairPreparationManifest({
           dependencies: input.dependencies,
-          failureReport: failure,
+          failureReport: adviceApplication.failureReport,
           input: input.input,
           preparationManifest,
+          bonusRounds: input.preparationRepairBudget.bonusRounds,
           phaseRepairAttempts,
           fingerprintRepairAttempts,
+          // Exploration is the terminal preparation gate and always runs
+          // after every other phase, so earlier-stage churn can spend the
+          // whole global budget before exploration's first failure (ghost
+          // 2026-08-09: three preflight repairs plus two false fidelity
+          // vetoes starved the data-path steering). Its failures may spend
+          // up to two rounds beyond the global limit; no earlier stage
+          // gets a reservation because they already run first.
           repoPreparationRepairLimit:
             input.repoPreparationRepairLimit +
-            input.preparationRepairBudget.bonusRounds,
+            input.preparationRepairBudget.bonusRounds +
+            (phase === "app-exploration" ? explorationRepairReserveRounds : 0),
           repoProfile: input.repoProfile,
           runPlan: input.runPlan,
           stageStatuses: input.stageStatuses,
           stageTimings: input.stageTimings,
+          ...(adviceApplication.strategyDirective === undefined
+            ? {}
+            : {
+                strategyDirective: adviceApplication.strategyDirective,
+              }),
           totalRepairAttempts: input.preparationRepairBudget.totalAttempts,
           workspace: input.workspace,
         });
-        input.preparationRepairBudget.attemptsByFingerprint[fingerprint] =
-          fingerprintRepairAttempts + 1;
-        input.preparationRepairBudget.totalAttempts += 1;
-        input.preparationRepairAttemptsByPhase[phase] = phaseRepairAttempts + 1;
+        pendingRepairCharge = () => {
+          input.preparationRepairBudget.attemptsByFingerprint[fingerprint] =
+            fingerprintRepairAttempts + 1;
+          input.preparationRepairBudget.totalAttempts += 1;
+          input.preparationRepairAttemptsByPhase[phase] =
+            phaseRepairAttempts + 1;
+        };
         input.recordOpenCodeSessionId(repair.opencodeSessionId);
         const repairedManifest = readPreparationManifest(repair.manifest);
+        pendingLedgerRound = {
+          advice,
+          adviceApplied: adviceApplication.applied,
+          candidateFingerprint:
+            repair.candidateFingerprint ??
+            fingerprintPreparationCandidate(repairedManifest),
+          candidateManifest: repairedManifest,
+          failureReport: repairFailure,
+          fingerprint,
+        };
         // A dependency repair's manifest is discarded below in favor of the
         // pre-repair manifest, so only a manifest the pipeline will adopt is
         // held to the feature-inventory contract.
@@ -1412,13 +1806,18 @@ async function ensureValidPreparation(input: {
           artifactPaths.preparationManifest,
           repairingDependencies ? manifestBeforeRepair : repairedManifest,
         );
-        activeRepairFailure = failure;
+        activeRepairFailure = repairFailure;
         dependencyRepair = repairingDependencies;
         repairBaseline = workspaceDiffBeforeRepair;
+        manifestBaseline = manifestBeforeRepair;
       }
     }
 
     const resolvedPreparation = resolvePreparationRuntime({
+      honorWorkspaceGraphBuild: hasChargedRepairForClassification(
+        input.preparationRepairBudget,
+        "unbuilt workspace dependency",
+      ),
       preparationManifest,
       repoProfile: input.repoProfile,
       runPlan: input.runPlan,
@@ -1433,6 +1832,71 @@ async function ensureValidPreparation(input: {
 
     const workspaceDiff = await input.capturePreparationWorkspaceDiff();
     lastWorkspaceDiff = workspaceDiff;
+    const repairDelta =
+      repairBaseline === undefined
+        ? undefined
+        : readDependencyRepairDelta(repairBaseline, workspaceDiff);
+    reconcileLockfile = repairDelta?.dependencyInputsChanged ?? false;
+    if (
+      pendingRepairCharge !== undefined &&
+      activeRepairFailure !== undefined
+    ) {
+      const workspaceUnchanged =
+        repairDelta !== undefined
+          ? repairDelta.changedPaths.length === 0
+          : workspaceDiff.changedPaths.length === 0;
+      // A dependency repair's manifest is discarded, so its only channel of
+      // effect is the workspace; a runtime repair may legitimately change
+      // only the manifest (commands, ports, envUsed), which counts as real.
+      const manifestUnchanged =
+        manifestBaseline !== undefined &&
+        JSON.stringify(preparationManifest) ===
+          JSON.stringify(manifestBaseline);
+      if (workspaceUnchanged && (dependencyRepair || manifestUnchanged)) {
+        let chargedNoopRepair = false;
+        if (unchargedNoopRepairs >= noopRepairGraceRounds) {
+          pendingRepairCharge();
+          chargedNoopRepair = true;
+        } else {
+          unchargedNoopRepairs += 1;
+        }
+        pendingRepairCharge = undefined;
+        const noopFailure = appendNoopRepairRejection(
+          activeRepairFailure,
+          dependencyRepair,
+        );
+        if (chargedNoopRepair && pendingLedgerRound !== undefined) {
+          recordCompletedRepairRound({
+            nextReport: noopFailure,
+            preparationRepairBudget: input.preparationRepairBudget,
+            repairRoundSources: input.repairRoundSources,
+            round: {
+              ...pendingLedgerRound,
+              resolvedManifest: preparationManifest,
+              workspaceDiff,
+            },
+          });
+        }
+        failure = noopFailure;
+        activeRepairFailure = undefined;
+        pendingLedgerRound = undefined;
+        dependencyRepair = false;
+        repairBaseline = undefined;
+        manifestBaseline = undefined;
+        continue;
+      }
+      unchargedNoopRepairs = 0;
+      pendingRepairCharge();
+      pendingRepairCharge = undefined;
+      if (pendingLedgerRound !== undefined) {
+        chargedLedgerRound = {
+          ...pendingLedgerRound,
+          resolvedManifest: preparationManifest,
+          workspaceDiff,
+        };
+        pendingLedgerRound = undefined;
+      }
+    }
     const fidelityAttempt =
       (input.validationAttemptCounts["preparation-fidelity"] ?? 0) + 1;
     await writeArtifact(
@@ -1458,13 +1922,6 @@ async function ensureValidPreparation(input: {
               : "runtime",
       },
     );
-    const repairDelta =
-      repairBaseline === undefined
-        ? undefined
-        : readDependencyRepairDelta(repairBaseline, workspaceDiff);
-    const unchangedDependencyRepair =
-      dependencyRepair && repairDelta?.changedPaths.length === 0;
-    reconcileLockfile = repairDelta?.dependencyInputsChanged ?? false;
     const fidelityValidation = await runValidationStage(
       "preparation-fidelity",
       input.dependencies,
@@ -1472,23 +1929,115 @@ async function ensureValidPreparation(input: {
       input.validationReports,
       input.stageStatuses,
       input.stageTimings,
-      async () =>
-        validatePreparationFidelity({
+      async () => {
+        const candidates = readPreparationFidelityCandidates({
           ...(repairBaseline === undefined
             ? {}
             : { dependencyRepair, repairBaseline }),
+          // The failure that dispatched the active repair carries the
+          // harness's own feature observations; fidelity checks the
+          // repaired manifest's claims against them.
+          ...(activeRepairFailure?.featureVerdicts === undefined
+            ? {}
+            : { priorFeatureVerdicts: activeRepairFailure.featureVerdicts }),
           preparationManifest,
           repoSourceFiles: new Map(
             input.input.files.map((file) => [file.path, file.text] as const),
           ),
           workspaceDiff,
-        }),
+        });
+        const adjudicate = input.dependencies.adjudicateFidelityCandidates;
+        const deterministicCandidates = candidates.filter(
+          (candidate) => candidate.deterministic === true,
+        );
+        if (deterministicCandidates.length > 0) {
+          return createPreparationFidelityReport({
+            candidates: deterministicCandidates,
+          });
+        }
+        if (candidates.length === 0 || adjudicate === undefined) {
+          return createPreparationFidelityReport({ candidates });
+        }
+        // Cost lands only on the veto path: the judge runs once per failing
+        // attempt, never on clean validations.
+        const unjudgedRecord = () => ({
+          outcomes: candidates.map((candidate, candidateIndex) => ({
+            candidateIndex,
+            message: candidate.message,
+            outcome: "unjudged" as const,
+          })),
+        });
+        let verdicts: FidelityAdjudicationVerdict[] | undefined;
+        try {
+          verdicts = await adjudicate({
+            candidates,
+            preparationManifest,
+            workspace: input.workspace,
+            workspaceDiff,
+          });
+        } catch (error) {
+          if (isAgentHarnessInfrastructureError(error)) throw error;
+          verdicts = undefined;
+        }
+        if (verdicts === undefined) {
+          return createPreparationFidelityReport({
+            adjudication: { ...unjudgedRecord(), status: "unadjudicated" },
+            candidates,
+          });
+        }
+        // A judge that edited the workspace judged a diff that no longer
+        // exists; its verdicts are unsafe to apply.
+        const diffAfterAdjudication =
+          await input.dependencies.capturePreparationWorkspaceDiff({
+            workspace: input.workspace,
+          });
+        if (diffAfterAdjudication.patchSha256 !== workspaceDiff.patchSha256) {
+          return createPreparationFidelityReport({
+            adjudication: {
+              ...unjudgedRecord(),
+              status: "discarded-diff-changed",
+            },
+            candidates,
+          });
+        }
+        const { record, steering, surviving } = reconcileFidelityAdjudication({
+          candidates,
+          patch: workspaceDiff.patch,
+          verdicts,
+        });
+        return createPreparationFidelityReport({
+          adjudication: record,
+          candidates: surviving,
+          steering,
+        });
+      },
       input.validationAttemptCounts,
       input.preparationRepairAttemptsByPhase["preparation-fidelity"] ?? 0,
     );
+    const repairFeatureVerification =
+      activeRepairFailure?.featureVerdicts === undefined
+        ? undefined
+        : {
+            priorFeatureVerdicts: activeRepairFailure.featureVerdicts,
+            touchedFeatureIds: readDiffTouchedFeatureIds({
+              changedPaths: repairDelta?.changedPaths ?? [],
+              currentManifest: preparationManifest,
+              previousManifest: manifestBaseline,
+            }),
+          };
     dependencyRepair = false;
     repairBaseline = undefined;
+    manifestBaseline = undefined;
     if (fidelityValidation.status === "failed") {
+      if (chargedLedgerRound !== undefined) {
+        recordCompletedRepairRound({
+          nextReport: fidelityValidation,
+          preparationRepairBudget: input.preparationRepairBudget,
+          repairRoundSources: input.repairRoundSources,
+          round: chargedLedgerRound,
+        });
+        chargedLedgerRound = undefined;
+      }
       if (
         acceptedPreparation !== undefined &&
         activeRepairFailure !== undefined &&
@@ -1513,18 +2062,6 @@ async function ensureValidPreparation(input: {
       }
       continue;
     }
-    if (unchangedDependencyRepair && activeRepairFailure !== undefined) {
-      failure = {
-        ...activeRepairFailure,
-        logsSummary: `${activeRepairFailure.logsSummary} Rejected repair: no package manifest or recognized package-manager configuration changed.`,
-        suggestedRepairHints: [
-          ...activeRepairFailure.suggestedRepairHints,
-          "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.",
-        ],
-      };
-      activeRepairFailure = undefined;
-      continue;
-    }
     acceptedPreparation = { manifest: preparationManifest, workspaceDiff };
     activeRepairFailure = undefined;
 
@@ -1546,6 +2083,9 @@ async function ensureValidPreparation(input: {
             : { installDependencies: false }),
           preparationManifest,
           ...(reconcileLockfile ? { reconcileLockfile: true } : {}),
+          ...(repairFeatureVerification === undefined
+            ? {}
+            : { repairFeatureVerification }),
           repoProfile: input.repoProfile,
           runPlan: input.runPlan,
           workspace: input.workspace,
@@ -1553,17 +2093,29 @@ async function ensureValidPreparation(input: {
       input.validationAttemptCounts,
       input.preparationRepairAttemptsByPhase["preparation-preflight"] ?? 0,
     );
+    // The pre/at-install classifications are listed conservatively —
+    // anything ambiguous forces a reinstall.
+    const installLayerFailed = [
+      "install failure",
+      // A timed-out lifecycle left native builds and postinstall codegen
+      // unfinished — reuse would skip the re-run entirely (N98).
+      "lifecycle timeout",
+      "external network attempted",
+      "harness/internal failure",
+    ].includes(preparationValidation.failureClassification ?? "");
     if (reuseInstallFromAttempt === undefined) {
       // Install ran this validation: it stays reusable unless the failure
-      // happened at or before install. The pre/at-install classifications
-      // are listed conservatively — anything ambiguous forces a reinstall.
-      lastCleanInstallAttempt = [
-        "install failure",
-        "external network attempted",
-        "harness/internal failure",
-      ].includes(preparationValidation.failureClassification ?? "")
+      // happened at or before install.
+      lastCleanInstallAttempt = installLayerFailed
         ? undefined
         : (input.validationAttemptCounts["preparation-preflight"] ?? 0);
+    } else if (installLayerFailed) {
+      // N127: a reuse round re-runs the offline lifecycle on the re-synced
+      // tree; when the install layer fails there, the reused install can no
+      // longer be trusted — the next round reinstalls instead of replaying
+      // the same failure for as long as repairs leave dependency inputs
+      // untouched.
+      lastCleanInstallAttempt = undefined;
     }
     if (
       preparationValidation.status === "failed" &&
@@ -1585,11 +2137,29 @@ async function ensureValidPreparation(input: {
       }
     }
     if (preparationValidation.status === "passed") {
+      if (chargedLedgerRound !== undefined) {
+        recordCompletedRepairRound({
+          nextReport: preparationValidation,
+          preparationRepairBudget: input.preparationRepairBudget,
+          repairRoundSources: input.repairRoundSources,
+          round: chargedLedgerRound,
+        });
+        chargedLedgerRound = undefined;
+      }
       return {
         acceptedPreparation,
         preparationManifest,
         preparationValidation,
       };
+    }
+    if (chargedLedgerRound !== undefined) {
+      recordCompletedRepairRound({
+        nextReport: preparationValidation,
+        preparationRepairBudget: input.preparationRepairBudget,
+        repairRoundSources: input.repairRoundSources,
+        round: chargedLedgerRound,
+      });
+      chargedLedgerRound = undefined;
     }
     // The reuse note travels as a hint, never in logsSummary: the failure
     // fingerprint normalizes the summary, and a round-varying prefix would
@@ -1601,10 +2171,54 @@ async function ensureValidPreparation(input: {
             ...preparationValidation,
             suggestedRepairHints: [
               ...preparationValidation.suggestedRepairHints,
-              `Dependency install reused from validation attempt ${reuseInstallFromAttempt} (this repair changed no dependency inputs).`,
+              `Dependency install reused from validation attempt ${reuseInstallFromAttempt} (this repair changed no dependency inputs; the offline lifecycle still re-ran on the freshly synced tree).`,
             ],
           };
   }
+}
+
+/**
+ * Free rounds before consecutive no-op repairs start charging the repair
+ * budgets. A repair that changed nothing did no work worth charging — but
+ * only twice, so an agent that keeps returning untouched workspaces still
+ * runs into the repeated-failure limit instead of looping forever.
+ */
+const noopRepairGraceRounds = 2;
+
+const dependencyNoopRejection =
+  "no package manifest or recognized package-manager configuration changed.";
+const dependencyNoopHint =
+  "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.";
+const runtimeNoopRejection =
+  "the repair produced no change: the workspace and the preparation manifest match the state that already failed.";
+const runtimeNoopHint =
+  "Make a concrete change that addresses the failure: edit the files responsible or correct the preparation manifest's commands, ports, baseUrl, or envUsed. Resubmitting the same state will be rejected again.";
+
+/**
+ * Builds the failure a no-op repair loops back on. A repair that returns
+ * the workspace and manifest untouched is a non-attempt: the original
+ * failure stands, annotated so the next dispatch knows resubmission was
+ * already rejected. Appending is idempotent — consecutive no-ops must not
+ * stack duplicate rejections or hints.
+ */
+function appendNoopRepairRejection(
+  originalFailure: ValidationReport,
+  dependencyRepair: boolean,
+): ValidationReport {
+  const rejection = dependencyRepair
+    ? dependencyNoopRejection
+    : runtimeNoopRejection;
+  const hint = dependencyRepair ? dependencyNoopHint : runtimeNoopHint;
+  const rejectionSuffix = ` Rejected repair: ${rejection}`;
+  return {
+    ...originalFailure,
+    logsSummary: originalFailure.logsSummary.endsWith(rejectionSuffix)
+      ? originalFailure.logsSummary
+      : `${originalFailure.logsSummary}${rejectionSuffix}`,
+    suggestedRepairHints: originalFailure.suggestedRepairHints.includes(hint)
+      ? originalFailure.suggestedRepairHints
+      : [...originalFailure.suggestedRepairHints, hint],
+  };
 }
 
 function appendRepairRejection(
@@ -1681,6 +2295,7 @@ function sameRuntimeConfiguration(
 }
 
 async function repairPreparationManifest(input: {
+  bonusRounds: number;
   dependencies: AgentHarnessPipelineDependencies;
   failureReport: ValidationReport;
   fingerprintRepairAttempts: number;
@@ -1692,9 +2307,14 @@ async function repairPreparationManifest(input: {
   runPlan: RunPlan;
   stageStatuses: Record<string, string>;
   stageTimings: PipelineRunManifest["stageTimings"];
+  strategyDirective?: string;
   totalRepairAttempts: number;
   workspace: AgentHarnessWorkspace;
-}): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }> {
+}): Promise<{
+  candidateFingerprint?: string;
+  manifest: PreparationManifest;
+  opencodeSessionId?: string;
+}> {
   const route = classifyRepairRoute(input.failureReport);
   if (
     route !== "repo-preparation-repair" ||
@@ -1715,7 +2335,8 @@ async function repairPreparationManifest(input: {
     );
   }
   const repeatedFailureLimit = Math.min(
-    input.failureReport.stage === "preparation-fidelity" ? 1 : 2,
+    (input.failureReport.stage === "preparation-fidelity" ? 1 : 2) +
+      input.bonusRounds,
     input.repoPreparationRepairLimit,
   );
   if (input.fingerprintRepairAttempts >= repeatedFailureLimit) {
@@ -1745,12 +2366,248 @@ async function repairPreparationManifest(input: {
         repoProfile: input.repoProfile,
         repoSourcePaths: input.input.files.map((file) => file.path),
         runPlan: input.runPlan,
+        ...(input.strategyDirective === undefined
+          ? {}
+          : { strategyDirective: input.strategyDirective }),
         workspace: input.workspace,
       }) as Promise<{
+        candidateFingerprint?: string;
         manifest: PreparationManifest;
         opencodeSessionId?: string;
       }>,
   );
+}
+
+async function consultRepairStrategy(input: {
+  dependencies: AgentHarnessPipelineDependencies;
+  failureReport: ValidationReport;
+  fingerprintRepairAttempts: number;
+  preparationManifest: PreparationManifest;
+  preparationRepairBudget: PreparationRepairBudget;
+  repairRoundSources: readonly RepairRoundSource[];
+}): Promise<RepairAdvice | undefined> {
+  if (
+    input.fingerprintRepairAttempts < 1 ||
+    input.dependencies.adviseRepairStrategy === undefined
+  ) {
+    return undefined;
+  }
+  try {
+    return await input.dependencies.adviseRepairStrategy({
+      budgets: {
+        bonusRounds: input.preparationRepairBudget.bonusRounds,
+        fingerprintAttempts: input.fingerprintRepairAttempts,
+        totalAttempts: input.preparationRepairBudget.totalAttempts,
+      },
+      failureReport: input.failureReport,
+      preparationManifest: input.preparationManifest,
+      roundLedger: createRepairRoundLedger(input.repairRoundSources),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Consults run triage exactly once, at run start, and only when the
+ * deterministic submitted-code capacity classification is heavyweight —
+ * standard-class runs never pay for it. Any strategist failure falls back
+ * to "no advice"; triage has no authority to fail or stall the run.
+ */
+async function consultRunTriage(input: {
+  dependencies: AgentHarnessPipelineDependencies;
+  repoProfile: RepoProfile;
+}): Promise<RunTriageAdvice | undefined> {
+  if (
+    input.dependencies.adviseRunTriage === undefined ||
+    selectSubmittedCodeSandboxClass(input.repoProfile) !== "heavyweight"
+  ) {
+    return undefined;
+  }
+  try {
+    return await input.dependencies.adviseRunTriage({
+      repoProfile: input.repoProfile,
+      submittedCodeSandboxClass: "heavyweight",
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function recordCompletedRepairRound(input: {
+  nextReport: ValidationReport;
+  preparationRepairBudget: PreparationRepairBudget;
+  repairRoundSources: RepairRoundSource[];
+  round: {
+    advice: RepairAdvice | undefined;
+    adviceApplied: boolean;
+    candidateFingerprint: string;
+    candidateManifest: PreparationManifest;
+    failureReport: ValidationReport;
+    fingerprint: string;
+    resolvedManifest: PreparationManifest;
+    workspaceDiff: PreparationWorkspaceDiff;
+  };
+}): void {
+  input.repairRoundSources.push({
+    advice: readRepairAdviceLedgerRecord(
+      input.round.advice,
+      input.round.adviceApplied,
+    ),
+    budget: {
+      bonusRounds: input.preparationRepairBudget.bonusRounds,
+      fingerprintAttempts:
+        input.preparationRepairBudget.attemptsByFingerprint[
+          input.round.fingerprint
+        ] ?? 0,
+      totalAttempts: input.preparationRepairBudget.totalAttempts,
+    },
+    candidateFingerprint: input.round.candidateFingerprint,
+    candidateManifest: input.round.candidateManifest,
+    failureReport: input.round.failureReport,
+    outcomeOfAdvice:
+      input.nextReport.status === "passed"
+        ? "resolved"
+        : preparationFailureFingerprint(input.nextReport) ===
+            input.round.fingerprint
+          ? "failure-unchanged"
+          : "failure-moved",
+    resolvedManifest: input.round.resolvedManifest,
+    round: input.repairRoundSources.length + 1,
+    workspaceDiff: input.round.workspaceDiff,
+  });
+}
+
+function readRepairAdviceLedgerRecord(
+  advice: RepairAdvice | undefined,
+  applied: boolean,
+): RepairRoundSource["advice"] {
+  if (advice === undefined) return null;
+  const text =
+    advice.kind === "escalate-hint"
+      ? advice.hint
+      : advice.kind === "directive"
+        ? advice.directive
+        : advice.kind === "stop"
+          ? advice.reason
+          : null;
+  return {
+    applied,
+    kind: advice.kind,
+    textDigest: text,
+  };
+}
+
+function applyRepairSteeringAdvice(input: {
+  advice: RepairAdvice | undefined;
+  failedValidationRounds: number;
+  failureReport: ValidationReport;
+  preparationRepairBudget: PreparationRepairBudget;
+}): {
+  applied: boolean;
+  failureReport: ValidationReport;
+  strategyDirective?: string;
+} {
+  if (input.advice?.kind === "escalate-hint") {
+    return {
+      applied: true,
+      failureReport: {
+        ...input.failureReport,
+        suggestedRepairHints: [
+          ...new Set([
+            ...input.failureReport.suggestedRepairHints,
+            input.advice.hint,
+          ]),
+        ],
+      },
+    };
+  }
+  if (input.advice?.kind === "directive") {
+    return {
+      applied: true,
+      failureReport: input.failureReport,
+      strategyDirective: input.advice.directive,
+    };
+  }
+  if (
+    input.advice?.kind === "stop" &&
+    input.failedValidationRounds >= 2 &&
+    isStopEligibleFailure(input.failureReport)
+  ) {
+    throw new Error(
+      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. Repair strategist recommended stopping: ${input.advice.reason}`,
+    );
+  }
+  if (input.advice?.kind === "spend-bonus-round") {
+    if (
+      input.preparationRepairBudget.bonusRounds >= preparationProgressBonusLimit
+    ) {
+      return {
+        applied: false,
+        failureReport: input.failureReport,
+      };
+    }
+    input.preparationRepairBudget.bonusRounds += 1;
+    return {
+      applied: true,
+      failureReport: input.failureReport,
+    };
+  }
+  return {
+    applied: input.advice?.kind === "continue",
+    failureReport: input.failureReport,
+  };
+}
+
+const stopEligibleFailureClassifications = new Set([
+  "install failure",
+  "lifecycle timeout",
+  "service migration failure",
+  "start failure",
+]);
+
+/**
+ * Applies the deterministic veto floor for strategist stop advice. A report
+ * is eligible only when its first nonblank causal headline identifies
+ * resource exhaustion in a known runtime class, or when it carries N153's
+ * explicit wedged-sandbox-target classification or headline.
+ */
+export function isStopEligibleFailure(report: ValidationReport): boolean {
+  const causalHeadline =
+    report.logsSummary
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? "";
+  if (
+    report.failureClassification === "wedged-sandbox-target" ||
+    /\bwedged-sandbox-target\b/i.test(causalHeadline)
+  ) {
+    return true;
+  }
+  if (
+    !stopEligibleFailureClassifications.has(
+      report.failureClassification?.trim() ?? "",
+    )
+  ) {
+    return false;
+  }
+  const organizationCapRejection =
+    /\b(?:org|organization)\b/i.test(causalHeadline) &&
+    /\b(?:cap|limit|quota)\b/i.test(causalHeadline) &&
+    /\b(?:denied|exceed(?:ed)?|maximum|reached|reject(?:ed|ion)?)\b/i.test(
+      causalHeadline,
+    );
+  return (
+    /\bKilled\b/.test(causalHeadline) ||
+    /\bENOSPC\b/.test(causalHeadline) ||
+    organizationCapRejection
+  );
+}
+
+function fingerprintPreparationCandidate(
+  manifest: PreparationManifest,
+): string {
+  return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
 /**
@@ -1799,7 +2656,75 @@ function readFailingCatalogActionId(
     : undefined;
 }
 
+/**
+ * Joins a capture-path locator failure's typed identity back to the Demo
+ * Script action it names (N125): the action's verified locator and candidate
+ * id plus the failing scene's action prefix ahead of it, so regrounding can
+ * re-verify the candidate in its replay context. Returns undefined when the
+ * report carries no identity or the failing scene no longer contains the
+ * action — regrounding then falls back to a plain re-exploration.
+ */
+function readCaptureLocatorFailure(
+  report: ValidationReport,
+  scriptCandidate: ScriptCandidate,
+): CaptureLocatorFailure | undefined {
+  const failedAction = report.failedAction;
+  if (failedAction?.actionId === undefined) {
+    return undefined;
+  }
+  const script = scriptCandidate.scriptJsonContent;
+  const scenes =
+    typeof script === "object" && script !== null
+      ? (script as { scenes?: unknown }).scenes
+      : undefined;
+  if (!Array.isArray(scenes)) {
+    return undefined;
+  }
+  for (const scene of scenes) {
+    if (typeof scene !== "object" || scene === null) {
+      continue;
+    }
+    if ((scene as { id?: unknown }).id !== failedAction.sceneId) {
+      continue;
+    }
+    let actions: BrowserAction[];
+    try {
+      actions = readBrowserActions(
+        (scene as { actions?: unknown }).actions ?? [],
+      );
+    } catch {
+      continue;
+    }
+    const index = actions.findIndex(
+      (action) => action.id === failedAction.actionId,
+    );
+    const action = actions[index];
+    if (action === undefined) {
+      continue;
+    }
+    const screenshotPath = report.screenshots[0];
+    return {
+      actionId: failedAction.actionId,
+      ...("locator" in action ? { locator: action.locator } : {}),
+      ...(action.locatorCandidateId === undefined
+        ? {}
+        : { locatorCandidateId: action.locatorCandidateId }),
+      sceneId: failedAction.sceneId,
+      scenePrefix: actions.slice(0, index),
+      ...(screenshotPath === undefined ? {} : { screenshotPath }),
+    };
+  }
+  return undefined;
+}
+
 const preparationProgressBonusLimit = 2;
+
+/**
+ * Extra repair rounds only app-exploration failures may spend beyond the
+ * global preparation budget. Worst case stays bounded at
+ * repoPreparationRepairLimit + preparationProgressBonusLimit + this reserve.
+ */
+const explorationRepairReserveRounds = 2;
 
 /**
  * Grants a bonus repair round when a failure's failing-feature set strictly
@@ -1834,29 +2759,170 @@ function recordFailingFeatureProgress(
   }
 }
 
+/**
+ * Maps a repair delta back to the manifest features it can invalidate. Source
+ * files and declared data seams are feature-owned paths; a changed feature
+ * declaration is touched too, even when the repair changed only the manifest.
+ * Both sides of the manifest comparison participate so moving a source path
+ * cannot hide the edit that moved it.
+ */
+function readDiffTouchedFeatureIds(input: {
+  changedPaths: readonly string[];
+  currentManifest: PreparationManifest;
+  previousManifest: PreparationManifest | undefined;
+}): string[] {
+  const normalizePath = (path: string) =>
+    path
+      .replace(/^\/workspace\/repo\//, "")
+      .replace(/^\.\//, "")
+      .replace(/\/+$/, "");
+  const changedPaths = input.changedPaths
+    .map(normalizePath)
+    .filter((path) => path.length > 0);
+  const previousFeatures = new Map(
+    (input.previousManifest?.productContext.featureInventory ?? []).map(
+      (feature) => [feature.id, feature],
+    ),
+  );
+  const featurePaths = (
+    feature: PreparationManifest["productContext"]["featureInventory"][number],
+  ) => [
+    ...feature.sourcePaths,
+    ...(feature.dataSeams ?? []).flatMap((seam) => [
+      seam.path,
+      seam.fixtureModule,
+    ]),
+  ];
+  const pathsOverlap = (left: string, right: string) =>
+    left === right ||
+    left.startsWith(`${right}/`) ||
+    right.startsWith(`${left}/`);
+
+  return input.currentManifest.productContext.featureInventory.flatMap(
+    (feature) => {
+      const previousFeature = previousFeatures.get(feature.id);
+      const declarationChanged =
+        previousFeature === undefined ||
+        JSON.stringify(previousFeature) !== JSON.stringify(feature);
+      const ownedPaths = [
+        ...featurePaths(feature),
+        ...(previousFeature === undefined ? [] : featurePaths(previousFeature)),
+      ].map(normalizePath);
+      const workspaceTouched = changedPaths.some((changedPath) =>
+        ownedPaths.some(
+          (ownedPath) =>
+            ownedPath.length > 0 && pathsOverlap(changedPath, ownedPath),
+        ),
+      );
+      return declarationChanged || workspaceTouched ? [feature.id] : [];
+    },
+  );
+}
+
+/**
+ * Identifies a failure for the repeated-failure limit. The identity-bearing
+ * line is the decisive cause extracted from the managed output — its last
+ * error-class line — not the summary's first line, which is usually the
+ * outermost symptom (a probe's `curl: (7)`) and collapses distinct causes
+ * into one fingerprint. Summaries whose lines never name an error (render
+ * timeouts, listen failures) fall back to the first line.
+ */
 function preparationFailureFingerprint(report: ValidationReport): string {
   const rejectionParts = report.logsSummary.split(" Rejected repair:");
+  const failureBody = rejectionParts[0] ?? "";
   return [
     report.stage,
     report.failureClassification ?? "unknown",
     report.attemptedCommand ?? "",
-    normalizeFailureSummaryLine(rejectionParts[0] ?? ""),
+    normalizeFailureSummaryLine(
+      readLastErrorCauseLine(failureBody) ?? failureBody,
+    ),
     normalizeFailureSummaryLine(
       rejectionParts.length === 1 ? "" : (rejectionParts.at(-1) ?? ""),
     ),
   ].join("\u0000");
 }
 
+function hasChargedRepairForClassification(
+  budget: PreparationRepairBudget,
+  classification: string,
+): boolean {
+  return Object.entries(budget.attemptsByFingerprint).some(
+    ([fingerprint, attempts]) =>
+      attempts > 0 && fingerprint.split("\u0000")[1] === classification,
+  );
+}
+
+function appendWorkspaceGraphBuildEscalation(input: {
+  failure: ValidationReport;
+  preparationRepairBudget: PreparationRepairBudget;
+  repoProfile: RepoProfile;
+  runPlan: RunPlan;
+}): ValidationReport {
+  if (
+    input.failure.failureClassification !== "unbuilt workspace dependency" ||
+    !hasChargedRepairForClassification(
+      input.preparationRepairBudget,
+      "unbuilt workspace dependency",
+    )
+  ) {
+    return input.failure;
+  }
+  const graphBuild = createWorkspaceGraphBuildCommand({
+    repoProfile: input.repoProfile,
+    targetDir: input.runPlan.targetSelection?.targetId ?? input.runPlan.appDir,
+  });
+  const graphDirection =
+    graphBuild === undefined
+      ? "Use the repository's root build/prepare script, or its pnpm --recursive, turbo, or nx run-many topological build scoped to the selected app's dependency closure."
+      : `Set buildCommandUsed to exactly ${JSON.stringify(graphBuild)}.`;
+  const escalation = `A prior unbuilt-workspace repair already targeted one package, but a workspace build output is still missing. Build the selected app's workspace dependency graph now instead of another single package. ${graphDirection} This supersedes any single-package build hint.`;
+  return {
+    ...input.failure,
+    suggestedRepairHints: [
+      ...new Set([...input.failure.suggestedRepairHints, escalation]),
+    ],
+  };
+}
+
 /**
- * Reduces a failure summary to its identity-bearing first line: run-varying
- * noise (timestamps, ids, durations, ports, temp paths) must not make the
- * same failure look new, or the repeated-failure limit never triggers.
+ * Fingerprints a Capture SDK protocol violation only after the static Demo
+ * Script contract passed in the current loop. One identical repeat is a
+ * harness-owned contradiction, so another agent-authored script repair would
+ * only spend budget without changing the generated protocol implementation.
+ */
+function readCaptureProtocolFailureFingerprint(
+  report: ValidationReport,
+): string | undefined {
+  if (
+    report.stage !== "capture-path-validation" ||
+    report.failureClassification !== "script contract failure" ||
+    !/^Capture Script Protocol Violation:/i.test(report.logsSummary.trim())
+  ) {
+    return undefined;
+  }
+  return [
+    report.stage,
+    report.failureClassification,
+    normalizeFailureSummaryLine(report.logsSummary),
+  ].join("\u0000");
+}
+
+/**
+ * Reduces a failure line to its identity-bearing form: run-varying noise
+ * (timestamps, ids, durations, ports, temp paths) must not make the same
+ * failure look new, or the repeated-failure limit never triggers. The
+ * timestamp scrub accepts `_`-separated clock digits because npm debug-log
+ * file names embed them that way.
  */
 function normalizeFailureSummaryLine(summary: string): string {
   return (summary.split("\n", 1)[0] ?? "")
     .trim()
     .toLowerCase()
-    .replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z\b/g, "<time>")
+    .replace(
+      /\b\d{4}-\d{2}-\d{2}t\d{2}[:_]\d{2}[:_]\d{2}(?:[._]\d+)?z\b/g,
+      "<time>",
+    )
     .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/g, "<id>")
     .replace(
       /\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?|s|seconds?|minutes?)\b/g,
@@ -1953,6 +3019,7 @@ async function writeArtifact<T>(
 
 async function persistRunManifest(input: {
   dependencies: AgentHarnessPipelineDependencies;
+  envelopeFitWarning?: string;
   input: AgentHarnessPipelineInput;
   opencodeSessionIds: string[];
   stageStatuses: Record<string, string>;
@@ -1973,6 +3040,7 @@ async function persistRunManifest(input: {
         input.workspace?.submittedCodeSandboxId,
       ),
     },
+    ...optionalString("envelopeFitWarning", input.envelopeFitWarning),
     finalStatus: input.status,
     networkStateTransitions,
     opencodeSessionIds: [...new Set(input.opencodeSessionIds)],

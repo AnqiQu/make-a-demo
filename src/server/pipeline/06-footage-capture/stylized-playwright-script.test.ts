@@ -218,6 +218,49 @@ describe("prepareStylizedPlaywrightScript", () => {
     }
   }, 20_000);
 
+  it("records an app-origin main-document server error as a navigation marker", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(500, { "content-type": "text/html; charset=utf-8" });
+      response.end("<main>Internal Server Error</main>");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Test server did not expose a TCP port");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-app-server-error-test-"),
+    );
+    await symlink(
+      join(process.cwd(), "node_modules"),
+      join(runDirectory, "node_modules"),
+    );
+    const scriptPath = join(runDirectory, "demo-script.ts");
+    await writeGeneratedCaptureSdkHarness(runDirectory);
+    await writeFile(
+      scriptPath,
+      prepareStylizedPlaywrightScript("await page.goto(baseUrl);", {
+        baseUrl,
+        headed: false,
+        mode: "validation",
+      }),
+    );
+
+    try {
+      const result = await runPreparedScript(scriptPath);
+      const navigation = readNavigationMarkers(
+        `${result.stdout}\n${result.stderr}`,
+      ).find((marker) => marker.url.startsWith(baseUrl));
+      expect(navigation, result.stderr).toMatchObject({ status: 500 });
+    } finally {
+      server.close();
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it("replays an exact external browser resource without outbound access", async () => {
     const png = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XwX9WQAAAABJRU5ErkJggg==",
@@ -570,6 +613,16 @@ function readSceneMarkers(stdout: string) {
     .split("\n")
     .filter((line) => line.startsWith("[makeademo:scene] "))
     .map((line) => JSON.parse(line.slice("[makeademo:scene] ".length)));
+}
+
+function readNavigationMarkers(
+  output: string,
+): Array<{ status: number; url: string }> {
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("[makeademo:navigation] "))
+    .map((line) => JSON.parse(line.slice("[makeademo:navigation] ".length)));
 }
 
 function getFunctionSource(source: string, functionName: string) {

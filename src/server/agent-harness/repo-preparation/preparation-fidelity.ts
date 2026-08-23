@@ -1,9 +1,13 @@
 import { escapeRegExp } from "../../shared/text/escape-regexp";
 import { isEnvironmentSecretFileName } from "../repo-security/secret-predicates";
 import type {
+  FeatureVerdict,
+  FidelityAdjudicationRecord,
+  FidelityAdjudicationVerdict,
   PreparationManifest,
   ValidationReport,
 } from "../schemas/artifacts";
+import { analyzeDemoGateUsage } from "./demo-gate-analysis";
 import type { PreparationWorkspaceDiff } from "./preparation-workspace-diff";
 
 const dependencyConfigurationNames = new Set([
@@ -50,14 +54,18 @@ export function readDependencyRepairDelta(
 }
 
 /**
- * Verifies that Repo Preparation adapted the screened product rather than
- * replacing it with a newly authored demo application. During dependency
- * repair, executable source must remain unchanged from the accepted baseline.
- * Auth and integration edits must conditionally use a source-backed demo gate.
- * Presentation files accept only external-asset localization or a demo-gated
- * wrap that re-introduces existing markup without adding new presentation.
+ * One candidate fidelity violation from the pure generator. `path` names the
+ * file whose diff carries the evidence, when the violation is file-scoped —
+ * adjudication verifies a judge's quoted evidence against exactly that
+ * file's diff section.
  */
-type FidelityViolation = { hint: string; message: string };
+export type FidelityCandidate = {
+  /** Structural manifest contradictions bypass heuristic adjudication. */
+  deterministic?: true;
+  hint: string;
+  message: string;
+  path?: string;
+};
 
 const repairHints = {
   adaptOriginal:
@@ -69,6 +77,8 @@ const repairHints = {
   gate: "Read the active MAKEADEMO_DEMO flag from envUsed directly or through one shared helper imported in the changed file, then conditionally select the demo path while preserving the normal behavior.",
   keepWorkspaces:
     "Keep the original workspace configuration; scope commands to the app instead.",
+  buildAppUnderTest:
+    "Keep the selected app's build script building the app itself — optionally after its workspace dependencies; a build redirected entirely at other packages exits green while leaving the app unbuilt.",
   preserveBehavior:
     "Re-add the removed lines on the non-demo branch; the gate must wrap original behavior, not delete it.",
   preserveUi:
@@ -80,16 +90,78 @@ const repairHints = {
     "Keep the repository's packageManager pin and manager configuration; adapt the demo within the detected package manager instead of switching or unpinning it.",
   truthfulManifest:
     "Complete the preparation so the claimed fixtures and replacements exist in the workspace, or correct the manifest to describe the actual prepared state.",
+  statusHonesty:
+    "Fix the condition that produces the error response instead of rewriting its status code; a success status over a broken state falsifies the harness's probe without repairing the feature.",
+  observedAuthWall:
+    "Prepare the narrowest demo-gated bypass or demo identity through an existing auth seam, record it in the feature's authStrategy, and keep the normal authentication path unchanged when the gate is off.",
 } as const;
+
+// An HTTP response-status write: res.status(...), sendStatus, writeHead,
+// statusCode assignment, or a status: field in a response init.
+const statusWritePattern =
+  /(?:\.status\s*\(|\.sendStatus\s*\(|writeHead\s*\(|statusCode\s*=|\bstatus\s*:)\s*([1-9]\d{2})\b/g;
+
+function readStatusWrites(lines: string[]): Set<number> {
+  return new Set(
+    lines.flatMap((line) =>
+      [...line.matchAll(statusWritePattern)].map((match) => Number(match[1])),
+    ),
+  );
+}
 
 export function validatePreparationFidelity(input: {
   dependencyRepair?: boolean;
   preparationManifest: PreparationManifest;
+  priorFeatureVerdicts?: FeatureVerdict[];
   repairBaseline?: PreparationWorkspaceDiff;
   repoSourceFiles: ReadonlyMap<string, string | undefined>;
   workspaceDiff: PreparationWorkspaceDiff;
 }): ValidationReport {
-  const violations: FidelityViolation[] = [];
+  return createPreparationFidelityReport({
+    candidates: readPreparationFidelityCandidates(input),
+  });
+}
+
+/**
+ * The pure candidate generator behind preparation-fidelity validation: every
+ * returned candidate is a proposed veto, and callers with an adjudication
+ * seam may have an agent judge confirm or overturn each one before the
+ * verdict becomes a report. Candidates carry the evidence-bearing file path
+ * whenever the violation is file-scoped. Dependency repair must preserve
+ * executable source; auth and integration edits require a source-backed demo
+ * gate; presentation edits may only localize assets or restore existing UI
+ * behind such a gate.
+ */
+export function readPreparationFidelityCandidates(input: {
+  dependencyRepair?: boolean;
+  preparationManifest: PreparationManifest;
+  priorFeatureVerdicts?: FeatureVerdict[];
+  repairBaseline?: PreparationWorkspaceDiff;
+  repoSourceFiles: ReadonlyMap<string, string | undefined>;
+  workspaceDiff: PreparationWorkspaceDiff;
+}): FidelityCandidate[] {
+  const violations: FidelityCandidate[] = [];
+  const hasStubDeliveryMechanism =
+    input.preparationManifest.mocksAndFixturesAdded.length > 0 ||
+    input.preparationManifest.localDemoModeChanges.length > 0 ||
+    readConfiguredDemoFlags(input.preparationManifest).length > 0;
+  for (const declaration of input.preparationManifest.dataStrategy ?? []) {
+    if (
+      declaration.rung !== "client-stub" &&
+      declaration.rung !== "declared-stub"
+    ) {
+      continue;
+    }
+    const detailDeclaresAbsence =
+      declaration.rung === "declared-stub" &&
+      declaresMissingStubMechanism(declaration.detail);
+    if (hasStubDeliveryMechanism && !detailDeclaresAbsence) continue;
+    violations.push({
+      deterministic: true,
+      hint: repairHints.truthfulManifest,
+      message: `Data strategy rung ${declaration.rung} for service ${declaration.service} is missing a delivery mechanism in this manifest${detailDeclaresAbsence ? `; its own detail explicitly says the mechanism is absent (${JSON.stringify(declaration.detail)})` : ""}. Record a concrete mocksAndFixturesAdded or localDemoModeChanges entry, or an active MakeADemo delivery gate in envUsed, and make the declaration describe that mechanism.`,
+    });
+  }
   // A manifest may only claim prepared content the workspace carries:
   // give-up repairs after agent stalls wrote fixture claims onto empty
   // diffs (excalidraw, ghostfolio 2026-08-07), and the hollow prep passed
@@ -109,6 +181,105 @@ export function validatePreparationFidelity(input: {
         )}. The workspace diff is empty.`,
       });
     }
+    // The inverse sham passes the check above by claiming nothing at all:
+    // midday's accepted manifest carried an empty diff, empty demo-mode and
+    // fixture declarations, empty seams — and two demoable features
+    // (2026-08-09). "Preserves the screened application" is trivially true
+    // of a preparation that changed nothing, so the vacuous claim must
+    // reach the judge instead of passing silently; a repo that genuinely
+    // demos unchanged survives adjudication by saying so.
+    const featureInventory =
+      input.preparationManifest.productContext.featureInventory;
+    if (
+      unsupportedClaims.length === 0 &&
+      featureInventory.length > 0 &&
+      input.preparationManifest.localDemoModeChanges.length === 0 &&
+      featureInventory.every(
+        (feature) => (feature.dataSeams ?? []).length === 0,
+      )
+    ) {
+      violations.push({
+        hint: repairHints.truthfulManifest,
+        message: `The workspace diff is empty and the manifest declares no local demo modes, added fixtures, or data seams, yet it claims ${featureInventory.length} demoable feature(s): ${featureInventory
+          .map(({ id }) => id)
+          .join(
+            ", ",
+          )}. A preparation that changed nothing must record how those features run offline — localDemoModeChanges enacted through envUsed — or actually prepare them.`,
+      });
+    }
+  }
+  // Declared data seams are referential claims (N100): the fixture module
+  // must be a file the preparation actually created or changed, and the
+  // replaced file must exist in the repo or the diff. A seam declared over
+  // nothing is the hollow-manifest class again, one level down.
+  const changedRepoPaths = new Set(
+    input.workspaceDiff.changedPaths.map(toRepoRelativePath),
+  );
+  for (const feature of input.preparationManifest.productContext
+    .featureInventory) {
+    for (const seam of feature.dataSeams ?? []) {
+      if (!changedRepoPaths.has(seam.fixtureModule)) {
+        violations.push({
+          hint: repairHints.truthfulManifest,
+          message: `Feature ${feature.id} declares data seam fixture module ${seam.fixtureModule}, but the preparation never created or changed that file. Author the fixture literal there and return it from ${seam.functionName} under the demo gate, or correct the declaration.`,
+        });
+      }
+      if (
+        !changedRepoPaths.has(seam.path) &&
+        !input.repoSourceFiles.has(seam.path)
+      ) {
+        violations.push({
+          hint: repairHints.truthfulManifest,
+          message: `Feature ${feature.id} declares data seam file ${seam.path}, which exists neither in the repository nor in the prepared diff.`,
+        });
+      }
+      // A declared proof rests on what the fixture renders, so a fixture
+      // shape nobody verified — or one the compiler rejected — cannot back
+      // it: excalidraw claimed "Undo enabled immediately" over a not-run
+      // probe while the harvested control state read [disabled]
+      // (2026-08-08). Legitimately unprobeable repos survive the judge by
+      // saying why the claim holds anyway.
+      const probeOutcome = seam.shapeProbe?.trim().toLowerCase();
+      if (
+        feature.expectedProof !== undefined &&
+        probeOutcome !== undefined &&
+        (probeOutcome.startsWith("not-run") ||
+          probeOutcome.startsWith("failed"))
+      ) {
+        violations.push({
+          hint: repairHints.truthfulManifest,
+          message: `Feature ${feature.id} declares an expectedProof observable state, but its data seam ${seam.path} records shapeProbe "${seam.shapeProbe}" — an unverified fixture shape cannot back a claimed observable state. Run the fixture-shape probe and record its outcome, or state in the probe entry why the claim holds without the compiler's check.`,
+        });
+      }
+    }
+  }
+  // Exploration's own ledger beats the manifest's prose: a prior round's
+  // feature verdict recording an auth wall disproves a manifest that still
+  // declares the feature needs no auth handling (midday claimed
+  // authStrategy "none" across surfaces exploration then found behind
+  // login redirects, 2026-08-09). Features already declaring a strategy
+  // are the strategy failing, not a false claim, and stay with repair.
+  const inventoryById = new Map(
+    input.preparationManifest.productContext.featureInventory.map(
+      (feature) => [feature.id, feature] as const,
+    ),
+  );
+  for (const priorVerdict of input.priorFeatureVerdicts ?? []) {
+    if (priorVerdict.failedBecause !== "auth-wall") {
+      continue;
+    }
+    const feature = inventoryById.get(priorVerdict.featureId);
+    if (feature === undefined || feature.authStrategy !== "none") {
+      continue;
+    }
+    violations.push({
+      hint: repairHints.observedAuthWall,
+      message: `The harness observed an authentication wall on feature ${
+        feature.id
+      }'s entry routes${
+        priorVerdict.detail === undefined ? "" : ` (${priorVerdict.detail})`
+      }, but the manifest still declares authStrategy "none" for it — the prepared app itself disproves the claim. Prepare a demo-gated bypass or demo identity for that surface, or correct the feature's entry paths.`,
+    });
   }
   const repairPaths = readInvalidRepairPaths(input);
   const filePatches = parsePatchSections(input.workspaceDiff.patch);
@@ -149,6 +320,30 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.packageManagerIdentity,
         message: `${path} changes the package-manager identity (the packageManager pin or a manager configuration file); the backend pins the detected manager and regenerates lockfiles with it.`,
+        path,
+      });
+    }
+    // Rewriting an error status into a success converts the harness's probe
+    // into a lie while fixing nothing: ghost's maintenance page went
+    // 503→200 and preflight turned green over the same broken state
+    // (2026-08-08). Gated or not — the probe runs with the gate on — the
+    // rewrite itself must reach the judge; a legitimate demo-mode toggle
+    // survives by quoting the condition it actually changed.
+    const removedErrorWrites = [...readStatusWrites(patch.removed)].filter(
+      (code) => code >= 400,
+    );
+    const addedSuccessWrites = [...readStatusWrites(patch.added)].filter(
+      (code) => code >= 200 && code < 300,
+    );
+    if (removedErrorWrites.length > 0 && addedSuccessWrites.length > 0) {
+      violations.push({
+        hint: repairHints.statusHonesty,
+        message: `${path} rewrites an HTTP error status into a success: a ${removedErrorWrites.join(
+          "/",
+        )} response write was removed and a ${addedSuccessWrites.join(
+          "/",
+        )} one added. If the harness probed that route, the rewrite falsifies the probe instead of repairing what failed.`,
+        path,
       });
     }
   }
@@ -181,6 +376,7 @@ export function validatePreparationFidelity(input: {
         return (
           reference.test(stripComments(otherPatch.addedText)) &&
           hasConditionalDemoGate(
+            otherPath,
             otherPatch,
             demoGate,
             input.repoSourceFiles.get(otherPath) ?? "",
@@ -192,6 +388,7 @@ export function validatePreparationFidelity(input: {
     violations.push({
       hint: repairHints.dependencyScope,
       message: `${path} was modified by dependency installation repair, which may change only package manifests or recognized package-manager configuration.`,
+      path,
     });
   }
   const createdPaths = input.workspaceDiff.changedPaths
@@ -212,6 +409,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.selfRequest,
         message: `${path} calls back through its own listener from server-side code, which can recursively stall rendering. Use the fixture or adapter directly instead.`,
+        path,
       });
       continue;
     }
@@ -263,6 +461,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.seam,
         message: `${path} modifies original feature logic outside an authentication, data, service, or configuration seam.`,
+        path,
       });
     }
   }
@@ -280,6 +479,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.selfRequest,
         message: `${path} calls back through its own listener from server-side code, which can recursively stall rendering. Use the fixture or adapter directly instead.`,
+        path,
       });
       continue;
     }
@@ -290,22 +490,31 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.envUsed,
         message: `${path} changes authentication behavior through a created environment file; demo environment belongs in envUsed with a gated adaptation.`,
+        path,
       });
     }
+    // Content decides, path suggests: the path prior nominates the file, but
+    // the veto requires positive presentation evidence in the file's own
+    // content — markup/JSX/styling, or a file type that is presentation by
+    // nature. Directory naming alone vetoed directus's one-line boolean gate
+    // because its frontend package is named `app/` (2026-08-09), and
+    // replacement UI must render something, so this loses no recall.
     if (
       isProductPresentationPath(path) &&
       !isVendoredAssetPath(path) &&
-      (!isDemoSeamPath(path) || addsProductPresentation(patch))
+      (isPresentationByFileType(path) || addsProductPresentation(patch))
     ) {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `${path} creates replacement product UI instead of adapting the original application.`,
+        path,
       });
     }
     if (isStandaloneReplacementRuntime(patch)) {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `${path} creates a standalone server with replacement product markup or styling.`,
+        path,
       });
     }
     if (
@@ -316,6 +525,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `The prepared start command launches newly created application entrypoint ${path}.`,
+        path,
       });
     }
   }
@@ -325,18 +535,84 @@ export function validatePreparationFidelity(input: {
       hint: repairHints.keepWorkspaces,
       message:
         "package.json removes the original workspace configuration instead of adapting the original app.",
+      path: "package.json",
     });
+  }
+  const narrowedBuildScope = readNarrowedBuildScope(
+    input.preparationManifest.appDir,
+    filePatches,
+    input.repoSourceFiles,
+  );
+  if (narrowedBuildScope !== undefined) {
+    violations.push(narrowedBuildScope);
   }
   for (const path of createdPaths) {
     if (!isDemoSeamPath(path) && packagePatch.addedText.includes(path)) {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `package.json redirects an application command to newly created file ${path}.`,
+        path: "package.json",
       });
     }
   }
 
-  return createFidelityReport(violations);
+  return violations;
+}
+
+/**
+ * Applies an adjudication agent's verdicts to the candidate vetoes with the
+ * evidence bar the judge cannot lower: a confirmation stands only when every
+ * quoted evidence line literally appears in the named file's diff section
+ * (or anywhere in the patch for candidates without a file), and at least one
+ * quote was given. Unjudged candidates always survive — the judge can only
+ * rescue from false vetoes, never weaken the gate.
+ */
+export function reconcileFidelityAdjudication(input: {
+  candidates: FidelityCandidate[];
+  patch: string;
+  verdicts: FidelityAdjudicationVerdict[];
+}): {
+  record: FidelityAdjudicationRecord;
+  steering: string[];
+  surviving: FidelityCandidate[];
+} {
+  const sections = parsePatchSections(input.patch);
+  const surviving: FidelityCandidate[] = [];
+  const steering: string[] = [];
+  const outcomes = input.candidates.map((candidate, candidateIndex) => {
+    const outcomeOf = (
+      outcome: FidelityAdjudicationRecord["outcomes"][number]["outcome"],
+    ) => ({ candidateIndex, message: candidate.message, outcome });
+    const verdict = input.verdicts.find(
+      (entry) => entry.candidateIndex === candidateIndex,
+    );
+    if (verdict === undefined) {
+      surviving.push(candidate);
+      return outcomeOf("unjudged");
+    }
+    if (verdict.verdict === "overturn") {
+      return outcomeOf("overturned");
+    }
+    const evidenceText =
+      candidate.path === undefined
+        ? input.patch
+        : (sections.get(candidate.path)?.text ?? "");
+    const quotes = verdict.quotedEvidence
+      .map((quote) => quote.trim())
+      .filter((quote) => quote.length > 0);
+    if (
+      quotes.length === 0 ||
+      !quotes.every((quote) => evidenceText.includes(quote))
+    ) {
+      return outcomeOf("overturned-unverifiable");
+    }
+    surviving.push(candidate);
+    if (verdict.steering !== undefined && verdict.steering.trim().length > 0) {
+      steering.push(verdict.steering);
+    }
+    return outcomeOf("confirmed");
+  });
+  return { record: { outcomes, status: "adjudicated" }, steering, surviving };
 }
 
 /**
@@ -352,11 +628,12 @@ function readGatedAdaptationViolation(input: {
   originalSource: string;
   patch: PatchSection;
   path: string;
-}): FidelityViolation | undefined {
+}): FidelityCandidate | undefined {
   if (input.addsPresentation) {
     return {
       hint: repairHints.preserveUi,
       message: `${input.path} modifies original product UI, styling, or brand assets instead of preserving them.`,
+      path: input.path,
     };
   }
   const gateExempt = isGateExemptDataPath(input.path);
@@ -369,7 +646,11 @@ function readGatedAdaptationViolation(input: {
       input.originalSource,
     );
     if (gateViolation !== undefined) {
-      return { hint: repairHints.gate, message: gateViolation };
+      return {
+        hint: repairHints.gate,
+        message: gateViolation,
+        path: input.path,
+      };
     }
   }
   const unpreserved = readUnpreservedRemovedLine(input.patch);
@@ -380,6 +661,7 @@ function readGatedAdaptationViolation(input: {
     return {
       hint: repairHints.preserveBehavior,
       message: `${input.path} removes original content (\`${unpreserved}\`); this file cannot carry the demo gate, so demo adaptations there must be additive.`,
+      path: input.path,
     };
   }
   return {
@@ -388,6 +670,7 @@ function readGatedAdaptationViolation(input: {
       input.kind === "presentation"
         ? `${input.path} removes original presentation (\`${unpreserved}\`) instead of preserving it behind the demo gate.`
         : `${input.path} removes original ${input.kind} behavior (\`${unpreserved}\`) instead of preserving it behind the demo gate.`,
+    path: input.path,
   };
 }
 
@@ -434,9 +717,17 @@ export function isPackageManagerLockfilePath(path: string): boolean {
   return lockfileNames.has(path.split("/").at(-1) ?? path);
 }
 
-function createFidelityReport(
-  violations: FidelityViolation[],
-): ValidationReport {
+/**
+ * Builds the preparation-fidelity report from the surviving candidates,
+ * carrying the adjudication record (when a judge ran) and any judge
+ * steering so repairs are told what to change, not just that a rule fired.
+ */
+export function createPreparationFidelityReport(input: {
+  adjudication?: FidelityAdjudicationRecord;
+  candidates: FidelityCandidate[];
+  steering?: string[];
+}): ValidationReport {
+  const violations = input.candidates;
   const passed = violations.length === 0;
   return {
     artifactReferences: [
@@ -447,6 +738,9 @@ function createFidelityReport(
     browserObservations: [],
     consoleErrors: [],
     ...(passed ? {} : { failureClassification: "product fidelity violation" }),
+    ...(input.adjudication === undefined
+      ? {}
+      : { fidelityAdjudication: input.adjudication }),
     logsSummary: passed
       ? "Prepared runtime preserves the screened product application."
       : `Prepared runtime does not preserve the screened product: ${violations
@@ -461,7 +755,10 @@ function createFidelityReport(
     stderrExcerpts: [],
     stdoutExcerpts: [],
     suggestedRepairHints: [
-      ...new Set(violations.map((violation) => violation.hint)),
+      ...new Set([
+        ...violations.map((violation) => violation.hint),
+        ...(input.steering ?? []),
+      ]),
     ],
   };
 }
@@ -554,9 +851,25 @@ function isProductPresentationPath(path: string) {
   );
 }
 
+/**
+ * File types that are presentation by nature: creating one authors UI
+ * regardless of what the diff shows. Deliberately excludes .jsx/.tsx —
+ * script files whose content may be a one-line gate; for them the content
+ * check decides.
+ */
+function isPresentationByFileType(path: string) {
+  return /\.(?:css|html|less|png|jpe?g|scss|svg|svelte|vue|webp)$/i.test(path);
+}
+
 function isDemoSeamPath(path: string) {
-  return /(?:^|[./_-])(?:adapters?|api|auth|caches?|clients?|configs?|data|databases?|db|env|fixtures?|gateways?|graphql|integrations?|middleware|mocks?|providers?|proxy|repositor(?:y|ies)|rpc|seeds?|services?|sessions?|stores?|trpc)(?:[./_-]|$)/i.test(
-    path,
+  // The `demo` clause is an owned convention, not vocabulary: the pipeline's
+  // own prompts direct agents to build demo-gated adaptations under
+  // demo-named files, and casing must not matter (outline's camelCase
+  // demoFixtures.ts missed every delimiter-bound token, 2026-08-09).
+  return (
+    /(?:^|[./_-])(?:adapters?|api|auth|caches?|clients?|configs?|data|databases?|db|env|fixtures?|gateways?|graphql|integrations?|middleware|mocks?|providers?|proxy|repositor(?:y|ies)|rpc|seeds?|services?|sessions?|stores?|trpc)(?:[./_-]|$)/i.test(
+      path,
+    ) || /demo/i.test(path)
   );
 }
 
@@ -565,18 +878,38 @@ interface DemoGateEvidence {
   identifiers: string[];
 }
 
+/**
+ * Matches any spelling of the pipeline-owned gate token — prefixed
+ * (`VITE_`, `NEXT_PUBLIC_`), define-wrapped (`__MAKEADEMO_DEMO__`), or
+ * bare. Substring by design: the delimiter-bound variant rejected the
+ * Vite-required prefix and killed excalidraw's canonical repair (2026-08-09).
+ */
+const gateTokenPattern = /makeademo_demo/i;
+
+function readConfiguredDemoFlags(
+  preparationManifest: PreparationManifest,
+): string[] {
+  return Object.entries(preparationManifest.envUsed)
+    .filter(
+      ([key, value]) =>
+        /(?:^|_)MAKEADEMO_DEMO$/i.test(key) && /^(?:1|true)$/i.test(value),
+    )
+    .map(([key]) => key);
+}
+
+function declaresMissingStubMechanism(detail: string): boolean {
+  return /\b(?:no|without(?:\s+an?)?)\s+(?:(?:local|demo|fixture[- ]backed)\s+)?(?:fixture(?:\s+adapter)?|mock|stub|adapter|delivery\s+mechanism)\b[^.!;\n]{0,50}\b(?:added|created|implemented|provided|wired)\b/i.test(
+    detail,
+  );
+}
+
 function readDemoGateEvidence(
   preparationManifest: PreparationManifest,
   repoSourceFiles: ReadonlyMap<string, string | undefined>,
   workspaceDiff: PreparationWorkspaceDiff,
   filePatches: ReadonlyMap<string, PatchSection>,
 ): DemoGateEvidence {
-  const configuredFlags = Object.entries(preparationManifest.envUsed)
-    .filter(
-      ([key, value]) =>
-        /(?:^|_)MAKEADEMO_DEMO$/i.test(key) && /^(?:1|true)$/i.test(value),
-    )
-    .map(([key]) => key);
+  const configuredFlags = readConfiguredDemoFlags(preparationManifest);
   if (configuredFlags.length === 0) {
     return { flags: [], identifiers: [] };
   }
@@ -586,23 +919,48 @@ function readDemoGateEvidence(
         ([path, source]) =>
           source !== undefined && isExecutableSourcePath(path),
       )
-      .map(([, source]) => source ?? ""),
+      .map(([path, source]) => ({ code: source ?? "", path })),
     ...workspaceDiff.changedPaths
       .map(toRepoRelativePath)
       .filter(isExecutableSourcePath)
-      .map((path) => filePatches.get(path)?.addedText ?? ""),
+      .map((path) => ({ code: filePatches.get(path)?.addedText ?? "", path })),
   ];
-  const flags = configuredFlags.filter((flag) =>
-    sources.some((source) => readsDemoFlag(source, flag)),
+  // Any genuine read of the gate token — under any prefixed spelling —
+  // validates every configured flag: the code owns the semantic, and
+  // demanding envUsed spell each prefixed variant is the treadmill this
+  // design retires. The AST decides what counts as a read (a bare string
+  // literal does not); the env-shaped textual fallback covers non-JS
+  // sources and commented-out reads the parser treats as trivia.
+  const evidence = sources.map(({ code, path }) => ({
+    analysis: gateTokenPattern.test(code)
+      ? analyzeDemoGateUsage({ fileName: path, source: code })
+      : undefined,
+    code,
+  }));
+  const flagsRead = evidence.some(
+    ({ analysis, code }) =>
+      (analysis?.gateNames.length ?? 0) > 0 || readsDemoFlagText(code),
   );
   return {
-    flags,
+    flags: flagsRead ? configuredFlags : [],
     identifiers: [
       ...new Set(
-        sources.flatMap((source) => readDemoGateIdentifiers(source, flags)),
+        evidence.flatMap(({ analysis }) => analysis?.gateBindings ?? []),
       ),
     ],
   };
+}
+
+/**
+ * Env-read-shaped textual mention of the gate token: an env/config accessor
+ * within reach of any spelling containing MAKEADEMO_DEMO. Deliberately
+ * front-unrestricted so prefixed spellings count; a bare string literal
+ * without an accessor shape does not.
+ */
+function readsDemoFlagText(code: string): boolean {
+  return /(?:\$\{?|(?:config|env(?:ironment)?|getenv|settings)\b[\s\S]{0,80})[A-Za-z0-9_]*MAKEADEMO_DEMO/i.test(
+    code,
+  );
 }
 
 function readDemoAdaptationViolation(
@@ -615,7 +973,7 @@ function readDemoAdaptationViolation(
   if (demoGate.flags.length === 0) {
     return missingDemoGateViolation(path, kind);
   }
-  if (!hasConditionalDemoGate(patch, demoGate, originalSource)) {
+  if (!hasConditionalDemoGate(path, patch, demoGate, originalSource)) {
     return `${path} does not conditionally use the repository's active MakeADemo demo gate for the ${kind} adaptation.`;
   }
   return undefined;
@@ -665,13 +1023,6 @@ function isNonDirectiveCommentLine(line: string): boolean {
   );
 }
 
-function readsDemoFlag(source: string, flag: string) {
-  return new RegExp(
-    `(?:\\$\\{?|(?:config|env(?:ironment)?|getenv|settings)\\b[\\s\\S]{0,80})${escapeRegExp(flag)}(?![A-Za-z0-9_])`,
-    "i",
-  ).test(source);
-}
-
 function isAuthenticationAdaptation(path: string, patch: PatchSection) {
   return (
     isExecutableSourcePath(path) &&
@@ -712,73 +1063,52 @@ function missingDemoGateViolation(
   return `${path} changes ${kind} behavior without an active MakeADemo demo flag recorded in envUsed.`;
 }
 
+/**
+ * Answers "do this patch's additions conditionally use the demo gate?" with
+ * an AST, not a regex window. The gate may appear as any spelling of the
+ * pipeline-owned token, a binding derived from it in this file's scope, or a
+ * repo-wide gate identifier this file imports or declares. Non-JS-family and
+ * unextractable sources fail open: "no gate found" without a parse must
+ * never veto (N92) — the adjudicating judge still reviews the candidate.
+ */
 function hasConditionalDemoGate(
+  path: string,
   patch: PatchSection,
   demoGate: DemoGateEvidence,
   originalSource: string,
 ) {
-  const additions = stripComments(patch.addedText);
-  const fileScope = `${stripComments(originalSource)}\n${additions}`;
-  const tokens = [
-    ...demoGate.flags.filter((flag) => readsDemoFlag(additions, flag)),
-    ...demoGate.identifiers.filter((identifier) =>
-      isBoundInFile(fileScope, identifier),
-    ),
-  ];
-  return tokens.some((token) => isConditionalUse(additions, token));
+  const additions = patch.addedText;
+  const fileScope = `${originalSource}\n${additions}`;
+  const scopeProbe = analyzeDemoGateUsage({
+    fileName: path,
+    source: fileScope,
+  });
+  if (scopeProbe === undefined) {
+    return true;
+  }
+  const importedGateIdentifiers = demoGate.identifiers.filter((identifier) =>
+    scopeProbe.boundNames.includes(identifier),
+  );
+  const scopeAnalysis =
+    analyzeDemoGateUsage({
+      fileName: path,
+      knownGateIdentifiers: importedGateIdentifiers,
+      source: fileScope,
+    }) ?? scopeProbe;
+  const additionsAnalysis = analyzeDemoGateUsage({
+    fileName: path,
+    knownGateIdentifiers: [
+      ...new Set([...importedGateIdentifiers, ...scopeAnalysis.gateBindings]),
+    ],
+    source: additions,
+  });
+  return additionsAnalysis?.hasConditionalGate ?? true;
 }
 
 function stripComments(source: string) {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/(?:^|(?<=\s))(?:\/\/|#).*$/gm, " ");
-}
-
-/** A gate identifier only counts inside a file that imports or declares it. */
-function isBoundInFile(source: string, identifier: string) {
-  const name = escapeRegExp(identifier);
-  return (
-    new RegExp(`\\bimport\\b[^;]{0,300}[{,\\s]${name}\\s*[},\\s]`).test(
-      source,
-    ) ||
-    new RegExp(`\\b(?:const|let|var|final|bool|boolean)\\s+${name}\\b`).test(
-      source,
-    ) ||
-    new RegExp(`\\b(?:def|fn|func|function)\\s+${name}\\s*\\(`).test(source) ||
-    new RegExp(`\\bfrom\\b[^\\n]*\\bimport\\b[^\\n]*\\b${name}\\b`).test(source)
-  );
-}
-
-function readDemoGateIdentifiers(source: string, flags: string[]) {
-  const identifiers = new Set<string>();
-  for (const flag of flags) {
-    const name = escapeRegExp(flag);
-    const patterns = [
-      new RegExp(
-        `\\b(?:const|final|let|var|bool|boolean)\\s+([A-Za-z_$][\\w$]*)\\s*[:=][^;]{0,200}(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`,
-        "g",
-      ),
-      new RegExp(
-        `\\b(?:def|fn|func|function)\\s+([A-Za-z_$][\\w$]*)\\s*\\([^)]*\\)[^]{0,160}?(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`,
-        "g",
-      ),
-    ];
-    for (const pattern of patterns) {
-      for (const match of source.matchAll(pattern)) {
-        if (match[1] !== undefined) identifiers.add(match[1]);
-      }
-    }
-  }
-  return [...identifiers];
-}
-
-function isConditionalUse(source: string, token: string) {
-  const conditional = "(?:\\b(?:if|unless)\\b|\\?|&&|\\|\\|)";
-  const reference = `(?:^|[^A-Za-z0-9_$])${escapeRegExp(token)}(?![A-Za-z0-9_$])`;
-  return new RegExp(
-    `(?:${conditional}[^;]{0,160}${reference}|${reference}[^;]{0,160}${conditional})`,
-    "m",
-  ).test(source);
 }
 
 function isExecutableSourcePath(path: string) {
@@ -826,6 +1156,105 @@ function readResolvedStartCommands(
     if (script !== undefined) commands.push(script);
   }
   return commands;
+}
+
+// Explicit workspace-target selectors inside a build script body: an nx
+// task target, a filter/scope/project flag (turbo, pnpm, lerna, nx), a yarn
+// `workspace <name>` subcommand, or an npm `-w`/`--workspace` flag. These
+// are the shapes that make a build script build some OTHER package.
+const buildSelectorPatterns = [
+  /\bnx\s+(?:build|run|serve)\s+([\w@./:-]+)/g,
+  /--(?:filter|scope|projects?)[=\s]+([^\s'"]+)/g,
+  /\bworkspace\s+([\w@./-]+)/g,
+  /(?:^|\s)(?:-w|--workspace)[=\s]([^\s'"]+)/g,
+];
+
+function readBuildSelectorTargets(segment: string): string[] {
+  return buildSelectorPatterns.flatMap((pattern) =>
+    [...segment.matchAll(pattern)].flatMap((match) => {
+      const target = (match[1] ?? "").split(":")[0] ?? "";
+      return target === "" ? [] : [target];
+    }),
+  );
+}
+
+/**
+ * Detects a repair buying a green build gate by narrowing the build's scope:
+ * the selected app package's own `build` script rewritten so that every step
+ * is redirected at a different workspace package (twenty round 6 rewrote it
+ * to `npx nx build twenty-shared`, which exits 0 by no longer building the
+ * app, 2026-08-13). Fires only when the patch changes the script, every
+ * command segment carries an explicit workspace-target selector, and none of
+ * the targets reference the app by package name or directory — a script that
+ * keeps any in-place step or names the app is the legitimate shape of the
+ * same edit, and adjudication can rescue task runners whose project names
+ * match none of the app's identifiers.
+ */
+function readNarrowedBuildScope(
+  appDir: string,
+  filePatches: ReadonlyMap<string, PatchSection>,
+  repoSourceFiles: ReadonlyMap<string, string | undefined>,
+): FidelityCandidate | undefined {
+  const normalizedAppDir = appDir.replace(/^\.\/?/, "").replace(/\/$/, "");
+  const packagePath =
+    normalizedAppDir === ""
+      ? "package.json"
+      : `${normalizedAppDir}/package.json`;
+  const patch = filePatches.get(packagePath);
+  if (patch === undefined) return undefined;
+  const readBuildScript = (lines: string[]) =>
+    lines
+      .map((line) => /"build"\s*:\s*"([^"]+)"/.exec(line)?.[1])
+      .find((body) => body !== undefined);
+  const rewrittenBuild = readBuildScript(patch.added);
+  if (rewrittenBuild === undefined) return undefined;
+  const originalSource = repoSourceFiles.get(packagePath) ?? "";
+  const originalBuild =
+    /"build"\s*:\s*"([^"]+)"/.exec(originalSource)?.[1] ??
+    readBuildScript(patch.removed);
+  if (rewrittenBuild === originalBuild) return undefined;
+  const packageName = /"name"\s*:\s*"([^"]+)"/.exec(originalSource)?.[1];
+  const appTokens = new Set(
+    [
+      packageName,
+      packageName?.split("/").at(-1),
+      normalizedAppDir,
+      normalizedAppDir.split("/").at(-1),
+    ]
+      .filter((token): token is string => token !== undefined && token !== "")
+      .map((token) => token.toLowerCase()),
+  );
+  const referencesApp = (target: string) => {
+    const cleaned = target
+      .toLowerCase()
+      .replace(/^\.\//, "")
+      .replace(/\.{3}$/, "");
+    return (
+      appTokens.has(cleaned) || appTokens.has(cleaned.split("/").at(-1) ?? "")
+    );
+  };
+  const segments = rewrittenBuild
+    .split(/&&|\|\||;/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "");
+  const segmentTargets = segments.map(readBuildSelectorTargets);
+  if (
+    segments.length === 0 ||
+    segmentTargets.some((targets) => targets.length === 0)
+  ) {
+    return undefined;
+  }
+  const targets = [...new Set(segmentTargets.flat())];
+  if (targets.some(referencesApp)) return undefined;
+  return {
+    hint: repairHints.buildAppUnderTest,
+    message: `${packagePath} rewrites the selected app's "build" script to "${rewrittenBuild}", which builds only ${targets.join(
+      ", ",
+    )} and never references the app under test (${
+      packageName ?? (normalizedAppDir === "" ? packagePath : normalizedAppDir)
+    }); the build gate would pass without building the app.`,
+    path: packagePath,
+  };
 }
 
 /**
@@ -886,6 +1315,19 @@ function parsePatchSections(patch: string): Map<string, PatchSection> {
   return new Map(
     [...sections].map(([path, text]) => [path, createPatchSection(text)]),
   );
+}
+
+/**
+ * Returns the named file's slice of a unified diff, or undefined when the
+ * diff carries no section for that path. Callers that present one candidate's
+ * evidence (such as the fidelity adjudication prompt) use this to show the
+ * flagged file's own changes instead of the whole preparation patch.
+ */
+export function readPatchSectionText(
+  patch: string,
+  path: string,
+): string | undefined {
+  return parsePatchSections(patch).get(path)?.text;
 }
 
 function createPatchSection(text: string): PatchSection {

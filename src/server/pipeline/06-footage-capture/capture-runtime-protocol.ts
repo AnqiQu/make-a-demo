@@ -1,5 +1,6 @@
 const markerPrefixes = {
   action: "[makeademo:action] ",
+  navigation: "[makeademo:navigation] ",
   network: "[makeademo:network-blocked] ",
   scene: "[makeademo:scene] ",
   step: "[makeademo:step] ",
@@ -54,6 +55,7 @@ export type CaptureRuntimeProtocol = {
     resourceType?: string;
     url?: string;
   }>;
+  navigations: Array<{ status: number; url: string }>;
   scenes: CaptureSceneMarker[];
   steps: CaptureStepMarker[];
   runtimeEvents: Array<
@@ -118,6 +120,7 @@ export function readCaptureRuntimeProtocol(
   const orderedMarkers: OrderedRuntimeMarker[] = [];
   const blockedNetworkAttempts: CaptureRuntimeProtocol["blockedNetworkAttempts"] =
     [];
+  const navigations: CaptureRuntimeProtocol["navigations"] = [];
   const validation: CaptureValidationMarker[] = [];
   let sequence = 0;
 
@@ -149,6 +152,10 @@ export function readCaptureRuntimeProtocol(
         });
         continue;
       }
+      if (line.startsWith(markerPrefixes.navigation)) {
+        navigations.push(readNavigationMarker(line));
+        continue;
+      }
       if (line.startsWith(markerPrefixes.network)) {
         blockedNetworkAttempts.push(readNetworkMarker(line));
         continue;
@@ -172,6 +179,7 @@ export function readCaptureRuntimeProtocol(
       )
       .map(withoutOrderingMetadata),
     blockedNetworkAttempts,
+    navigations,
     runtimeEvents: orderedMarkers.map((marker) => {
       const { kind, sequence: _sequence, ...value } = marker;
       return {
@@ -302,7 +310,7 @@ export function readSuccessfulCaptureProtocol(input: {
       if (marker.event === "started") {
         if (activeAction !== undefined) {
           throw violation(
-            "Capture script emitted nested Browser Action markers.",
+            `Capture script emitted nested Browser Action markers: ${activeAction.label} was still open when ${marker.label} started.`,
           );
         }
         activeAction = { label: marker.label, sceneId: marker.sceneId };
@@ -478,6 +486,35 @@ export function readCaptureValidationFailure(
   return undefined;
 }
 
+/**
+ * Returns the first main-document navigation whose response came from the app's
+ * own origin with a server-error (5xx) status. A server error on the app's own
+ * route is a hard capture failure that no external-resource hydration or retry
+ * can fix, so the caller treats it as a sticky verdict. Cross-origin responses
+ * and sub-500 statuses are never app server errors and return undefined.
+ */
+export function readCaptureAppServerError(
+  protocol: CaptureRuntimeProtocol,
+  baseUrl: string,
+): { status: number; url: string } | undefined {
+  let appOrigin: string;
+  try {
+    appOrigin = new URL(baseUrl).origin;
+  } catch {
+    return undefined;
+  }
+  return protocol.navigations.find((navigation) => {
+    if (navigation.status < 500) {
+      return false;
+    }
+    try {
+      return new URL(navigation.url).origin === appOrigin;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function readSceneMarker(line: string): CaptureSceneMarker {
   const value = readObjectPayload(line, markerPrefixes.scene, "Scene");
   return readLifecycleMarker(value, "Scene");
@@ -539,6 +576,25 @@ function readLifecycleMarker(
     ...(typeof value.message === "string" ? { message: value.message } : {}),
     sceneId: value.sceneId,
   };
+}
+
+function readNavigationMarker(
+  line: string,
+): CaptureRuntimeProtocol["navigations"][number] {
+  const value = readObjectPayload(
+    line,
+    markerPrefixes.navigation,
+    "navigation",
+  );
+  if (
+    typeof value.status !== "number" ||
+    !Number.isFinite(value.status) ||
+    typeof value.url !== "string" ||
+    value.url.length === 0
+  ) {
+    throw malformed("Malformed navigation marker emitted by capture script.");
+  }
+  return { status: value.status, url: value.url };
 }
 
 function readNetworkMarker(

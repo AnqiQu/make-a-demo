@@ -10,8 +10,59 @@ import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import {
   type AgentHarnessPipelineDependencies,
   type AgentHarnessPipelineInput,
+  isStopEligibleFailure,
   runAgentHarnessPipeline,
 } from "./agent-harness";
+
+describe("isStopEligibleFailure", () => {
+  it.each([
+    ["install failure", "Install failed: ENOSPC on the package cache"],
+    [
+      "lifecycle timeout",
+      "Lifecycle process was Killed after exhausting memory",
+    ],
+    ["service migration failure", "Migration Killed by the sandbox"],
+    ["start failure", "Organization resource cap rejected the sandbox request"],
+  ])(
+    "accepts %s with a resource-exhaustion headline",
+    (classification, headline) => {
+      expect(
+        isStopEligibleFailure({
+          ...report("preparation-preflight", "failed"),
+          failureClassification: classification,
+          logsSummary: headline,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("accepts the N153 wedged-target path independently of failure classification", () => {
+    expect(
+      isStopEligibleFailure({
+        ...report("preparation-preflight", "failed"),
+        failureClassification: "wedged-sandbox-target",
+        logsSummary: "Daytona upload exhausted its retry ladder",
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["start failure", "Start command exited with code 1"],
+    ["requested feature not observable", "Killed while probing the feature"],
+    [
+      "install failure",
+      "Install command failed\nENOSPC appeared only in detail",
+    ],
+  ])("rejects an ineligible %s report", (classification, logsSummary) => {
+    expect(
+      isStopEligibleFailure({
+        ...report("preparation-preflight", "failed"),
+        failureClassification: classification,
+        logsSummary,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("runAgentHarnessPipeline", () => {
   it("refuses a dependency set that omits workspace-diff capture before any stage runs", async () => {
@@ -107,6 +158,27 @@ describe("runAgentHarnessPipeline", () => {
 
     expect(result.status).toBe("security-rejected");
     expect(downstreamCalls).toEqual([]);
+  });
+
+  it("profiles the screened archive size before creating the workspace", async () => {
+    let profiledArchiveSizeBytes: number | undefined;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ archiveSizeBytes: 134_113_964 }),
+        stubPipelineDependencies({
+          async createWorkspace({ repoProfile }) {
+            profiledArchiveSizeBytes = repoProfile.archiveSizeBytes;
+            return workspace();
+          },
+          async synthesizeRunPlan() {
+            throw new Error("profile observed");
+          },
+        }),
+      ),
+    ).rejects.toThrow("profile observed");
+
+    expect(profiledArchiveSizeBytes).toBe(134_113_964);
   });
 
   it("runs the artifact-driven pipeline in order and hands durable artifacts to each stage", async () => {
@@ -480,6 +552,32 @@ describe("runAgentHarnessPipeline", () => {
     expect(isAgentHarnessInfrastructureError(error)).toBe(true);
   });
 
+  it("hands the workspace seam the job deadline so stage timeouts cap at the remaining budget", async () => {
+    // N156 (twenty): the between-stage assertion alone let stage-internal
+    // timeouts carry a run to 112 minutes. The workspace decorator needs the
+    // absolute deadline, so the orchestrator must pass it at creation.
+    let received: { atMs: number; totalMs: number } | undefined;
+    const startedAt = Date.now();
+
+    await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_deadline_wiring" }),
+      stubPipelineDependencies({
+        async createWorkspace({ jobDeadline }) {
+          received = jobDeadline;
+          return workspace();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+      }),
+      { jobDeadlineMs: 5 * 60_000 },
+    ).catch(() => undefined);
+
+    expect(received?.totalMs).toBe(5 * 60_000);
+    expect(received?.atMs).toBeGreaterThanOrEqual(startedAt + 5 * 60_000);
+    expect(received?.atMs).toBeLessThan(startedAt + 5 * 60_000 + 60_000);
+  });
+
   it("records async stage failures after the stage promise rejects", async () => {
     const artifacts: Record<string, unknown> = {};
 
@@ -803,6 +901,425 @@ describe("runAgentHarnessPipeline", () => {
         }),
       ]),
     );
+  });
+
+  it("repairs a failed continuous take, revalidates it, and captures again within budget", async () => {
+    // N137 (calcom, 2026-08-14): capture-path validation passed, but the
+    // real take lost a client-navigation race on return-availability. The
+    // take's typed failure must spend the bounded script lane, then pass the
+    // static, dry-run, and fresh-runtime gates again before a retake.
+    const calls: string[] = [];
+    let footageAttempts = 0;
+    const repairedCandidate = {
+      ...scriptCandidate(),
+      scriptJsonContent: { scriptId: "script_repaired" },
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_footage_capture_repair" }),
+      stubPipelineDependencies({
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript({ failureReport }) {
+          calls.push(`repair:${failureReport.stage}`);
+          expect(failureReport.failedAction).toEqual({
+            actionId: "return-availability",
+            sceneId: "availability-settings",
+          });
+          return repairedCandidate;
+        },
+        async resetCaptureRuntime() {
+          calls.push("reset");
+          return report("capture-runtime-reset", "passed");
+        },
+        async validateCapturePath() {
+          calls.push("dynamic");
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          calls.push("static");
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      {
+        async captureAcceptedScript({ scriptCandidate: candidate }) {
+          footageAttempts += 1;
+          calls.push(
+            `footage:${(candidate.scriptJsonContent as { scriptId?: string }).scriptId}`,
+          );
+          return footageAttempts === 1
+            ? {
+                ...report("footage-capture", "failed"),
+                failedAction: {
+                  actionId: "return-availability",
+                  sceneId: "availability-settings",
+                },
+                failureClassification: "timing/state failure",
+                logsSummary:
+                  "Browser action return-availability failed in Scene availability-settings. goto: net::ERR_ABORTED",
+              }
+            : report("footage-capture", "passed");
+        },
+        scriptRepairLimit: 1,
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(result.scriptCandidate).toEqual(repairedCandidate);
+    expect(calls).toEqual([
+      "static",
+      "reset",
+      "dynamic",
+      "reset",
+      "footage:script_001",
+      "repair:footage-capture",
+      "static",
+      "reset",
+      "dynamic",
+      "reset",
+      "footage:script_repaired",
+    ]);
+    expect(
+      result.validationReports.filter(
+        (validation) => validation.stage === "footage-capture",
+      ),
+    ).toMatchObject([
+      { retryCount: 0, status: "failed" },
+      { retryCount: 1, status: "passed" },
+    ]);
+  });
+
+  it("passes the failed candidate identity into locator regrounding", async () => {
+    // N125: regrounding must know which candidate failed at replay — the
+    // action, its verified locator, the scene prefix ahead of it, and the
+    // failure screenshot — instead of re-exploring blind.
+    const exploreInputs: Array<Record<string, unknown>> = [];
+    let captureAttempts = 0;
+    const scriptWithScenes = {
+      ...scriptCandidate(),
+      scriptJsonContent: {
+        scenes: [
+          {
+            actions: [
+              { id: "goto-dashboard", path: "/", type: "goto" },
+              {
+                id: "click-dashboard",
+                locator: {
+                  name: "Open dashboard",
+                  role: "button",
+                  strategy: "role",
+                },
+                locatorCandidateId: "open-dashboard-locator-1",
+                sourceActionId: "open-dashboard",
+                type: "click",
+              },
+            ],
+            id: "scene-main",
+          },
+        ],
+        scriptId: "script_001",
+      },
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_regrounding_identity" }),
+      stubPipelineDependencies({
+        async exploreApp(input) {
+          exploreInputs.push(input);
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript() {
+          return scriptWithScenes;
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async validateCapturePath() {
+          captureAttempts += 1;
+          return captureAttempts === 1
+            ? {
+                ...report("capture-path-validation", "failed"),
+                failedAction: {
+                  actionId: "click-dashboard",
+                  sceneId: "scene-main",
+                },
+                failureClassification: "locator failure",
+                logsSummary:
+                  "Browser action click-dashboard failed in Scene scene-main. locator resolution timed out",
+                screenshots: ["/tmp/run/makeademo-validation-failure.png"],
+              }
+            : report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptWithScenes;
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(exploreInputs).toHaveLength(2);
+    expect(exploreInputs[0]).not.toHaveProperty("captureFailure");
+    expect(exploreInputs[1]).toMatchObject({
+      captureFailure: {
+        actionId: "click-dashboard",
+        locator: { name: "Open dashboard", role: "button", strategy: "role" },
+        locatorCandidateId: "open-dashboard-locator-1",
+        sceneId: "scene-main",
+        scenePrefix: [{ id: "goto-dashboard", path: "/", type: "goto" }],
+        screenshotPath: "/tmp/run/makeademo-validation-failure.png",
+      },
+    });
+  });
+
+  it("routes unreproducible regrounding evidence to preparation repair", async () => {
+    // N125(3): when regrounding's prefix replay cannot reproduce the failed
+    // candidate, the run must not die on the failed regrounding report or
+    // burn the script budget — the app-state divergence goes to preparation
+    // repair and the pipeline re-enters from validated preparation.
+    const calls: string[] = [];
+    let captureAttempts = 0;
+    let exploreAttempts = 0;
+    const scriptWithScenes = {
+      ...scriptCandidate(),
+      scriptJsonContent: {
+        scenes: [
+          {
+            actions: [
+              { id: "goto-root", path: "/", type: "goto" },
+              {
+                id: "click-save",
+                locator: {
+                  name: "Save entry",
+                  role: "button",
+                  strategy: "role",
+                },
+                locatorCandidateId: "save-entry-locator-1",
+                sourceActionId: "open-dashboard",
+                type: "click",
+              },
+            ],
+            id: "scene-main",
+          },
+        ],
+        scriptId: "script_001",
+      },
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_unreproducible_regrounding" }),
+      stubPipelineDependencies({
+        async exploreApp(input) {
+          exploreAttempts += 1;
+          if (input.captureFailure !== undefined) {
+            calls.push(`reground:${exploreAttempts}`);
+            return {
+              kind: "repairable-failure" as const,
+              validationReport: {
+                ...report("app-exploration", "failed"),
+                failureClassification: "evidence unreproducible at replay",
+                logsSummary:
+                  "Browser action click-save's locator could not be reproduced in its replay context.",
+              },
+            };
+          }
+          calls.push(`explore:${exploreAttempts}`);
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport }) {
+          calls.push(`repair:${failureReport.failureClassification}`);
+          return {
+            manifest: { ...preparationManifest(), id: "prep_replay_fixed" },
+          };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async validateCapturePath() {
+          captureAttempts += 1;
+          calls.push(`capture:${captureAttempts}`);
+          return captureAttempts === 1
+            ? {
+                ...report("capture-path-validation", "failed"),
+                failedAction: {
+                  actionId: "click-save",
+                  sceneId: "scene-main",
+                },
+                failureClassification: "locator failure",
+                logsSummary:
+                  "Browser action click-save failed in Scene scene-main. locator resolution timed out",
+              }
+            : report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptWithScenes;
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(calls).toEqual([
+      "explore:1",
+      "capture:1",
+      "reground:2",
+      "repair:evidence unreproducible at replay",
+      "explore:3",
+      "capture:2",
+    ]);
+  });
+
+  it("stops a capture/static locator ping-pong with a combined diagnosis", async () => {
+    // N125(4): capture keeps failing the browser-verified candidate at
+    // replay while the static contract rejects every locator that differs
+    // from it. Two consecutive pairs must stop the run with one combined
+    // diagnosis instead of silently exhausting both repair budgets.
+    let captureAttempts = 0;
+    let staticAttempts = 0;
+    const equalityRejection =
+      'Browser action click-save locator does not match browser-verified candidate open-dashboard-locator-1: the script wrote {"name":"Save","role":"button","strategy":"role"} but the verified candidate is {"name":"Save entry","role":"button","strategy":"role"}';
+    const scriptWithScenes = {
+      ...scriptCandidate(),
+      scriptJsonContent: {
+        scenes: [
+          {
+            actions: [
+              { id: "goto-root", path: "/", type: "goto" },
+              {
+                id: "click-save",
+                locator: {
+                  name: "Save entry",
+                  role: "button",
+                  strategy: "role",
+                },
+                locatorCandidateId: "open-dashboard-locator-1",
+                sourceActionId: "open-dashboard",
+                type: "click",
+              },
+            ],
+            id: "scene-main",
+          },
+        ],
+        scriptId: "script_001",
+      },
+    };
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_locator_ping_pong" }),
+        stubPipelineDependencies({
+          async exploreApp() {
+            const catalog = actionCatalog();
+            const [firstAction] = catalog.actions;
+            if (firstAction === undefined) {
+              throw new Error("Expected the dashboard action fixture");
+            }
+            // A second action keeps the catalog legal when the flow-lock
+            // escape excludes the failing one before the breaker trips.
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: {
+                ...catalog,
+                actions: [firstAction, { ...firstAction, id: "open-settings" }],
+              },
+              appMap: appMap(),
+              validationReport: report("app-exploration", "passed"),
+            };
+          },
+          async planFlow() {
+            return flowSpec();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairScript() {
+            return scriptWithScenes;
+          },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
+          },
+          async validateCapturePath() {
+            captureAttempts += 1;
+            return {
+              ...report("capture-path-validation", "failed"),
+              failedAction: { actionId: "click-save", sceneId: "scene-main" },
+              failureClassification: "locator failure",
+              logsSummary: `Browser action click-save failed in Scene scene-main. locator resolution timed out (attempt ${captureAttempts})`,
+            };
+          },
+          async validatePreparation() {
+            return report("preparation-preflight", "passed");
+          },
+          async validateScriptContract() {
+            staticAttempts += 1;
+            // Pass on odd attempts so capture runs; reject the repaired
+            // script on even attempts — the alternating pattern.
+            return staticAttempts % 2 === 1
+              ? report("static-script-contract-validation", "passed")
+              : {
+                  ...report("static-script-contract-validation", "failed"),
+                  failureClassification: "script contract failure",
+                  logsSummary: equalityRejection,
+                };
+          },
+          async writeScript() {
+            return scriptWithScenes;
+          },
+        }),
+      ),
+    ).rejects.toThrow(/Locator ping-pong on browser action click-save/);
+
+    expect(captureAttempts).toBe(2);
   });
 
   it("derives missing scene navigation before validating the script contract", async () => {
@@ -1288,7 +1805,7 @@ describe("runAgentHarnessPipeline", () => {
         "new file mode 100644",
         `+export const fixtureRows = [${round}];`,
       ].join("\n"),
-      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      patchSha256: `sha256:${String(round).repeat(64).slice(0, 64)}` as const,
       sourceCommitSha: "abc123def456",
     });
 
@@ -1297,11 +1814,10 @@ describe("runAgentHarnessPipeline", () => {
       stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffCalls += 1;
-          // Call order: initial fidelity diff; before-repair baseline;
-          // after-repair diff; before-repair-2 baseline; after-repair-2.
-          if (diffCalls <= 2) return unchangedWorkspaceDiff();
-          if (diffCalls === 3) return diffAfterRepair(1);
-          if (diffCalls === 4) return diffAfterRepair(1);
+          // Call order: initial fidelity diff; after repair 1; after
+          // repair 2. Each repair lands a fresh source-only change.
+          if (diffCalls === 1) return unchangedWorkspaceDiff();
+          if (diffCalls === 2) return diffAfterRepair(1);
           return diffAfterRepair(2);
         },
         async exploreApp() {
@@ -1352,6 +1868,257 @@ describe("runAgentHarnessPipeline", () => {
     expect(repairHintLog[1]).toContain(
       "install reused from validation attempt 1",
     );
+  });
+
+  it("passes the prior feature ledger and diff-touched features into repair validation", async () => {
+    const verificationScopes: Array<
+      Parameters<
+        AgentHarnessPipelineDependencies["validatePreparation"]
+      >[0]["repairFeatureVerification"]
+    > = [];
+    let preflightAttempts = 0;
+    let diffCalls = 0;
+    const dashboardFailure = {
+      detail: "Dashboard overview was not found",
+      failedBecause: "declared-proof-failed" as const,
+      featureId: "dashboard",
+      verdict: "failed" as const,
+    };
+    const repairedManifest = {
+      ...preparationManifest(),
+      envUsed: { MAKEADEMO_DEMO: "true" },
+    };
+    const repairedDiff = {
+      changedFileSha256: {
+        "src/page.tsx": `sha256:${"d".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/page.tsx"],
+      patch:
+        "diff --git a/src/page.tsx b/src/page.tsx\n+if (process.env.MAKEADEMO_DEMO === 'true') return 'Dashboard overview';",
+      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_repair_feature_scope" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          diffCalls += 1;
+          return diffCalls === 1 ? unchangedWorkspaceDiff() : repairedDiff;
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: repairedManifest };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ repairFeatureVerification }) {
+          preflightAttempts += 1;
+          verificationScopes.push(repairFeatureVerification);
+          return preflightAttempts === 1
+            ? {
+                ...report("preparation-preflight", "failed"),
+                failingFeatureIds: ["dashboard"],
+                failureClassification: "requested feature not observable",
+                featureVerdicts: [dashboardFailure],
+              }
+            : report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(verificationScopes).toEqual([
+      undefined,
+      {
+        priorFeatureVerdicts: [dashboardFailure],
+        touchedFeatureIds: ["dashboard"],
+      },
+    ]);
+  });
+
+  it("reinstalls after a lifecycle timeout instead of reusing the incomplete install", async () => {
+    // A timed-out lifecycle (N98) left native builds and postinstall codegen
+    // unfinished: reusing that install would skip the lifecycle re-run and
+    // send preflight against half-built node_modules.
+    const installFlags: Array<boolean | undefined> = [];
+    let preflightAttempts = 0;
+    let diffCalls = 0;
+    const sourceOnlyDiff = () => ({
+      changedFileSha256: {
+        "/workspace/repo/src/demo-fixtures.ts":
+          `sha256:${"e".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo-fixtures.ts"],
+      patch: [
+        "diff --git a/src/demo-fixtures.ts b/src/demo-fixtures.ts",
+        "new file mode 100644",
+        "+export const fixtureRows = [1];",
+      ].join("\n"),
+      patchSha256: `sha256:${"f".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    });
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_lifecycle_timeout_reinstall" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          diffCalls += 1;
+          return diffCalls <= 2 ? unchangedWorkspaceDiff() : sourceOnlyDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ installDependencies }) {
+          preflightAttempts += 1;
+          installFlags.push(installDependencies);
+          return preflightAttempts <= 1
+            ? {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "lifecycle timeout",
+                logsSummary:
+                  "Network-closed lifecycle scripts were killed after 5 minutes of silence with no CPU progress (exit 124).",
+              }
+            : report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    // Round 2 must run a full install again, not reuse round 1's.
+    expect(installFlags).toEqual([undefined, undefined]);
+  });
+
+  it("stops reusing the install after a reuse round's lifecycle times out", async () => {
+    // N127: a reuse round re-runs the offline lifecycle on the re-synced
+    // tree. A lifecycle timeout there gets a full-latitude repair, so a
+    // source-only fix keeps dependency inputs unchanged — holding on to the
+    // reused install would replay the identical timeout every round.
+    const installFlags: Array<boolean | undefined> = [];
+    let preflightAttempts = 0;
+    let diffCalls = 0;
+    const diffAfterRepair = (round: number) => ({
+      changedFileSha256: {
+        "/workspace/repo/src/demo-fixtures.ts":
+          `sha256:${String(round).repeat(64).slice(0, 64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo-fixtures.ts"],
+      patch: [
+        "diff --git a/src/demo-fixtures.ts b/src/demo-fixtures.ts",
+        "new file mode 100644",
+        `+export const fixtureRows = [${round}];`,
+      ].join("\n"),
+      patchSha256: `sha256:${String(round).repeat(64).slice(0, 64)}` as const,
+      sourceCommitSha: "abc123def456",
+    });
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_reuse_round_lifecycle_failure" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          diffCalls += 1;
+          // Call order: round-1 fidelity diff; after repair 1; after
+          // repair 2. Each repair lands a fresh source-only change.
+          if (diffCalls === 1) return unchangedWorkspaceDiff();
+          if (diffCalls === 2) return diffAfterRepair(1);
+          return diffAfterRepair(2);
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ installDependencies }) {
+          preflightAttempts += 1;
+          installFlags.push(installDependencies);
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "start failure",
+              logsSummary: "boot failed round 1",
+            };
+          }
+          if (preflightAttempts === 2) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "lifecycle timeout",
+              logsSummary:
+                "Network-closed lifecycle scripts were killed after 5 minutes of silence (exit 124).",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    // Round 2 reuses round 1's install and its lifecycle times out, so
+    // round 3 must reinstall even though repair 2 touched only source.
+    expect(installFlags).toEqual([undefined, false, undefined]);
   });
 
   it("never dispatches a repair agent for a harness-internal validation failure", async () => {
@@ -1602,6 +2369,298 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("overturns a false fidelity veto through the adjudicator", async () => {
+    // The judge-on-veto lane (N92): heuristic candidates are proposals, and
+    // an agent judge with the diff in front of it can overturn a false veto
+    // before it costs a repair round.
+    const judged: unknown[] = [];
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_fidelity_adjudicated" }),
+      stubPipelineDependencies({
+        async adjudicateFidelityCandidates({ candidates }) {
+          judged.push(candidates);
+          return candidates.map((_, candidateIndex) => ({
+            candidateIndex,
+            quotedEvidence: [],
+            verdict: "overturn" as const,
+          }));
+        },
+        async capturePreparationWorkspaceDiff() {
+          return presentationVetoWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(judged).toHaveLength(1);
+    const fidelityReport = result.validationReports.find(
+      (entry) => entry.stage === "preparation-fidelity",
+    );
+    expect(fidelityReport).toMatchObject({
+      fidelityAdjudication: {
+        outcomes: [expect.objectContaining({ outcome: "overturned" })],
+        status: "adjudicated",
+      },
+      status: "passed",
+    });
+  });
+
+  it("fails a word-only stub structurally without invoking fidelity adjudication", async () => {
+    let adjudications = 0;
+    let repairs = 0;
+    const wordOnlyManifest = {
+      ...preparationManifest(),
+      dataStrategy: [
+        {
+          detail: "No fixture adapter was added for this API.",
+          rung: "declared-stub" as const,
+          service: "directus-api",
+        },
+      ],
+      envUsed: { NODE_ENV: "development" },
+      localDemoModeChanges: [],
+      mocksAndFixturesAdded: [],
+    };
+    const deliveredManifest = {
+      ...wordOnlyManifest,
+      dataStrategy: [
+        {
+          detail: "The existing API client returns deterministic fixtures.",
+          rung: "client-stub" as const,
+          service: "directus-api",
+        },
+      ],
+      mocksAndFixturesAdded: [
+        "src/demo-fixtures.json supplies deterministic API rows.",
+      ],
+    };
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_structural_stub_fidelity" }),
+      stubPipelineDependencies({
+        async adjudicateFidelityCandidates({ candidates }) {
+          adjudications += 1;
+          return candidates.map((_, candidateIndex) => ({
+            candidateIndex,
+            quotedEvidence: [],
+            verdict: "overturn" as const,
+          }));
+        },
+        async capturePreparationWorkspaceDiff() {
+          return {
+            changedFileSha256: {
+              "src/demo-fixtures.json": `sha256:${"d".repeat(64)}` as const,
+            },
+            changedPaths: ["/workspace/repo/src/demo-fixtures.json"],
+            patch: [
+              "diff --git a/src/demo-fixtures.json b/src/demo-fixtures.json",
+              "new file mode 100644",
+              '+{"projects":[{"id":"demo"}]}',
+            ].join("\n"),
+            patchSha256: `sha256:${"d".repeat(64)}` as const,
+            sourceCommitSha: "abc123def456",
+          };
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: wordOnlyManifest };
+        },
+        async repairPreparation() {
+          repairs += 1;
+          return { manifest: deliveredManifest };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairs).toBe(1);
+    expect(adjudications).toBe(0);
+    expect(result.validationReports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failureClassification: "product fidelity violation",
+          logsSummary: expect.stringContaining("directus-api"),
+          stage: "preparation-fidelity",
+          status: "failed",
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the veto and reports unadjudicated when the judge fails", async () => {
+    let diffAttempts = 0;
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_fidelity_judge_failed" }),
+      stubPipelineDependencies({
+        async adjudicateFidelityCandidates() {
+          throw new Error("judge unavailable");
+        },
+        async capturePreparationWorkspaceDiff() {
+          diffAttempts += 1;
+          return diffAttempts === 1
+            ? presentationVetoWorkspaceDiff()
+            : unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    const failedFidelity = result.validationReports.find(
+      (entry) =>
+        entry.stage === "preparation-fidelity" && entry.status === "failed",
+    );
+    expect(failedFidelity).toMatchObject({
+      failureClassification: "product fidelity violation",
+      fidelityAdjudication: {
+        outcomes: [expect.objectContaining({ outcome: "unjudged" })],
+        status: "unadjudicated",
+      },
+    });
+  });
+
+  it("discards the adjudication when the workspace diff changes under the judge", async () => {
+    let diffAttempts = 0;
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_fidelity_diff_changed" }),
+      stubPipelineDependencies({
+        async adjudicateFidelityCandidates({ candidates }) {
+          return candidates.map((_, candidateIndex) => ({
+            candidateIndex,
+            quotedEvidence: [],
+            verdict: "overturn" as const,
+          }));
+        },
+        async capturePreparationWorkspaceDiff() {
+          diffAttempts += 1;
+          if (diffAttempts === 1) {
+            return presentationVetoWorkspaceDiff();
+          }
+          if (diffAttempts === 2) {
+            return {
+              ...presentationVetoWorkspaceDiff(),
+              patchSha256: `sha256:${"e".repeat(64)}` as const,
+            };
+          }
+          return unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    const failedFidelity = result.validationReports.find(
+      (entry) =>
+        entry.stage === "preparation-fidelity" && entry.status === "failed",
+    );
+    expect(failedFidelity).toMatchObject({
+      fidelityAdjudication: { status: "discarded-diff-changed" },
+    });
+  });
+
   it("records a completed repair session when follow-up fidelity still fails", async () => {
     const artifacts: Record<string, unknown> = {};
 
@@ -1645,6 +2704,63 @@ describe("runAgentHarnessPipeline", () => {
       finalStatus: "failed",
       opencodeSessionIds: ["session_prepare", "session_repair"],
     });
+  });
+
+  it("feeds observed auth-wall verdicts into the next round's fidelity check", async () => {
+    // The failure report that triggers a repair carries exploration's
+    // feature verdicts; post-repair fidelity must see them, so a manifest
+    // that still declares authStrategy "none" over an observed wall
+    // reaches the judge instead of passing on prose alone (N111).
+    const repairedStages: string[] = [];
+    let fidelityFailureSummary = "";
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_auth_wall_contradiction" }),
+        stubPipelineDependencies({
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation({ failureReport }) {
+            repairedStages.push(failureReport.stage);
+            if (failureReport.stage === "preparation-fidelity") {
+              fidelityFailureSummary = failureReport.logsSummary;
+            }
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              featureVerdicts: [
+                {
+                  detail: "entry route / redirected to /login",
+                  failedBecause: "auth-wall" as const,
+                  featureId: "dashboard",
+                  verdict: "failed" as const,
+                },
+              ],
+              logsSummary:
+                "Feature dashboard's entry routes sit behind an authentication redirect.",
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 2 },
+      ),
+    ).rejects.toThrow("failed");
+
+    expect(repairedStages).toEqual([
+      "preparation-preflight",
+      "preparation-fidelity",
+    ]);
+    expect(fidelityFailureSummary).toContain("authentication wall");
+    expect(fidelityFailureSummary).toContain("dashboard");
+    expect(fidelityFailureSummary).toContain('authStrategy "none"');
   });
 
   it("retries an invalid install repair from the last fidelity-approved preparation", async () => {
@@ -1707,6 +2823,9 @@ describe("runAgentHarnessPipeline", () => {
         },
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
+          // Call order: initial fidelity diff; the failed install's
+          // post-validation lockfile check; after the no-op dependency
+          // repair; after the invalid repair; after the valid repair.
           const diff = [
             approvedDiff,
             approvedDiff,
@@ -1783,9 +2902,11 @@ describe("runAgentHarnessPipeline", () => {
     ]);
     expect(reconcileRequests).toEqual([undefined, true]);
     expect(result.preparationManifest).toEqual(approvedManifest);
+    // The no-op repair round ran no fidelity validation, so the vetoed
+    // diff lands at attempt 2.
     expect(
       artifacts[
-        "/workspace/.makeademo/validation-attempts/preparation-fidelity/attempt-3-workspace-diff.json"
+        "/workspace/.makeademo/validation-attempts/preparation-fidelity/attempt-2-workspace-diff.json"
       ],
     ).toMatchObject({
       acceptedBaselinePatchSha256: approvedDiff.patchSha256,
@@ -1821,6 +2942,18 @@ describe("runAgentHarnessPipeline", () => {
       patchSha256: `sha256:${"f".repeat(64)}` as const,
       sourceCommitSha: "abc123def456",
     };
+    // The third repair heeds the veto: it re-applies only the fixtures
+    // change, a real diff that violates nothing.
+    const heededVetoDiff = {
+      changedFileSha256: {
+        "src/demo/fixtures.ts": `sha256:${"d".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo/fixtures.ts"],
+      patch:
+        "diff --git a/src/demo/fixtures.ts b/src/demo/fixtures.ts\n+export const fixtures = [];",
+      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
     const repairHintLists: string[][] = [];
     let diffAttempt = 0;
     let explorationAttempt = 0;
@@ -1838,9 +2971,9 @@ describe("runAgentHarnessPipeline", () => {
       stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
-          return diffAttempt === 2 || diffAttempt === 3
-            ? invalidDiff
-            : unchangedWorkspaceDiff();
+          if (diffAttempt === 2 || diffAttempt === 3) return invalidDiff;
+          if (diffAttempt >= 4) return heededVetoDiff;
+          return unchangedWorkspaceDiff();
         },
         async exploreApp() {
           explorationAttempt += 1;
@@ -1924,6 +3057,18 @@ describe("runAgentHarnessPipeline", () => {
       patchSha256: `sha256:${"f".repeat(64)}` as const,
       sourceCommitSha: "abc123def456",
     };
+    // The second repair replaces the vetoed change with a fixtures-only
+    // diff, so it counts as a real attempt rather than a bare revert.
+    const heededVetoDiff = {
+      changedFileSha256: {
+        "src/demo/fixtures.ts": `sha256:${"d".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo/fixtures.ts"],
+      patch:
+        "diff --git a/src/demo/fixtures.ts b/src/demo/fixtures.ts\n+export const fixtures = [];",
+      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
     const repairStages: string[] = [];
     const restored: string[] = [];
     let diffAttempt = 0;
@@ -1941,7 +3086,9 @@ describe("runAgentHarnessPipeline", () => {
       stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
-          return diffAttempt === 2 ? invalidDiff : unchangedWorkspaceDiff();
+          if (diffAttempt === 2) return invalidDiff;
+          if (diffAttempt >= 3) return heededVetoDiff;
+          return unchangedWorkspaceDiff();
         },
         async exploreApp() {
           explorationAttempt += 1;
@@ -2152,6 +3299,164 @@ describe("runAgentHarnessPipeline", () => {
     expect(reconcileRequests).toEqual([undefined, true]);
   });
 
+  it("escalates a second unbuilt workspace failure to the app dependency graph", async () => {
+    // N155 (directus, 2026-08-15): repairing only the package named by each
+    // crash bounced from extensions to constants and back. Once one such
+    // repair has run, the next package proves the app's build graph is the
+    // unit of repair.
+    const graphBuild = "pnpm --recursive --filter=@directus/app... run build";
+    const narrowBuild = "pnpm --filter=@directus/extensions run build";
+    const repairHints: string[] = [];
+    const preflightBuilds: Array<string | undefined> = [];
+    let preflightAttempts = 0;
+    const basePreparationManifest = preparationManifest();
+    const preparedManifest = {
+      ...basePreparationManifest,
+      appDir: "app",
+      baseUrl: "http://127.0.0.1:5173",
+      installCommandUsed: "pnpm install --frozen-lockfile",
+      ports: [5173],
+      productContext: {
+        ...basePreparationManifest.productContext,
+        evidencePaths: ["app/package.json", "app/src/page.tsx"],
+        featureInventory:
+          basePreparationManifest.productContext.featureInventory.map(
+            (feature) => ({
+              ...feature,
+              sourcePaths: ["app/src/page.tsx"],
+            }),
+          ),
+      },
+      startCommandUsed: "pnpm run dev",
+    };
+    const selectedRunPlan = {
+      ...runPlan(),
+      allowedPorts: [5173],
+      appDir: "app",
+      expectedLocalUrl: "http://127.0.0.1:5173",
+      installCommand: "pnpm install --frozen-lockfile",
+      runtime: "node" as const,
+      startCommand: "pnpm run dev",
+      targetSelection: {
+        evidencePaths: ["app/package.json", "app/src/page.tsx"],
+        reason: "The app workspace is the product surface.",
+        role: "product" as const,
+        source: "model" as const,
+        targetId: "app",
+      },
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({
+        files: [
+          {
+            path: "package.json",
+            text: JSON.stringify({
+              name: "directus-monorepo",
+              packageManager: "pnpm@10.0.0",
+              scripts: { build: "pnpm --recursive run build" },
+              workspaces: ["app", "packages/*"],
+            }),
+          },
+          { path: "pnpm-lock.yaml", text: "" },
+          {
+            path: "app/package.json",
+            text: JSON.stringify({
+              dependencies: {
+                "@directus/constants": "workspace:*",
+                "@directus/extensions": "workspace:*",
+              },
+              name: "@directus/app",
+              scripts: { build: "vite build", dev: "vite --host" },
+            }),
+          },
+          { path: "app/src/page.tsx", text: "export default 1" },
+          {
+            path: "packages/extensions/package.json",
+            text: JSON.stringify({
+              dependencies: { "@directus/constants": "workspace:*" },
+              name: "@directus/extensions",
+              scripts: { build: "tsdown" },
+            }),
+          },
+          {
+            path: "packages/constants/package.json",
+            text: JSON.stringify({
+              name: "@directus/constants",
+              scripts: { build: "tsdown" },
+            }),
+          },
+        ],
+        runId: "run_workspace_graph_escalation",
+      }),
+      stubPipelineDependencies({
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparedManifest };
+        },
+        async repairPreparation({ failureReport, preparationManifest }) {
+          repairHints.push(failureReport.suggestedRepairHints.join("\n"));
+          const buildCommandUsed =
+            repairHints.length === 1 ? narrowBuild : graphBuild;
+          return {
+            manifest: {
+              ...preparationManifest,
+              buildCommandUsed,
+              id: `prep_workspace_graph_${repairHints.length}`,
+            },
+          };
+        },
+        async synthesizeRunPlan() {
+          return selectedRunPlan;
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ preparationManifest }) {
+          preflightAttempts += 1;
+          preflightBuilds.push(preparationManifest.buildCommandUsed);
+          const packageName = ["@directus/extensions", "@directus/constants"][
+            preflightAttempts - 1
+          ];
+          return packageName === undefined
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "unbuilt workspace dependency",
+                logsSummary: `Unbuilt workspace dependency ${packageName}: its dist entry is missing`,
+                suggestedRepairHints: [`Build ${packageName} before the app.`],
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript({ preparationManifest }) {
+          return {
+            ...scriptCandidate(),
+            sourcePreparationManifestId: preparationManifest.id,
+          };
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairHints[0]).not.toContain("workspace dependency graph");
+    expect(repairHints[1]).toContain("workspace dependency graph");
+    expect(repairHints[1]).toContain(graphBuild);
+    expect(preflightBuilds).toEqual([undefined, narrowBuild, graphBuild]);
+  });
+
   it("recognizes a repeated failure whose logs differ only by port and temp path", async () => {
     let preflightAttempts = 0;
     let repairAttempts = 0;
@@ -2166,9 +3471,7 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_noisy_repeated_failure",
         }),
         stubPipelineDependencies({
-          async capturePreparationWorkspaceDiff() {
-            return unchangedWorkspaceDiff();
-          },
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
           async prepareRepo() {
             return { manifest: preparationManifest() };
           },
@@ -2210,9 +3513,7 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_repeated_failure_budget",
         }),
         stubPipelineDependencies({
-          async capturePreparationWorkspaceDiff() {
-            return unchangedWorkspaceDiff();
-          },
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
           async prepareRepo() {
             return { manifest: preparationManifest() };
           },
@@ -2237,6 +3538,1052 @@ describe("runAgentHarnessPipeline", () => {
     ).rejects.toThrow("repeated failure");
 
     expect(repairAttempts).toBe(2);
+  });
+
+  it("consults repair strategy on the second occurrence of one failure fingerprint", async () => {
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    const consultations: Parameters<
+      NonNullable<AgentHarnessPipelineDependencies["adviseRepairStrategy"]>
+    >[0][] = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_repeated_failure_strategy" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy(input) {
+          consultations.push(input);
+          return { kind: "continue" };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ preparationManifest }) {
+          repairAttempts += 1;
+          return {
+            candidateFingerprint: `candidate-${repairAttempts}`,
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(repairAttempts) },
+              id: `prep_repair_${repairAttempts}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts >= 3
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                attemptedCommand: "bun run dev",
+                failureClassification: "start failure",
+                logsSummary: "Start command failed: Error: demo server crashed",
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(consultations).toHaveLength(1);
+    expect(consultations[0]).toMatchObject({
+      budgets: {
+        bonusRounds: 0,
+        fingerprintAttempts: 1,
+        totalAttempts: 1,
+      },
+      roundLedger: {
+        rounds: [
+          {
+            advice: null,
+            candidateFingerprint: "candidate-1",
+            outcomeOfAdvice: "failure-unchanged",
+            round: 1,
+          },
+        ],
+      },
+    });
+    expect(repairAttempts).toBe(2);
+  });
+
+  it("adds strategist hints to the existing repair-hint channel", async () => {
+    let preflightAttempts = 0;
+    const repairHints: string[][] = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_strategy_hint" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy() {
+          return {
+            hint: "Compare the accepted build command with the resolved manifest.",
+            kind: "escalate-hint",
+          };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport, preparationManifest }) {
+          repairHints.push(failureReport.suggestedRepairHints);
+          return {
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(repairHints.length) },
+              id: `prep_hint_${repairHints.length}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts >= 3
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: "Start command failed: Error: server crashed",
+                suggestedRepairHints: ["Keep the selected app target."],
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairHints[0]).toEqual(["Keep the selected app target."]);
+    expect(repairHints[1]).toEqual(
+      expect.arrayContaining([
+        "Keep the selected app target.",
+        "Compare the accepted build command with the resolved manifest.",
+      ]),
+    );
+  });
+
+  it("applies a strategist directive for one repair round only", async () => {
+    let preflightAttempts = 0;
+    const directives: Array<string | undefined> = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_strategy_directive" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy() {
+          return {
+            directive:
+              "Use the workspace graph build instead of another package-local build.",
+            kind: "directive",
+          };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ preparationManifest, strategyDirective }) {
+          directives.push(strategyDirective);
+          return {
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(directives.length) },
+              id: `prep_directive_${directives.length}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts >= 4) {
+            return report("preparation-preflight", "passed");
+          }
+          return {
+            ...report("preparation-preflight", "failed"),
+            failureClassification: "start failure",
+            logsSummary:
+              preflightAttempts <= 2
+                ? "Start command failed: Error: package-local build is incomplete"
+                : "Start command failed: Error: graph build reached a new dependency",
+          };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(directives).toEqual([
+      undefined,
+      "Use the workspace graph build instead of another package-local build.",
+      undefined,
+    ]);
+  });
+
+  it("applies stop advice only after two stop-eligible validation failures", async () => {
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_strategy_stop" }),
+        stubPipelineDependencies({
+          async adviseRepairStrategy() {
+            return {
+              kind: "stop",
+              reason: "The migration is repeatedly exhausting sandbox memory.",
+            };
+          },
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation({ preparationManifest }) {
+            repairAttempts += 1;
+            return {
+              manifest: {
+                ...preparationManifest,
+                envUsed: { REPAIR_ATTEMPT: String(repairAttempts) },
+                id: `prep_stop_${repairAttempts}`,
+              },
+            };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "service migration failure",
+              logsSummary: "Migration Killed after exhausting sandbox memory",
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow(
+      /Repair strategist recommended stopping: The migration is repeatedly exhausting sandbox memory\./,
+    );
+
+    expect(repairAttempts).toBe(1);
+  });
+
+  it("vetoes stop advice when the deterministic failure predicate disagrees", async () => {
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_strategy_stop_veto" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy() {
+          return {
+            kind: "stop",
+            reason: "The feature probe was killed twice.",
+          };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ preparationManifest }) {
+          repairAttempts += 1;
+          return {
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(repairAttempts) },
+              id: `prep_stop_veto_${repairAttempts}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts >= 3
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "requested feature not observable",
+                logsSummary: "Killed while probing the requested feature",
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairAttempts).toBe(2);
+  });
+
+  it("spends one strategist bonus round beyond the repeated-fingerprint cap", async () => {
+    let consultations = 0;
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_strategy_bonus" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy() {
+          consultations += 1;
+          return consultations === 1
+            ? { kind: "spend-bonus-round" }
+            : { kind: "continue" };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ preparationManifest }) {
+          repairAttempts += 1;
+          return {
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(repairAttempts) },
+              id: `prep_bonus_${repairAttempts}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts >= 4
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: "Start command failed: Error: server crashed",
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 2 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(consultations).toBe(2);
+    expect(repairAttempts).toBe(3);
+  });
+
+  it("consults run triage once for a heavyweight profile and applies its steering", async () => {
+    const consultations: Parameters<
+      NonNullable<AgentHarnessPipelineDependencies["adviseRunTriage"]>
+    >[0][] = [];
+    const stageOrder: string[] = [];
+    let preparationHints: readonly string[] | undefined;
+
+    const result = await runAgentHarnessPipeline(
+      // Twenty's screened archive measured 134,113,964 bytes (wave 9) — the
+      // recorded heavyweight capacity classification this triage gate keys on.
+      pipelineInput({
+        archiveSizeBytes: 134_113_964,
+        runId: "run_triage_heavyweight",
+      }),
+      stubPipelineDependencies({
+        async adviseRunTriage(input) {
+          consultations.push(input);
+          stageOrder.push("run-triage");
+          return {
+            envelopeFitWarning:
+              "Full workspace builds and migrations risk exceeding the heavyweight sandbox envelope.",
+            preparationStrategyHints: [
+              "Prefer the development server over a production build.",
+            ],
+          };
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo(input) {
+          stageOrder.push("repo-preparation");
+          preparationHints = input.preparationStrategyHints;
+          return { manifest: preparationManifest() };
+        },
+        async synthesizeRunPlan() {
+          stageOrder.push("run-plan-synthesis");
+          return runPlan();
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(consultations).toEqual([
+      {
+        repoProfile: expect.objectContaining({
+          archiveSizeBytes: 134_113_964,
+        }),
+        submittedCodeSandboxClass: "heavyweight",
+      },
+    ]);
+    expect(stageOrder).toEqual([
+      "run-triage",
+      "run-plan-synthesis",
+      "repo-preparation",
+    ]);
+    expect(preparationHints).toEqual([
+      "Prefer the development server over a production build.",
+    ]);
+    expect(result.pipelineRunManifest.envelopeFitWarning).toBe(
+      "Full workspace builds and migrations risk exceeding the heavyweight sandbox envelope.",
+    );
+  });
+
+  it("never consults run triage for a standard-class profile", async () => {
+    let consultations = 0;
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_triage_standard" }),
+      stubPipelineDependencies({
+        async adviseRunTriage() {
+          consultations += 1;
+          return { preparationStrategyHints: ["Unwanted steering."] };
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(consultations).toBe(0);
+    expect(result.pipelineRunManifest.envelopeFitWarning).toBeUndefined();
+  });
+
+  it("fails open when run triage errors and runs preparation unsteered", async () => {
+    let preparationHints: readonly string[] | undefined = ["sentinel"];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({
+        archiveSizeBytes: 134_113_964,
+        runId: "run_triage_fail_open",
+      }),
+      stubPipelineDependencies({
+        async adviseRunTriage() {
+          throw new Error("Run triage sandbox exploded.");
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo(input) {
+          preparationHints = input.preparationStrategyHints;
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(preparationHints).toBeUndefined();
+    expect(result.pipelineRunManifest.envelopeFitWarning).toBeUndefined();
+  });
+
+  it("surfaces the envelope-fit warning in the failed run report", async () => {
+    const artifacts: Record<string, unknown> = {};
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({
+          archiveSizeBytes: 134_113_964,
+          runId: "run_triage_failed_report",
+        }),
+        stubPipelineDependencies({
+          async adviseRunTriage() {
+            return {
+              envelopeFitWarning:
+                "The default migration lifecycle exceeds the sandbox memory envelope.",
+              preparationStrategyHints: [],
+            };
+          },
+          artifactStore: {
+            async writeJson(path, value) {
+              artifacts[path] = value;
+            },
+          },
+          async prepareRepo() {
+            throw new Error("Killed while installing the workspace graph.");
+          },
+        }),
+      ),
+    ).rejects.toThrow("Killed while installing the workspace graph.");
+
+    expect(
+      artifacts["/workspace/.makeademo/pipeline-run-manifest.json"],
+    ).toMatchObject({
+      envelopeFitWarning:
+        "The default migration lifecycle exceeds the sandbox memory envelope.",
+      finalStatus: "failed",
+    });
+  });
+
+  it("does not collapse failures that share a symptom line but hide different causes", async () => {
+    // The probe symptom (`curl: (7)`) is identical on every attempt; the
+    // decisive cause buried in the managed output differs each time. Each
+    // failure is new information, so the repeated-failure limit must not
+    // fire while the causes keep changing.
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    const causes = [
+      "Error: NEXTAUTH_SECRET must be set",
+      "SyntaxError: Unexpected token '}' in /workspace/config.json",
+      'x No package found for "react-email"',
+    ];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_shared_symptom_distinct_causes" }),
+      stubPipelineDependencies({
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          repairAttempts += 1;
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          const cause = causes[preflightAttempts - 1];
+          if (cause === undefined) {
+            return report("preparation-preflight", "passed");
+          }
+          return {
+            ...report("preparation-preflight", "failed"),
+            attemptedCommand: "bun run dev",
+            failureClassification: "start failure",
+            logsSummary: `Start command was not reachable: curl: (7) Failed to connect to 127.0.0.1 port 3000\n$ next start\n${cause}`,
+          };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairAttempts).toBe(3);
+    expect(preflightAttempts).toBe(4);
+  });
+
+  it("does not collapse distinct causes behind the same package-manager epilogue", async () => {
+    // N130 (directus, 2026-08-13): pnpm ends every failed run with the same
+    // ` ELIFECYCLE ` epilogue, and the fingerprint's cause line landed on it
+    // — three distinct crashes counted as one repeat and the run died on the
+    // repeated-failure limit with the global budget barely touched.
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    const causes = [
+      '✗ [ERROR] Could not resolve "./dist/node.js"',
+      "SyntaxError: Unexpected end of JSON input in /workspace/repo/packages/extensions/package.json",
+      'Error: Cannot find module "@directus/extensions/dist/index.mjs"',
+    ];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_epilogue_distinct_causes" }),
+      stubPipelineDependencies({
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          repairAttempts += 1;
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          const cause = causes[preflightAttempts - 1];
+          if (cause === undefined) {
+            return report("preparation-preflight", "passed");
+          }
+          return {
+            ...report("preparation-preflight", "failed"),
+            attemptedCommand: "pnpm run dev",
+            failureClassification: "start failure",
+            logsSummary: [
+              "Start command exited with code 1",
+              cause,
+              " ELIFECYCLE  Command failed with exit code 1.",
+              'ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  "@directus/extensions#build" failed',
+            ].join("\n"),
+          };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairAttempts).toBe(3);
+    expect(preflightAttempts).toBe(4);
+  });
+
+  it("collapses failures whose symptom lines differ while the decisive cause repeats", async () => {
+    // The curl exit code drifts run to run, but every attempt dies on the
+    // same EADDRINUSE cause line — the same wall, so the repeated-failure
+    // limit must fire instead of burning the whole repair budget.
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    const symptoms = [
+      "curl: (7) Failed to connect to 127.0.0.1 port 3000",
+      "curl: (56) Recv failure: Connection reset by peer",
+      "curl: (28) Operation timed out after 30001 milliseconds",
+    ];
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_drifting_symptom_same_cause" }),
+        stubPipelineDependencies({
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            const symptom =
+              symptoms[Math.min(preflightAttempts, symptoms.length) - 1];
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              logsSummary: `Start command was not reachable: ${symptom}\nError: listen EADDRINUSE: address already in use 0.0.0.0:3000`,
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow("repeated failure");
+
+    expect(repairAttempts).toBe(2);
+  });
+
+  it("collapses repeats whose cause line varies only by a debug-log timestamp path", async () => {
+    // npm's terminal error line points at a per-run debug log whose file
+    // name embeds an underscore-separated timestamp. That noise must not
+    // make the same failure look new to the repeated-failure limit.
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_debug_log_timestamp_noise" }),
+        stubPipelineDependencies({
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "npm start",
+              failureClassification: "start failure",
+              logsSummary: [
+                "Start command exited before the app became reachable",
+                "npm ERR! code ELIFECYCLE",
+                `npm ERR! A complete log of this run can be found in: /root/.npm/_logs/2026-08-10T21_0${preflightAttempts}_49_340Z-debug-0.log`,
+              ].join("\n"),
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow("repeated failure");
+
+    expect(repairAttempts).toBe(2);
+  });
+
+  it("rejects a repair that changes nothing without spending the repair budget", async () => {
+    // Rounds 1-2 return the workspace and manifest untouched: non-attempts
+    // that must not burn the (deliberately tiny) global budget and must not
+    // re-run the preflight. Round 3 fixes the manifest alone — a real
+    // repair even though the workspace still did not change.
+    let preflightAttempts = 0;
+    const repairSummaries: string[] = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_noop_repair_non_attempt" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          return unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport }) {
+          repairSummaries.push(failureReport.logsSummary);
+          if (repairSummaries.length < 3) {
+            return { manifest: preparationManifest() };
+          }
+          return {
+            manifest: { ...preparationManifest(), envUsed: { DEMO_MODE: "1" } },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              logsSummary:
+                "Start command was not reachable: connection refused",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 1 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(preflightAttempts).toBe(2);
+    expect(repairSummaries).toHaveLength(3);
+    expect(repairSummaries[1]).toContain(
+      "Rejected repair: the repair produced no change",
+    );
+    expect(repairSummaries[2]).toContain(
+      "Rejected repair: the repair produced no change",
+    );
+  });
+
+  it("charges no-op repairs after two free rounds so they still terminate", async () => {
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_endless_noop_repairs" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return unchangedWorkspaceDiff();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              logsSummary:
+                "Start command was not reachable: connection refused",
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow("repeated failure");
+
+    // Two free rounds, then two charged rounds against the rejected
+    // failure's fingerprint; the fifth dispatch trips the repeated-failure
+    // limit. The preflight never re-ran for any of them.
+    expect(repairAttempts).toBe(4);
+    expect(preflightAttempts).toBe(1);
+  });
+
+  it("rejects a dependency repair that changes nothing with the dependency-lane steering", async () => {
+    const dependencyDiff = {
+      changedFileSha256: {
+        "package.json": `sha256:${"3".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/package.json"],
+      patch:
+        'diff --git a/package.json b/package.json\n+  "dependencies": { "missing-package": "1.0.0" }',
+      patchSha256: `sha256:${"3".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
+    let preflightAttempts = 0;
+    let realRepairDone = false;
+    const repairSummaries: string[] = [];
+    const repairHints: string[][] = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_noop_dependency_repair" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          return realRepairDone ? dependencyDiff : unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport }) {
+          repairSummaries.push(failureReport.logsSummary);
+          repairHints.push([...failureReport.suggestedRepairHints]);
+          if (repairSummaries.length === 2) {
+            realRepairDone = true;
+          }
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (realRepairDone) {
+            return report("preparation-preflight", "passed");
+          }
+          return {
+            ...report("preparation-preflight", "failed"),
+            attemptedCommand: "bun install --frozen-lockfile",
+            failureClassification: "install failure",
+            logsSummary: "Install failed: error: lockfile had changes",
+          };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 1 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(preflightAttempts).toBe(2);
+    expect(repairSummaries).toHaveLength(2);
+    expect(repairSummaries[1]).toContain(
+      "Rejected repair: no package manifest or recognized package-manager configuration changed.",
+    );
+    expect(repairHints[1]).toContain(
+      "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.",
+    );
   });
 
   it("reports the terminal validation stage after an earlier stage also failed", async () => {
@@ -2461,6 +4808,14 @@ describe("runAgentHarnessPipeline", () => {
         failureClassification: "empty/unmeaningful app state",
         logsSummary: "Feature route rendered no content",
       },
+      {
+        failureClassification: "app route crashes",
+        logsSummary: "Feature route threw before rendering",
+      },
+      {
+        failureClassification: "browser console/page error",
+        logsSummary: "Feature route logged an uncaught error",
+      },
     ];
     const preflightFailures = [
       {
@@ -2546,14 +4901,90 @@ describe("runAgentHarnessPipeline", () => {
       ),
     ).rejects.toThrow("global retry budget");
 
+    // The three preflight repairs spend 3 of the global 5; exploration may
+    // spend the remaining 2 plus its own 2-round reserve (N93) before the
+    // fifth exploration failure exhausts the widened cap.
     expect(repairStages).toEqual([
       "preparation-preflight",
       "preparation-preflight",
       "preparation-preflight",
       "app-exploration",
       "app-exploration",
+      "app-exploration",
+      "app-exploration",
     ]);
-    expect(diffCaptures).toBe(6);
+    expect(diffCaptures).toBe(8);
+  });
+
+  it("reserves two exploration repair rounds when earlier stages spent the global budget", async () => {
+    // ghost (2026-08-09): three preflight repairs plus two false fidelity
+    // vetoes consumed the whole global budget of 5 before exploration ever
+    // got a repair round — the data-path steering never reached an agent.
+    // Exploration is the terminal preparation gate, so its failures may
+    // spend up to two rounds beyond the global limit; the widened cap
+    // stays hard and earlier stages get no reservation.
+    let explorationAttempts = 0;
+    let explorationRepairs = 0;
+    let preflightFailures = 0;
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_exploration_reserve" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async exploreApp() {
+            explorationAttempts += 1;
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: actionCatalog(),
+              appMap: appMap(),
+              validationReport: {
+                ...report("app-exploration", "failed"),
+                failureClassification: "empty/unmeaningful app state",
+                logsSummary: `Feature route rendered no content: probe ${"x".repeat(explorationAttempts)}`,
+              },
+            };
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation({ failureReport }) {
+            repairAttempts += 1;
+            if (failureReport.stage === "app-exploration") {
+              explorationRepairs += 1;
+            }
+            return {
+              manifest: {
+                ...preparationManifest(),
+                id: `prep_repaired_${repairAttempts}`,
+              },
+            };
+          },
+          async validatePreparation() {
+            if (preflightFailures < 2) {
+              preflightFailures += 1;
+              return {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: `App is not ready: probe ${"y".repeat(preflightFailures)}`,
+              };
+            }
+            return report("preparation-preflight", "passed");
+          },
+        }),
+        { repoPreparationRepairLimit: 2 },
+      ),
+    ).rejects.toThrow("global retry budget exhausted");
+
+    // The two preflight repairs spend the whole global budget of 2; the
+    // reserve still grants exploration exactly two repair rounds before
+    // its third failure exhausts the widened cap.
+    expect(explorationRepairs).toBe(2);
+    expect(explorationAttempts).toBe(3);
+    expect(repairAttempts).toBe(4);
   });
 
   it("grants bonus repair rounds while the failing-feature set strictly shrinks, capped at two", async () => {
@@ -2565,6 +4996,8 @@ describe("runAgentHarnessPipeline", () => {
       ["feature-a", "feature-b", "feature-c"],
       ["feature-a", "feature-b"],
       ["feature-a"],
+      ["feature-b"],
+      ["feature-c"],
     ];
 
     await expect(
@@ -2613,10 +5046,11 @@ describe("runAgentHarnessPipeline", () => {
       ),
     ).rejects.toThrow("global retry budget exhausted");
 
-    // Base limit 2 plus one bonus per shrinking round, capped at +2: four
-    // repairs run before the fifth failure exhausts the budget.
-    expect(repairAttempts).toBe(4);
-    expect(explorationAttempts).toBe(5);
+    // Base limit 2, plus one bonus per shrinking round capped at +2, plus
+    // the exploration reserve of +2 (N93): six repairs run before the
+    // seventh failure exhausts the budget.
+    expect(repairAttempts).toBe(6);
+    expect(explorationAttempts).toBe(7);
   });
 
   it("grants no bonus round when the failing-feature set merely changes", async () => {
@@ -2626,6 +5060,8 @@ describe("runAgentHarnessPipeline", () => {
       ["feature-a", "feature-b"],
       ["feature-c", "feature-d"],
       ["feature-e", "feature-f"],
+      ["feature-g", "feature-h"],
+      ["feature-i", "feature-j"],
     ];
 
     await expect(
@@ -2674,8 +5110,11 @@ describe("runAgentHarnessPipeline", () => {
       ),
     ).rejects.toThrow("global retry budget exhausted");
 
-    expect(repairAttempts).toBe(2);
-    expect(explorationAttempts).toBe(3);
+    // Base limit 2 plus the exploration reserve of +2 (N93), and no bonus
+    // for merely-changing feature sets: four repairs, not the six a
+    // shrinking set earns.
+    expect(repairAttempts).toBe(4);
+    expect(explorationAttempts).toBe(5);
   });
 
   it("allows three script repairs independently in static and capture validation", async () => {
@@ -2740,6 +5179,63 @@ describe("runAgentHarnessPipeline", () => {
       "capture-path-validation",
       "capture-path-validation",
     ]);
+  });
+
+  it("stops an identical capture protocol violation after one script repair", async () => {
+    let captureAttempts = 0;
+    let repairAttempts = 0;
+    let staticAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_repeated_capture_protocol_violation" }),
+        stubPipelineDependencies({
+          async exploreApp() {
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: actionCatalog(),
+              appMap: appMap(),
+              validationReport: report("app-exploration", "passed"),
+            };
+          },
+          async planFlow() {
+            return flowSpec();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairScript() {
+            repairAttempts += 1;
+            return scriptCandidate();
+          },
+          async validateCapturePath() {
+            captureAttempts += 1;
+            return {
+              ...report("capture-path-validation", "failed"),
+              failureClassification: "script contract failure",
+              logsSummary:
+                "Capture Script Protocol Violation: Capture script emitted nested Browser Action markers: page.waitForURL(/roles/new) was still open when locator.click(Create role) started.",
+            };
+          },
+          async validatePreparation() {
+            return report("preparation-preflight", "passed");
+          },
+          async validateScriptContract() {
+            staticAttempts += 1;
+            return report("static-script-contract-validation", "passed");
+          },
+          async writeScript() {
+            return scriptCandidate();
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      "script-repair repeated failure retry budget exhausted after 1 attempts",
+    );
+
+    expect(captureAttempts).toBe(2);
+    expect(repairAttempts).toBe(1);
+    expect(staticAttempts).toBe(2);
   });
 
   it("repairs preparation and regenerates downstream artifacts after a runtime capture failure", async () => {
@@ -3007,6 +5503,23 @@ function replacementWorkspaceDiff() {
   };
 }
 
+/** A diff that trips exactly one fidelity candidate: new markup in an original UI file. */
+function presentationVetoWorkspaceDiff() {
+  return {
+    changedFileSha256: {
+      "src/page.tsx": `sha256:${"d".repeat(64)}` as const,
+    },
+    changedPaths: ["/workspace/repo/src/page.tsx"],
+    patch: [
+      "diff --git a/src/page.tsx b/src/page.tsx",
+      "-export default 1",
+      "+export default <main>Demo banner</main>;",
+    ].join("\n"),
+    patchSha256: `sha256:${"d".repeat(64)}` as const,
+    sourceCommitSha: "abc123def456",
+  };
+}
+
 function unchangedWorkspaceDiff() {
   return {
     changedFileSha256: {},
@@ -3014,6 +5527,27 @@ function unchangedWorkspaceDiff() {
     patch: "",
     patchSha256: `sha256:${"c".repeat(64)}` as const,
     sourceCommitSha: "abc123def456",
+  };
+}
+
+/**
+ * A capture stub whose diff advances on every call, so each repair round
+ * reads as a real workspace change rather than a no-op resubmission.
+ */
+function advancingWorkspaceDiffCapture() {
+  let captures = 0;
+  return async () => {
+    captures += 1;
+    const digit = String(captures % 10);
+    return {
+      changedFileSha256: {
+        "src/demo.ts": `sha256:${digit.repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo.ts"],
+      patch: `diff --git a/src/demo.ts b/src/demo.ts\n+// capture ${captures}`,
+      patchSha256: `sha256:${digit.repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
   };
 }
 
@@ -3028,7 +5562,12 @@ function preparationManifest() {
     id: "prep_001",
     installCommandUsed: "bun install --frozen-lockfile",
     knownLimitations: [],
-    localDemoModeChanges: [],
+    // An honest manifest over the stubs' often-empty diffs: the vacuity
+    // candidate (N111) targets manifests that claim features while
+    // declaring no demo machinery at all.
+    localDemoModeChanges: [
+      "MAKEADEMO_DEMO=true activates the repository's existing demo mode.",
+    ],
     mocksAndFixturesAdded: [],
     ports: [3000],
     productContext: {
@@ -3038,6 +5577,10 @@ function preparationManifest() {
           authStrategy: "none" as const,
           description: "Show the dashboard.",
           entryPaths: ["/"],
+          expectedProof: {
+            kind: "visible-text" as const,
+            text: "Dashboard overview",
+          },
           fixtureNotes: [],
           id: "dashboard",
           label: "Dashboard",
@@ -3150,7 +5693,7 @@ function flowSpec() {
 function scriptCandidate() {
   return {
     assumptions: [],
-    browserActionCompilerVersion: "2026-07-18.1",
+    browserActionCompilerVersion: "2026-08-14.1",
     bunRuntimeVersion: "1.3.14",
     captureSdkVersion: "2026-07-18.1",
     conformanceResult: report("static-script-contract-validation", "passed"),

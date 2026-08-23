@@ -90,6 +90,7 @@ const context = await browser.newContext({
 });
 ${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot)}
 const page = await context.newPage();
+${appOriginNavigationListenerSource()}
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
 globalThis.__makeademoCaptureSdk = {
@@ -142,6 +143,33 @@ function browserTeardownSource() {
     // Generated protocol: parent capture reads stderr for teardown evidence.
     console.error("[makeademo:context-close-failed]", makeADemoCloseError instanceof Error ? makeADemoCloseError.message : String(makeADemoCloseError));
   }`;
+}
+
+/**
+ * Records the HTTP status of every top-level main-document navigation served
+ * by the app's own origin. Playwright's `page.goto` resolves on a 5xx instead
+ * of throwing, so an app-origin server error would otherwise surface only as a
+ * downstream assertion failure — indistinguishable from a blocked-resource
+ * failure the broker is meant to hydrate. The marker lets Capture Path
+ * Validation fail an app-origin 5xx directly and keep that verdict sticky.
+ */
+function appOriginNavigationListenerSource() {
+  return `page.on("response", (makeADemoResponse) => {
+  const makeADemoRequest = makeADemoResponse.request();
+  if (!makeADemoRequest.isNavigationRequest() || makeADemoResponse.frame() !== page.mainFrame()) {
+    return;
+  }
+  let makeADemoSameOrigin = false;
+  try {
+    makeADemoSameOrigin = new URL(makeADemoResponse.url()).origin === new URL(baseUrl).origin;
+  } catch {}
+  if (!makeADemoSameOrigin) {
+    return;
+  }
+  // Generated protocol: parent validation parses navigation markers to fail an
+  // app-origin 5xx that page.goto resolves rather than throws.
+  console.error("[makeademo:navigation] " + JSON.stringify({ status: makeADemoResponse.status(), url: makeADemoResponse.url() }));
+});`;
 }
 
 function runtimeNetworkLockdownSource(

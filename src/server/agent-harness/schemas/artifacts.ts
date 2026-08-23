@@ -78,8 +78,27 @@ export type NetworkAttempt = {
   url?: string;
 };
 
+/**
+ * One externally-provisioned data service the repository declares it needs
+ * (N122): `service` is the normalized backend name ("postgres", "mysql",
+ * "mongodb", "redis"), and `evidencePaths` are the screened repository files
+ * carrying the declaration. `embeddedAlternativeEvidencePaths`, when
+ * present, are files proving the same data layer can run embedded (a sqlite
+ * driver or dialect), so preparation can prefer the embedded-config rung of
+ * the data-backend ladder. Detection is a hint inventory, never a verdict:
+ * every entry must be answered by a preparation dataStrategy declaration,
+ * and a service the repo runs without is answered there, not deleted here.
+ */
+export type RequiredService = {
+  service: string;
+  evidencePaths: string[];
+  embeddedAlternativeEvidencePaths?: string[];
+};
+
 export type RepoProfile = {
   repoUrl: string;
+  /** Byte size of the screened, compressed source archive used for execution. */
+  archiveSizeBytes?: number;
   commitSha?: string;
   rootDir: string;
   packageManager: PackageManager;
@@ -89,6 +108,15 @@ export type RepoProfile = {
    * flags, which agents get wrong (N79).
    */
   yarnVariant?: "berry" | "classic";
+  /**
+   * True when the repo's own root package-manager config disables dependency
+   * lifecycle scripts (.yarnrc.yml `enableScripts: false` or .npmrc
+   * `ignore-scripts=true`). A real install in such a repo runs no lifecycle
+   * scripts, so the harness's network-closed lifecycle pass has no skipped
+   * work to run and is skipped entirely (N160(2)). Absent when scripts stay
+   * enabled and on profiles persisted before detection existed.
+   */
+  lifecycleScriptsDisabled?: boolean;
   lockfiles: string[];
   workspaces: {
     isMonorepo: boolean;
@@ -108,6 +136,8 @@ export type RepoProfile = {
   requiredEnvHints: string[];
   authHints: string[];
   externalServiceHints: string[];
+  /** Data services the repo declares it needs (N122); absent on profiles persisted before detection existed. */
+  servicesRequired?: RequiredService[];
   dockerHints: string[];
   securityWarnings: string[];
   unsupportedReasons: string[];
@@ -143,10 +173,123 @@ export type RunPlan = {
   };
 };
 
+/**
+ * In-code fixture wiring for one data surface (N100): `functionName` in
+ * `path` is the function the UI calls for this feature's data, and under
+ * the demo gate it returns the fixture literal authored in
+ * `fixtureModule` — never a database or network response. `shapeProbe`
+ * records the fixture-shape probe outcome ("passed", "failed: …", or
+ * "not-run: …") so repairs know whether the shape was compiler-verified.
+ */
+type PreparedDataSeam = {
+  fixtureModule: string;
+  functionName: string;
+  path: string;
+  shapeProbe?: string;
+};
+
+/**
+ * The data-backend ladder vocabulary (N122), in preparation preference
+ * order, shared by the schema reader, the manifest contract, and the
+ * enforcement validator so the rung names can never drift apart. The rungs:
+ * embedded-config runs the repo's own embedded backend (sqlite driver or
+ * dialect); provisioned-service runs a real service inside the sandbox;
+ * client-stub serves deterministic data from the app's own fetch/API-client
+ * layer; provider-recipe swaps a cloud driver for a local equivalent;
+ * declared-stub demos the feature against generated data and declares the
+ * substitution — nothing is ever dropped or steered away.
+ */
+export const dataStrategyRungs = [
+  "embedded-config",
+  "provisioned-service",
+  "client-stub",
+  "provider-recipe",
+  "declared-stub",
+] as const;
+export type DataStrategyRung = (typeof dataStrategyRungs)[number];
+
+/**
+ * Preparation's answer for one detected data service (N122): `service`
+ * names the repo profile's servicesRequired entry being addressed, `rung`
+ * the chosen ladder rung, and `detail` what was concretely done — the
+ * embedded driver and seeded data, the stubbed client layer, or the
+ * declared generated-data substitution. Enforcement rejects a manifest that
+ * leaves any detected service unanswered.
+ *
+ * On the provisioned-service rung (N122(5)) the declaration may carry the
+ * repo's own schema and data commands: the lifecycle runs `migrationCommand`
+ * then `seedCommand` in the app directory after the harness-provisioned
+ * service passes its health check, and re-runs them against a reset service
+ * on every preflight round so demo data stays deterministic.
+ */
+type DataStrategyDeclaration = {
+  service: string;
+  rung: DataStrategyRung;
+  detail: string;
+  migrationCommand?: string;
+  seedCommand?: string;
+};
+
+/**
+ * The declared-proof vocabulary, shared by the schema reader, the manifest
+ * contract, and the agent-facing feature-verification guide so the three can
+ * never drift apart.
+ */
+export const expectedProofKinds = [
+  "app-state",
+  "canvas-delta",
+  "element-appears",
+  "state-transition",
+  "visible-text",
+] as const;
+
+/** The storages an app-state proof may read; always the app origin's own. */
+export const appStateProofSources = [
+  "local-storage",
+  "session-storage",
+] as const;
+
+/**
+ * The feature's declared proof obligation (N107): a typed expected outcome
+ * in Action Catalog vocabulary that the exploration gate executes as
+ * first-class grounding. `visible-text` asserts an exact on-screen string;
+ * `element-appears` asserts a visible element with the given accessible
+ * name; `state-transition` clicks the control named `locator` while its
+ * observed state reads `from` and requires state `to` afterward (states are
+ * accessible names, or the words "enabled"/"disabled"). Locators and texts
+ * live in the accessible-name space the harvest produces — never CSS or
+ * XPath.
+ *
+ * Two rungs exist for features whose outcome never enters the DOM (N157).
+ * `app-state` (preferred) reads the string the app itself persists under
+ * `key` in the declared storage and requires it to contain the substring
+ * `contains` — the declaration is data (a key and a substring), never
+ * executable code. `canvas-delta` (weakest acceptable) clicks the single
+ * control named `locator` and requires the page's largest visible canvas
+ * region to render different pixels afterward. Where declared, the proof
+ * subsumes wording-based grounding: the feature passes only if its proof
+ * passes.
+ */
+type ExpectedProof =
+  | {
+      kind: "app-state";
+      source: (typeof appStateProofSources)[number];
+      key: string;
+      contains: string;
+    }
+  | { kind: "canvas-delta"; locator: string }
+  | { kind: "element-appears"; name: string }
+  | { kind: "state-transition"; locator: string; from: string; to: string }
+  | { kind: "visible-text"; text: string };
+
 export type PreparedDemoFeature = {
   authStrategy: "bypass" | "demo-identity" | "none";
+  /** Declared for data-backed features; empty or absent for static surfaces. */
+  dataSeams?: PreparedDataSeam[];
   description: string;
   entryPaths: string[];
+  /** Required for maker-requested features; validated referentially at preparation. */
+  expectedProof?: ExpectedProof;
   fixtureNotes: string[];
   id: string;
   label: string;
@@ -174,6 +317,8 @@ export type PreparationManifest = {
   mocksAndFixturesAdded: string[];
   /** Describes secret-free authentication state active before browser exploration. */
   authBypassOrDemoIdentity?: string;
+  /** Answers the repo profile's servicesRequired inventory (N122); required whenever detection found services. */
+  dataStrategy?: DataStrategyDeclaration[];
   blockedExternalServicesReplaced: string[];
   requiredLocalOnlyAssumptions: string[];
   knownLimitations: string[];
@@ -191,11 +336,93 @@ export type PreparationManifest = {
  * diagnoses, all currently-known violations per attempt, and no
  * infrastructure errors — those are the harness's to retry or surface.
  */
+/**
+ * How one preparation-fidelity candidate violation fared under agent
+ * adjudication. `overturned-unverifiable` records a confirmation whose
+ * quoted evidence did not literally appear in the named file's diff — a
+ * hallucinated confirmation must not sustain a veto.
+ */
+type FidelityAdjudicationOutcome = {
+  candidateIndex: number;
+  message: string;
+  outcome: "confirmed" | "overturned" | "overturned-unverifiable" | "unjudged";
+};
+
+/**
+ * The adjudication record carried by a preparation-fidelity report so later
+ * diagnoses can audit the judge: `unadjudicated` means the judge failed and
+ * every candidate verdict stood; `discarded-diff-changed` means the
+ * workspace diff changed while the judge ran, so its verdicts were unsafe
+ * to apply.
+ */
+export type FidelityAdjudicationRecord = {
+  outcomes: FidelityAdjudicationOutcome[];
+  status: "adjudicated" | "discarded-diff-changed" | "unadjudicated";
+};
+
+/** One candidate's verdict from the adjudication agent's artifact. */
+export type FidelityAdjudicationVerdict = {
+  candidateIndex: number;
+  quotedEvidence: string[];
+  steering?: string;
+  verdict: "confirm" | "overturn";
+};
+
+/**
+ * One prepared feature's structured grounding verdict (N106). Producers must
+ * emit exactly one entry per prepared feature per grounding attempt, on
+ * passed and failed reports alike: the enums — not prose — are the shared
+ * vocabulary of the exploration gate, the verify-features probe, and repair
+ * steering, so fingerprints and hints can key off them. A `grounded` verdict
+ * carries `groundedBy` naming the strongest evidence class; a `failed`
+ * verdict carries `failedBecause` naming the first blocker repair must
+ * clear. `evidence` lists the deciding action ids, routes, or observed
+ * strings; `detail` carries the decisive specifics (the best-scoring
+ * on-screen string for token-mismatch, the error text for error-state
+ * routes) rather than restating the enum.
+ */
+/**
+ * Every failure cause the feature-verdict ledger can assign. The schema
+ * reader, the guide the preparation agent reads, and any renderer that maps
+ * causes to steering all consume this one list, so a new cause cannot land
+ * without its agent-facing explanation.
+ */
+export const featureVerdictFailureCauses = [
+  "app-unreachable",
+  "auth-wall",
+  "declared-proof-failed",
+  "error-state-route",
+  "external-destination",
+  "no-assert-candidates",
+  "route-shared-with-winners",
+  "skeleton-rows",
+  "token-mismatch",
+] as const;
+
+export type FeatureVerdict = {
+  detail?: string;
+  evidence?: string[];
+  failedBecause?: (typeof featureVerdictFailureCauses)[number];
+  featureId: string;
+  groundedBy?: "assert" | "declared-proof" | "interaction" | "state-transition";
+  verdict: "failed" | "grounded";
+};
+
 export type ValidationReport = {
   status: "failed" | "passed";
   stage: string;
   attemptedCommand?: string;
   exitCode?: number;
+  /**
+   * The typed identity of the browser action a capture-path dry run failed
+   * on (N125). `actionId` is the Demo Script step id, so the orchestrator
+   * can join it back to the script action's locator candidate and scene
+   * prefix; regrounding consumes that identity instead of re-exploring
+   * blind.
+   */
+  failedAction?: { actionId?: string; sceneId: string };
+  featureVerdicts?: FeatureVerdict[];
+  fidelityAdjudication?: FidelityAdjudicationRecord;
   logsSummary: string;
   stdoutExcerpts: string[];
   stderrExcerpts: string[];
@@ -294,6 +521,29 @@ type ActionCatalogAction = {
   /** True only when browser exploration executed the action and observed its result. */
   exercised?: true;
   /**
+   * The control state change browser exploration observed when it exercised
+   * this action (N105): a self-renaming toggle (`Follow` → `Unfollow`) or a
+   * control leaving its disabled state (`disabled` → `enabled`). Transition
+   * evidence is wording-free proof of behavior, so grounding and script
+   * generation may rely on it where visible-text matching would fail. Only
+   * valid alongside `exercised`.
+   */
+  stateTransition?: {
+    control: string;
+    from: string;
+    to: string;
+  };
+  /**
+   * Present only on catalog actions minted from a passed declared proof
+   * whose evidence lives outside the DOM (N157): `app-state` rides the
+   * assert minted from a passed app-state proof, `canvas-delta` rides the
+   * exercised click minted from a passed canvas-delta proof. Grounding
+   * treats such an action as sufficient feature evidence on its own — the
+   * proof executed against the app's persisted state or the canvas pixels,
+   * which no DOM assert can witness.
+   */
+  declaredProofKind?: "app-state" | "canvas-delta";
+  /**
    * For asserts on text that becomes visible only after an interaction: the
    * catalog id of the revealing interaction. Such an assert is valid demo
    * evidence only when its revealing interaction runs earlier in the same
@@ -301,6 +551,22 @@ type ActionCatalogAction = {
    * pair is selected together.
    */
   revealedBy?: string;
+  /**
+   * Local app destination observed when this click changed the page URL.
+   * This is browser evidence, not a description inferred from
+   * `expectedResult`; capture compilation uses it to settle the navigation
+   * before another navigation can start.
+   */
+  navigationDestination?: string;
+  /**
+   * Off-origin URL observed when this click left the app (N158): the app's
+   * marketing banner, an OAuth provider, a docs site. Like an auth-wall
+   * destination, this is non-navigable evidence — the click never grounds an
+   * inferred feature, and a requested feature left with only such clicks
+   * fails with the destination named in its verdict. Mutually exclusive with
+   * `navigationDestination`.
+   */
+  externalDestination?: string;
   featureIds?: string[];
   route: string;
   kind:
@@ -359,6 +625,13 @@ export type FlowSpecFeature = {
 };
 
 export type FlowSpec = {
+  /**
+   * Ungroundable prepared features the planner conceded instead of
+   * selecting: features the ActionCatalog tags no visible assertion for.
+   * Present only on inferred flows (the maker requested no features);
+   * maker-requested features may never be dropped.
+   */
+  droppedFeatures?: Array<{ featureId: string; reason: string }>;
   features: FlowSpecFeature[];
   id: string;
   repairConstraints: string[];
@@ -427,6 +700,8 @@ export type PipelineRunManifest = {
   artifactPaths: Record<string, string>;
   finalStatus: "failed" | "passed" | "unsupported";
   unsupportedOrFailureReason?: string;
+  /** Run-triage envelope-fit warning; advisory, never a failure cause. */
+  envelopeFitWarning?: string;
 };
 
 export function readRunPlan(value: unknown): RunPlan {
@@ -526,6 +801,7 @@ export function readPreparationManifest(value: unknown): PreparationManifest {
       record,
       "cleanupAndReproInstructions",
     ),
+    ...optionalKey(record, "dataStrategy", readDataStrategy),
     envUsed: readStringRecord(record, "envUsed"),
     id: readNonEmptyString(record, "id"),
     installCommandUsed: readNonEmptyString(record, "installCommandUsed"),
@@ -562,6 +838,9 @@ function assertValidPreparationManifestFields(
     ...(record.authBypassOrDemoIdentity === undefined
       ? []
       : [() => readNonEmptyString(record, "authBypassOrDemoIdentity")]),
+    ...(record.dataStrategy === undefined
+      ? []
+      : [() => readDataStrategy(record, "dataStrategy")]),
     () => readStringArray(record, "blockedExternalServicesReplaced"),
     () => readStringArray(record, "requiredLocalOnlyAssumptions"),
     () => readStringArray(record, "knownLimitations"),
@@ -583,6 +862,45 @@ function assertValidPreparationManifestFields(
       `PreparationManifest validation failed: ${errors.join("; ")}`,
     );
   }
+}
+
+function readDataStrategy(
+  record: Record<string, unknown>,
+  key: string,
+): DataStrategyDeclaration[] {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    throw new Error(`${key} must be an array`);
+  }
+  return value.map((entry, index) => {
+    const path = `${key}[${index}]`;
+    const entryRecord = assertRecord(entry, path);
+    const rung = readNonEmptyString(entryRecord, "rung", path);
+    if (!(dataStrategyRungs as readonly string[]).includes(rung)) {
+      throw new Error(
+        `${path}.rung must be one of: ${[...dataStrategyRungs].sort().join(", ")}`,
+      );
+    }
+    return {
+      detail: readNonEmptyString(entryRecord, "detail", path),
+      ...(entryRecord.migrationCommand === undefined
+        ? {}
+        : {
+            migrationCommand: readNonEmptyString(
+              entryRecord,
+              "migrationCommand",
+              path,
+            ),
+          }),
+      rung: rung as DataStrategyRung,
+      ...(entryRecord.seedCommand === undefined
+        ? {}
+        : {
+            seedCommand: readNonEmptyString(entryRecord, "seedCommand", path),
+          }),
+      service: readNonEmptyString(entryRecord, "service", path),
+    };
+  });
 }
 
 function readProductContext(value: unknown): ProductContext {
@@ -684,6 +1002,18 @@ function readPreparedDemoFeature(
   const sourcePaths = captureValidationError(errors, () =>
     readRepoPathArray(feature, "sourcePaths", path),
   );
+  const dataSeams =
+    feature.dataSeams === undefined
+      ? undefined
+      : captureValidationError(errors, () =>
+          readPreparedDataSeams(feature.dataSeams, path),
+        );
+  const expectedProof =
+    feature.expectedProof === undefined
+      ? undefined
+      : captureValidationError(errors, () =>
+          readExpectedProof(feature.expectedProof, path),
+        );
   if (
     errors.length > errorCount ||
     id === undefined ||
@@ -698,14 +1028,76 @@ function readPreparedDemoFeature(
   }
   return {
     authStrategy,
+    ...(dataSeams === undefined ? {} : { dataSeams }),
     description,
     entryPaths,
+    ...(expectedProof === undefined ? {} : { expectedProof }),
     fixtureNotes,
     id,
     label,
     ...(requestedFeature === undefined ? {} : { requestedFeature }),
     sourcePaths,
   };
+}
+
+function readExpectedProof(value: unknown, parentPath: string): ExpectedProof {
+  const path = `${parentPath}.expectedProof`;
+  const proof = assertRecord(value, path);
+  const kind = readEnum(proof, "kind", expectedProofKinds, path);
+  if (kind === "visible-text") {
+    return { kind, text: readNonEmptyString(proof, "text", path) };
+  }
+  if (kind === "element-appears") {
+    return { kind, name: readNonEmptyString(proof, "name", path) };
+  }
+  if (kind === "app-state") {
+    return {
+      contains: readNonEmptyString(proof, "contains", path),
+      key: readNonEmptyString(proof, "key", path),
+      kind,
+      source: readEnum(proof, "source", appStateProofSources, path),
+    };
+  }
+  if (kind === "canvas-delta") {
+    return { kind, locator: readNonEmptyString(proof, "locator", path) };
+  }
+  return {
+    from: readNonEmptyString(proof, "from", path),
+    kind,
+    locator: readNonEmptyString(proof, "locator", path),
+    to: readNonEmptyString(proof, "to", path),
+  };
+}
+
+function readPreparedDataSeams(
+  value: unknown,
+  parentPath: string,
+): PreparedDataSeam[] {
+  const path = `${parentPath}.dataSeams`;
+  return readArray(value, path, (entry, index) => {
+    const seam = assertRecord(entry, `${path}[${index}]`);
+    const fixtureModule = readRepoRelativePath(
+      seam,
+      "fixtureModule",
+      `${path}[${index}]`,
+    );
+    const functionName = readNonEmptyString(
+      seam,
+      "functionName",
+      `${path}[${index}]`,
+    );
+    const seamPath = readRepoRelativePath(seam, "path", `${path}[${index}]`);
+    const shapeProbe =
+      seam.shapeProbe === undefined
+        ? undefined
+        : readNonEmptyString(seam, "shapeProbe", `${path}[${index}]`);
+    return {
+      fixtureModule,
+      functionName,
+      path: seamPath,
+      ...(shapeProbe === undefined ? {} : { shapeProbe }),
+    };
+  });
 }
 
 function captureValidationError<T>(
@@ -762,6 +1154,103 @@ function readLocalAppPathArray(
   });
 }
 
+function readFidelityAdjudicationRecord(
+  value: unknown,
+): FidelityAdjudicationRecord {
+  const record = assertRecord(value, "FidelityAdjudicationRecord");
+  return {
+    outcomes: readArray(record.outcomes, "outcomes", (item, index) => {
+      const outcome = assertRecord(item, `outcomes[${index}]`);
+      return {
+        candidateIndex: readNonNegativeInteger(outcome, "candidateIndex"),
+        message: readNonEmptyString(outcome, "message"),
+        outcome: readEnum(outcome, "outcome", [
+          "confirmed",
+          "overturned",
+          "overturned-unverifiable",
+          "unjudged",
+        ]),
+      };
+    }),
+    status: readEnum(record, "status", [
+      "adjudicated",
+      "discarded-diff-changed",
+      "unadjudicated",
+    ]),
+  };
+}
+
+/**
+ * Validates the adjudication agent's own artifact
+ * (`fidelity-adjudication.json`): one verdict per judged candidate index.
+ * Callers must treat a parse failure as a failed judge — the candidate
+ * verdicts stand — and must verify every confirm's quoted evidence against
+ * the actual diff before applying it; this reader checks shape only.
+ */
+export function readFidelityAdjudicationVerdicts(
+  value: unknown,
+): FidelityAdjudicationVerdict[] {
+  const record = assertRecord(value, "FidelityAdjudication");
+  return readArray(record.verdicts, "verdicts", (item, index) => {
+    const verdict = assertRecord(item, `verdicts[${index}]`);
+    return {
+      candidateIndex: readNonNegativeInteger(verdict, "candidateIndex"),
+      quotedEvidence: readStringArray(verdict, "quotedEvidence"),
+      ...optionalKey(verdict, "steering", readNonEmptyString),
+      verdict: readEnum(verdict, "verdict", ["confirm", "overturn"]),
+    };
+  });
+}
+
+function readFeatureVerdictArray(value: unknown): FeatureVerdict[] {
+  return readArray(value, "featureVerdicts", (item, index) => {
+    const path = `featureVerdicts[${index}]`;
+    const record = assertRecord(item, path);
+    const verdict = readEnum(record, "verdict", ["failed", "grounded"], path);
+    if (
+      verdict === "grounded"
+        ? record.groundedBy === undefined || record.failedBecause !== undefined
+        : record.failedBecause === undefined || record.groundedBy !== undefined
+    ) {
+      throw new Error(
+        verdict === "grounded"
+          ? `${path} with verdict grounded must set groundedBy and omit failedBecause`
+          : `${path} with verdict failed must set failedBecause and omit groundedBy`,
+      );
+    }
+    return {
+      ...(record.detail === undefined
+        ? {}
+        : { detail: readNonEmptyString(record, "detail", path) }),
+      ...(record.evidence === undefined
+        ? {}
+        : { evidence: readStringArray(record, "evidence", path) }),
+      ...(record.failedBecause === undefined
+        ? {}
+        : {
+            failedBecause: readEnum(
+              record,
+              "failedBecause",
+              featureVerdictFailureCauses,
+              path,
+            ),
+          }),
+      featureId: readNonEmptyString(record, "featureId", path),
+      ...(record.groundedBy === undefined
+        ? {}
+        : {
+            groundedBy: readEnum(
+              record,
+              "groundedBy",
+              ["assert", "declared-proof", "interaction", "state-transition"],
+              path,
+            ),
+          }),
+      verdict,
+    };
+  });
+}
+
 export function readValidationReport(value: unknown): ValidationReport {
   const record = assertRecord(value, "ValidationReport");
   return {
@@ -774,8 +1263,21 @@ export function readValidationReport(value: unknown): ValidationReport {
     browserObservations: readStringArray(record, "browserObservations"),
     consoleErrors: readStringArray(record, "consoleErrors"),
     ...optionalKey(record, "exitCode", readNonNegativeNumber),
+    ...(record.failedAction === undefined
+      ? {}
+      : { failedAction: readFailedActionRecord(record.failedAction) }),
     ...optionalKey(record, "failingFeatureIds", readStringArray),
     ...optionalKey(record, "failureClassification", readNonEmptyString),
+    ...(record.featureVerdicts === undefined
+      ? {}
+      : { featureVerdicts: readFeatureVerdictArray(record.featureVerdicts) }),
+    ...(record.fidelityAdjudication === undefined
+      ? {}
+      : {
+          fidelityAdjudication: readFidelityAdjudicationRecord(
+            record.fidelityAdjudication,
+          ),
+        }),
     logsSummary: readNonEmptyString(record, "logsSummary"),
     networkAttempts: readNetworkAttempts(record, "networkAttempts"),
     pageErrors: readStringArray(record, "pageErrors"),
@@ -790,6 +1292,19 @@ export function readValidationReport(value: unknown): ValidationReport {
     stdoutExcerpts: readStringArray(record, "stdoutExcerpts"),
     suggestedRepairHints: readStringArray(record, "suggestedRepairHints"),
     ...optionalKey(record, "urlChecked", readLocalHttpUrl),
+  };
+}
+
+function readFailedActionRecord(
+  value: unknown,
+): NonNullable<ValidationReport["failedAction"]> {
+  const path = "failedAction";
+  const record = assertRecord(value, path);
+  return {
+    ...(record.actionId === undefined
+      ? {}
+      : { actionId: readNonEmptyString(record, "actionId", path) }),
+    sceneId: readNonEmptyString(record, "sceneId", path),
   };
 }
 
@@ -936,7 +1451,38 @@ export function readFlowSpec(value: unknown): FlowSpec {
   if (featureIds.size !== features.length) {
     throw new Error("features featureId values must be unique");
   }
+  const droppedFeatures =
+    record.droppedFeatures === undefined
+      ? undefined
+      : readArray(record.droppedFeatures, "droppedFeatures", (value, index) => {
+          const path = `droppedFeatures[${index}]`;
+          const dropped = assertRecord(value, path);
+          const featureId = readNonEmptyString(dropped, "featureId", path);
+          if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(featureId)) {
+            throw new Error(`${path}.featureId must be a safe identifier`);
+          }
+          return {
+            featureId,
+            reason: readNonEmptyString(dropped, "reason", path),
+          };
+        });
+  if (droppedFeatures !== undefined) {
+    const droppedIds = new Set(
+      droppedFeatures.map((dropped) => dropped.featureId),
+    );
+    if (droppedIds.size !== droppedFeatures.length) {
+      throw new Error("droppedFeatures featureId values must be unique");
+    }
+    for (const droppedId of droppedIds) {
+      if (featureIds.has(droppedId)) {
+        throw new Error(
+          `droppedFeatures must not name selected feature ${droppedId}`,
+        );
+      }
+    }
+  }
   return {
+    ...(droppedFeatures === undefined ? {} : { droppedFeatures }),
     features,
     id: readNonEmptyString(record, "id"),
     repairConstraints: readStringArray(record, "repairConstraints"),
@@ -1021,6 +1567,7 @@ export function readPipelineRunManifest(value: unknown): PipelineRunManifest {
     artifactPaths: readStringRecord(record, "artifactPaths"),
     ...optionalKey(record, "commitSha", readNonEmptyString),
     daytonaSandboxIds: readDaytonaSandboxIds(record.daytonaSandboxIds),
+    ...optionalKey(record, "envelopeFitWarning", readNonEmptyString),
     finalStatus: readEnum(record, "finalStatus", [
       "failed",
       "passed",
@@ -1128,6 +1675,55 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
   if (revealedBy !== undefined && kind !== "assert") {
     throw new Error(`${path}.revealedBy is only valid on assert actions`);
   }
+  const declaredProofKind =
+    record.declaredProofKind === undefined
+      ? undefined
+      : readEnum(
+          record,
+          "declaredProofKind",
+          ["app-state", "canvas-delta"],
+          path,
+        );
+  if (declaredProofKind === "app-state" && kind !== "assert") {
+    throw new Error(
+      `${path}.declaredProofKind app-state is only valid on assert actions`,
+    );
+  }
+  if (
+    declaredProofKind === "canvas-delta" &&
+    (kind !== "click" || exercised !== true)
+  ) {
+    throw new Error(
+      `${path}.declaredProofKind canvas-delta is only valid on browser-exercised click actions`,
+    );
+  }
+  const stateTransition =
+    record.stateTransition === undefined
+      ? undefined
+      : readStateTransition(record.stateTransition, path);
+  if (stateTransition !== undefined && exercised !== true) {
+    throw new Error(
+      `${path}.stateTransition is only valid on browser-exercised actions`,
+    );
+  }
+  const navigationDestination =
+    record.navigationDestination === undefined
+      ? undefined
+      : readLocalRoute(record, "navigationDestination", path);
+  if (navigationDestination !== undefined && kind !== "click") {
+    throw new Error(
+      `${path}.navigationDestination is only valid on click actions`,
+    );
+  }
+  const externalDestination =
+    record.externalDestination === undefined
+      ? undefined
+      : readNonEmptyString(record, "externalDestination", path);
+  if (externalDestination !== undefined && kind !== "click") {
+    throw new Error(
+      `${path}.externalDestination is only valid on click actions`,
+    );
+  }
   if (
     locatorCandidates !== undefined &&
     preferredLocatorCandidateId === undefined
@@ -1148,6 +1744,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
   }
   return {
     confidence: readConfidenceNumber(record, "confidence", path),
+    ...(declaredProofKind === undefined ? {} : { declaredProofKind }),
     evidence: readNonEmptyString(record, "evidence", path),
     ...(exercised === undefined ? {} : { exercised: true as const }),
     expectedResult: readNonEmptyString(record, "expectedResult", path),
@@ -1161,7 +1758,9 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
       : { featureIds: readStringArray(record, "featureIds", path) }),
     id: readNonEmptyString(record, "id", path),
     kind,
+    ...(externalDestination === undefined ? {} : { externalDestination }),
     ...(locatorCandidates === undefined ? {} : { locatorCandidates }),
+    ...(navigationDestination === undefined ? {} : { navigationDestination }),
     preferredLocator: readPreferredLocator(record.preferredLocator, path),
     ...(preferredLocatorCandidateId === undefined
       ? {}
@@ -1169,6 +1768,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
     ...(revealedBy === undefined ? {} : { revealedBy }),
     risks: readStringArray(record, "risks", path),
     route: readLocalRoute(record, "route", path),
+    ...(stateTransition === undefined ? {} : { stateTransition }),
     ...(record.scrollPosition === undefined
       ? {}
       : {
@@ -1179,6 +1779,19 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
             path,
           ),
         }),
+  };
+}
+
+function readStateTransition(
+  value: unknown,
+  parentPath: string,
+): NonNullable<ActionCatalogAction["stateTransition"]> {
+  const path = `${parentPath}.stateTransition`;
+  const record = assertRecord(value, path);
+  return {
+    control: readNonEmptyString(record, "control", path),
+    from: readNonEmptyString(record, "from", path),
+    to: readNonEmptyString(record, "to", path),
   };
 }
 
@@ -1439,8 +2052,9 @@ function readLocalRoute(
 function readRepoRelativePath(
   record: Record<string, unknown>,
   key: string,
+  parentPath?: string,
 ): string {
-  const value = readNonEmptyString(record, key);
+  const value = readNonEmptyString(record, key, parentPath);
   const segments = value.split(/[\\/]/);
   if (
     value !== value.trim() ||
@@ -1450,7 +2064,9 @@ function readRepoRelativePath(
     value.includes("\0") ||
     segments.includes("..")
   ) {
-    throw new Error(`${key} must be a relative path within /workspace/repo`);
+    throw new Error(
+      `${childPath(parentPath, key)} must be a relative path within /workspace/repo`,
+    );
   }
   return value;
 }
