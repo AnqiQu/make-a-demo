@@ -5302,6 +5302,17 @@ function assertFlowSpecGrounded(input: {
   const observedRoutes = new Set(
     input.appMap.discoveredRoutes.map((route) => route.path),
   );
+  // A rejection that names only the offending route leaves the planner
+  // guessing at the AppMap's spelling: cyberchef burned three attempts on
+  // "unknown route" when its first citation differed from the observed
+  // route by a trailing %3D (N172). Enumerating the citable routes makes
+  // the retry a copy, not a guess.
+  const observedRouteSummary = () => {
+    const paths = [...observedRoutes];
+    const shown = paths.slice(0, 24).join(", ") || "(none observed)";
+    const hidden = paths.length - 24;
+    return hidden > 0 ? `${shown} (and ${hidden} more)` : shown;
+  };
   const authWallRoutes = new Set(input.appMap.loginOrAuthWalls);
   const actionsById = new Map(
     input.actionCatalog.actions.map((action) => [action.id, action]),
@@ -5435,7 +5446,9 @@ function assertFlowSpecGrounded(input: {
     }
     for (const route of feature.referencedAppMapRoutePaths) {
       if (!observedRoutes.has(route)) {
-        throw new Error(`FlowSpec references unknown AppMap route ${route}`);
+        throw new Error(
+          `FlowSpec references unknown AppMap route ${route}. The FlowSpec may cite only these observed AppMap routes, exactly as spelled: ${observedRouteSummary()}`,
+        );
       }
       if (
         authWallRoutes.has(route) &&

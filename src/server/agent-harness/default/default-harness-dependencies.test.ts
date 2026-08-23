@@ -873,6 +873,78 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("enumerates the observed AppMap routes when the FlowSpec cites an unknown route", async () => {
+    // N172 (cyberchef, wave-19): the planner cited a route that differed
+    // from the AppMap spelling by a trailing %3D and burned three attempts
+    // on "unknown route" with no legal list to copy from.
+    const recipeRoutePath = "/#recipe=To_Base64('A-Za-z0-9%2B%2F%3D')";
+    const observedAppMap = {
+      ...appMap(),
+      discoveredRoutes: [
+        ...appMap().discoveredRoutes,
+        {
+          buttons: [],
+          forms: [],
+          headings: ["Recipe"],
+          inputs: [],
+          links: [],
+          path: recipeRoutePath,
+          screenshots: [],
+          text: ["Recipe"],
+        },
+      ],
+    };
+    const invalid = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedAppMapRoutePaths: [`${recipeRoutePath}%3D`],
+      })),
+    };
+
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      appMap: observedAppMap,
+      candidates: [invalid, flowSpec()],
+    });
+
+    expect(result).toEqual(flowSpec());
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain(`unknown AppMap route ${recipeRoutePath}%3D`);
+    expect(prompts[1]).toContain(
+      `may cite only these observed AppMap routes, exactly as spelled: /, ${recipeRoutePath}`,
+    );
+  });
+
+  it("caps the enumerated route list when the AppMap observed many routes", async () => {
+    const observedAppMap = {
+      ...appMap(),
+      discoveredRoutes: Array.from({ length: 30 }, (_, index) => ({
+        buttons: [],
+        forms: [],
+        headings: [`Route ${index + 1}`],
+        inputs: [],
+        links: [],
+        path: `/route-${index + 1}`,
+        screenshots: [],
+        text: [`Route ${index + 1}`],
+      })),
+    };
+    const invalid = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedAppMapRoutePaths: ["/missing"],
+      })),
+    };
+
+    await expect(
+      runFlowPlanningScenario({
+        appMap: observedAppMap,
+        candidates: [invalid],
+      }),
+    ).rejects.toThrow(/\/route-24 \(and 6 more\)(?![\s\S]*\/route-25)/);
+  });
+
   it("keeps the last validation error when a permission denial concerns another file", async () => {
     const invalid = {
       ...flowSpec(),
