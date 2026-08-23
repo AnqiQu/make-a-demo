@@ -4175,6 +4175,145 @@ describe("feature verdict ledger", () => {
     expect(result.validationReport.logsSummary).toContain("declared proof");
   });
 
+  it("names the legal moves when a declared proof failed on an ambiguous control", async () => {
+    // N166 (conduit, wave-18): five rounds discovered the fidelity wall by
+    // hitting it. Ambiguity evidence must enumerate the exits the other
+    // gates permit and name the wall renaming would hit.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'control "Favorite ( 8 )" matched 2 elements on /#/article/demo; the proof needs exactly one',
+          failedKind: "ambiguous-control",
+          featureId: "post-article",
+          passed: false,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            from: "Favorite ( 8 )",
+            kind: "state-transition",
+            locator: "Favorite ( 8 )",
+            to: "Unfavorite ( 9 )",
+          },
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Posting an article"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.logsSummary).toContain(
+      "reselect the expectedProof onto a different control, route, or region",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "will be rejected by the fidelity gate",
+    );
+  });
+
+  it("names the legal moves when a declared proof failed on a declared-state mismatch", async () => {
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'control "Favorite article ( 8 )" read "Favorite ( 8 )" before the click; declared from "Favorite article ( 8 )"',
+          failedKind: "declared-state-mismatch",
+          featureId: "post-article",
+          passed: false,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            from: "Favorite article ( 8 )",
+            kind: "state-transition",
+            locator: "Favorite article ( 8 )",
+            to: "Unfavorite",
+          },
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Posting an article"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.logsSummary).toContain(
+      "redeclare the proof's from-state to the text the control actually shows",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "will be rejected by the fidelity gate",
+    );
+  });
+
+  it("leads a failed declared proof with the probed route's own errors", async () => {
+    // N167 (excalidraw, wave-18): every round's evidence chased the missing
+    // marker while the render error sat in stderr. A page that cannot
+    // render grounds no proof — the page's own errors come first.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'stored local-storage value under "excalidraw" does not contain "diagram-start" on /#/editor',
+          featureId: "post-article",
+          passed: false,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            contains: "diagram-start",
+            key: "excalidraw",
+            kind: "app-state",
+            source: "local-storage",
+          },
+        }),
+      ],
+      pageErrors: [
+        `${baseUrl}/#/editor: Error: Failed to resolve import "convertToExcalidrawElements"`,
+      ],
+      routes: [
+        observedRoute({
+          buttons: ["Open canvas"],
+          headings: ["Welcome"],
+          path: "/",
+          requestedPath: "/",
+        }),
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Posting an article"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    const verdict = result.validationReport.featureVerdicts?.find(
+      (entry) => entry.featureId === "post-article",
+    );
+    expect(verdict?.failedBecause).toBe("declared-proof-failed");
+    expect(verdict?.detail).toMatch(
+      /^the probed routes logged the page's own errors: .*convertToExcalidrawElements/,
+    );
+    expect(verdict?.detail).toContain("is their consequence");
+    expect(result.validationReport.logsSummary).toContain(
+      "convertToExcalidrawElements",
+    );
+  });
+
   it("falls back to wording grounding when a declared proof was never executed", async () => {
     // An unexecuted proof (deadline, unreachable entry) is missing
     // evidence, not failed evidence: the wording chain still applies.
@@ -4224,6 +4363,26 @@ describe("feature verdict ledger", () => {
 
     expect(script).toContain("declaredProofTargets");
     expect(script).toContain("result.declaredProofs");
+  });
+
+  it("classifies proof-failure kinds in the generated script", async () => {
+    const { commands } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            from: "Favorite ( 8 )",
+            kind: "state-transition",
+            locator: "Favorite ( 8 )",
+            to: "Unfavorite ( 9 )",
+          },
+        }),
+      ],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain('failedKind: "ambiguous-control"');
+    expect(script).toContain('failedKind: "declared-state-mismatch"');
   });
 
   it("names the winning feature and steers at an unclaimed entry route when the crawl never tagged the feature", async () => {
@@ -4749,6 +4908,7 @@ async function exploreObservation(input: {
   dataStrategy?: Parameters<typeof exploreSubmittedApp>[0]["dataStrategy"];
   declaredProofs?: Array<{
     detail: string;
+    failedKind?: "ambiguous-control" | "declared-state-mismatch";
     featureId: string;
     passed: boolean;
   }>;

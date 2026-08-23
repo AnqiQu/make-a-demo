@@ -231,6 +231,16 @@ type UnreachableRoute = {
  */
 type DeclaredProofResult = {
   detail: string;
+  /**
+   * Why the proof failed, when the failure has known legal moves (N166).
+   * "ambiguous-control": the declared locator matched zero or several
+   * elements — the fix is reselecting the proof, never renaming product
+   * controls to disambiguate. "declared-state-mismatch": the control
+   * rendered a different accessible name than the declared from-state —
+   * the fix is redeclaring, never restyling. Absent for failures whose
+   * remedy is genuinely open-ended (outcome not observed, storage empty).
+   */
+  failedKind?: "ambiguous-control" | "declared-state-mismatch";
   featureId: string;
   locatorEvidence?: ObservedLocatorEvidence | null;
   passed: boolean;
@@ -2047,10 +2057,35 @@ function readFeatureVerdicts(input: {
           verdict: "grounded",
         } satisfies FeatureVerdict;
       }
+      // N167 (excalidraw): a route that logged its own errors cannot render
+      // the proof's outcome, so those errors lead and the failed proof is
+      // framed as their consequence — otherwise rounds chase the missing
+      // marker while the render error sits in stderr.
+      const proofTaggedRoutes = unique(tagged.map((action) => action.route));
+      const proofRoutes =
+        proofTaggedRoutes.length > 0 ? proofTaggedRoutes : feature.entryPaths;
+      const routeErrors = unique(
+        proofRoutes.flatMap(
+          (route) => input.errorEvidenceByRoute.get(route) ?? [],
+        ),
+      ).slice(0, 6);
+      // N166 (conduit): ambiguity and name-mismatch failures have known
+      // legal moves; enumerating them here saves rounds from discovering
+      // the fidelity wall by hitting it.
+      const legalMoves =
+        proofResult.failedKind === "ambiguous-control"
+          ? " Legal moves: reselect the expectedProof onto a different control, route, or region that matches exactly once as rendered, or declare a more specific accessible name that is already unique. Renaming or restyling the product's own controls to disambiguate will be rejected by the fidelity gate."
+          : proofResult.failedKind === "declared-state-mismatch"
+            ? " Legal moves: redeclare the proof's from-state to the text the control actually shows, or reselect the expectedProof onto a different unique control. Renaming the product's control to match the declaration will be rejected by the fidelity gate."
+            : "";
+      const proofFailureDetail =
+        routeErrors.length > 0
+          ? `the probed routes logged the page's own errors: ${routeErrors.join(" | ")} — a page that cannot render grounds no proof, so repair these errors first; the failed proof (${proofResult.detail}) is their consequence${legalMoves}`
+          : `${proofResult.detail}${legalMoves}`;
       return failed(
         feature,
         "declared-proof-failed",
-        proofResult.detail,
+        proofFailureDetail,
         feature.entryPaths,
       );
     }
@@ -4178,6 +4213,7 @@ try {
         if (matches !== 1) {
           result.declaredProofs.push({
             detail: "control " + JSON.stringify(proof.locator) + " matched " + matches + " elements on " + target.path + "; the proof needs exactly one",
+            failedKind: "ambiguous-control",
             featureId: target.featureId,
             passed: false,
           });
@@ -4237,6 +4273,7 @@ try {
         if (matches !== 1) {
           result.declaredProofs.push({
             detail: "control " + JSON.stringify(proof.locator) + " matched " + matches + " elements on " + target.path + "; the proof needs exactly one",
+            failedKind: "ambiguous-control",
             featureId: target.featureId,
             passed: false,
           });
@@ -4251,6 +4288,7 @@ try {
         if (!fromHolds || !enabledBefore) {
           result.declaredProofs.push({
             detail: "control " + JSON.stringify(proof.locator) + " read " + JSON.stringify(nameBefore || (enabledBefore ? "enabled" : "disabled")) + " before the click; declared from " + JSON.stringify(proof.from) + (enabledBefore ? "" : " — a disabled control cannot be clicked; seed state so it starts enabled"),
+            ...(enabledBefore ? { failedKind: "declared-state-mismatch" } : {}),
             featureId: target.featureId,
             passed: false,
           });
