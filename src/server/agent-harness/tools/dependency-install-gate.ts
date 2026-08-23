@@ -313,18 +313,23 @@ export function createOfflineLifecycleCommand(input: {
 }
 
 /**
- * True when a failed offline lifecycle pass was refused by the package
- * manager's own offline enforcement — the refusal `createOfflineLifecycleCommand`
- * itself provokes by disabling the manager's network. That failure is
- * harness-owned and deterministic: no repair candidate declared the command
- * and none can fix it, so callers must skip the pass and let preflight
- * measure the tree's real state instead of charging a repair round
- * (N160(3): outline lost three rounds to it, 2026-08-20). A package's build
- * error, or a lifecycle script's own download attempt against the sealed
- * network, must NOT match — those remain agent-repairable.
+ * True when a failed offline lifecycle pass shows any network shape. The
+ * pass runs after the harness seals the network AND disables the manager's
+ * own (`createOfflineLifecycleCommand`), so every network reach in it is
+ * impossible by design: whichever manager refused, and however it phrased
+ * the refusal, the failure is harness-owned and deterministic — no repair
+ * candidate declared the command and none can fix it. Callers must skip
+ * the pass and let preflight measure the tree's real state instead of
+ * charging a repair round (N160(3): outline lost three rounds to it,
+ * 2026-08-20; N163: wording-matching missed yarn's YN0080 form,
+ * 2026-08-22). Matches stable machine identifiers only — errno names,
+ * DNS/undici sentinels, manager diagnostic codes — never message prose,
+ * which shifts between manager versions and locales. A failure with no
+ * network shape (a package's real build error) must NOT match — that
+ * remains agent-repairable.
  */
 export function isOfflineLifecycleNetworkRefusal(output: string): boolean {
-  return /enableNetwork|Network access ha(?:s|ve) been disabled|has been blocked because of your configuration settings|ENOTCACHED|only-if-cached|ERR_PNPM_NO_OFFLINE/i.test(
+  return /\bE(?:AI_AGAIN|CONNABORTED|CONNREFUSED|CONNRESET|HOSTUNREACH|NETUNREACH|NOTFOUND|TIMEDOUT)\b|\bENOTCACHED\b|only-if-cached|\bERR_PNPM_NO_OFFLINE\w*|\bERR_SOCKET\w*|\bYN0080\b|\bUND_ERR\w*|\bgetaddrinfo\b|\bfetch failed\b|\benableNetwork\b/i.test(
     output,
   );
 }

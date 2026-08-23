@@ -7265,13 +7265,69 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.logsSummary).toContain("gyp info ok");
   });
 
-  it("headlines Twenty's killed lifecycle and collapses its repeated network stacks", async () => {
+  it("skips a lifecycle killed while retrying the sealed network", async () => {
+    // Twenty's pre-N160 pathology: the pass retried ECONNREFUSED until the
+    // deadline killed it. N163: the network stacks prove the time went to
+    // downloads the harness itself made impossible, so even the killed
+    // form is the seal refusing — skip, don't charge "lifecycle timeout".
     const networkErrorBlock = [
       "AggregateError [ECONNREFUSED]:",
       "    at internalConnectMultiple (node:net:1339:18)",
       "    at afterConnectMultiple (node:net:1942:7)",
       "➤ YN0001: │ RequestError",
       "    at ClientRequest.<anonymous> (/workspace/repo/.yarn/releases/yarn-4.13.0.cjs:146:14258)",
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)",
+    ].join("\n");
+    const sandboxLog: Array<Record<string, unknown>> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn rebuild")) {
+          return {
+            exitCode: 124,
+            stderr: "",
+            stdout: [
+              Array.from({ length: 6 }, () => networkErrorBlock).join("\n"),
+              "bash: line 3: 1726 Killed sh -lc 'cd /workspace/repo && yarn rebuild'",
+              "[makeademo:timeout] Daytona command did not finish within 1200000ms. The command was killed at its deadline; output above is partial.",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeSandboxLog(entry) {
+        sandboxLog.push(entry);
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "yarn install --immutable",
+        },
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    expect(
+      sandboxLog.some(
+        (entry) => entry.event === "lifecycle.offline-refusal.skipped",
+      ),
+    ).toBe(true);
+  });
+
+  it("headlines a killed lifecycle and collapses its repeated error stacks", async () => {
+    const buildErrorBlock = [
+      "AssertionError: node-gyp wrote no binding for better-sqlite3",
+      "    at BuildStep.finalize (/workspace/repo/node_modules/better-sqlite3/build.js:42:11)",
       "    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)",
     ].join("\n");
     const workspace = createFakeAgentHarnessWorkspace({
@@ -7281,7 +7337,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
             exitCode: 124,
             stderr: "",
             stdout: [
-              Array.from({ length: 6 }, () => networkErrorBlock).join("\n"),
+              Array.from({ length: 6 }, () => buildErrorBlock).join("\n"),
               "bash: line 3: 1726 Killed sh -lc 'cd /workspace/repo && yarn rebuild'",
               "18 verbose exit 1",
               "19 verbose code 1",
@@ -7317,7 +7373,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       "Everything in the output below completed successfully",
     );
     expect(report.logsSummary).toContain("same error block repeated 6 times");
-    expect(report.logsSummary.match(/RequestError/g)).toHaveLength(1);
+    expect(report.logsSummary.match(/AssertionError/g)).toHaveLength(1);
   });
 
   it("derives unbuilt-workspace hints from the teed build evidence, not only the stream", async () => {

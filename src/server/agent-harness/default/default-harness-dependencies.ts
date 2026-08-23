@@ -3037,18 +3037,18 @@ async function validateResolvedSubmittedCodeRuntime(
           lifecycleFileTail,
         ].join("\n");
         if (isOfflineLifecycleNetworkRefusal(lifecycleOutput)) {
-          // The refusal is the offline enforcement the harness itself
-          // provoked (N160(3)): no candidate declared this command and no
-          // repair can change it, so failing the round would charge the
-          // agent for harness-owned work (outline lost three rounds and
-          // ~28 minutes to exactly this, 2026-08-20). Record the skip and
-          // let preflight measure the tree's real state — anything the
-          // pass would have built surfaces there as a specific,
-          // repairable failure.
+          // Any network shape in the failure means the pass hit the seal
+          // the harness itself imposed (N160(3), N163): no candidate
+          // declared this command and no repair can give it a network, so
+          // failing the round would charge the agent for harness-owned
+          // work (outline lost three rounds and ~28 minutes to exactly
+          // this, 2026-08-20). Record the skip and let preflight measure
+          // the tree's real state — anything the pass would have built
+          // surfaces there as a specific, repairable failure.
           try {
             await input.workspace.writeSandboxLog({
               event: "lifecycle.offline-refusal.skipped",
-              message: `Harness-owned offline lifecycle pass (${lifecycleCommand}) was refused by the package manager's offline enforcement and skipped; the sealed submitted-code network makes its downloads impossible by design.`,
+              message: `Harness-owned offline lifecycle pass (${lifecycleCommand}) failed reaching for the network the harness sealed, so it was skipped; its downloads are impossible by design and preflight judges the tree's real state.`,
             });
           } catch {
             // The skip must never be displaced by an observability failure.

@@ -203,12 +203,15 @@ describe("dependency install gate", () => {
     ).toBeUndefined();
   });
 
-  it("recognizes the manager's own offline refusal and nothing else", () => {
-    // N160(3): the refusal the harness itself provoked (via the offline
-    // enforcement) is harness-owned and must not be charged to the repair
-    // candidate. A package's real build failure — and a script's own
-    // download attempt against the sealed network — remain agent-repairable
-    // and must not match.
+  it("recognizes any network-shaped failure of the sealed offline pass", () => {
+    // N163 (refined): the offline lifecycle pass runs after the harness
+    // seals the network, so ANY failure that involved reaching for the
+    // network is harness-owned — whichever manager produced it and however
+    // it phrased the refusal. The predicate matches stable machine
+    // identifiers only (errno names, manager diagnostic codes), never
+    // prose, which shifts between manager versions and locales. Failures
+    // with no network shape (a package's real build error) remain
+    // agent-repairable and must not match.
     expect(
       isOfflineLifecycleNetworkRefusal(
         "➤ YN0000: Network access have been disabled by configuration (enableNetwork: false)",
@@ -216,9 +219,8 @@ describe("dependency install gate", () => {
     ).toBe(true);
     expect(
       isOfflineLifecycleNetworkRefusal(
-        // Yarn 4's actual refusal wording (outline, wave 17): per-request
-        // YN0080 blocks citing "your configuration settings", not the
-        // enableNetwork flag name.
+        // Yarn 4's per-request refusal (outline, wave 17): matched by its
+        // stable YN0080 diagnostic code, not the sentence around it.
         "➤ YN0080: │ es6-error@npm:4.1.1: Request to 'https://registry.yarnpkg.com/es6-error/-/es6-error-4.1.1.tgz' has been blocked because of your configuration settings",
       ),
     ).toBe(true);
@@ -233,11 +235,27 @@ describe("dependency install gate", () => {
       ),
     ).toBe(true);
     expect(
+      isOfflineLifecycleNetworkRefusal(
+        // A script's own download attempt: under the sealed network this
+        // is impossible by design, so it is a refusal too — preflight,
+        // not this pass, judges whether the missing download matters.
+        "request to https://example.com/binary.tar.gz failed: connect ECONNREFUSED",
+      ),
+    ).toBe(true);
+    expect(
+      isOfflineLifecycleNetworkRefusal(
+        "node:dns  getaddrinfo ENOTFOUND repo.yarnpkg.com",
+      ),
+    ).toBe(true);
+    expect(isOfflineLifecycleNetworkRefusal("TypeError: fetch failed")).toBe(
+      true,
+    );
+    expect(
       isOfflineLifecycleNetworkRefusal("gyp ERR! build error better_sqlite3"),
     ).toBe(false);
     expect(
       isOfflineLifecycleNetworkRefusal(
-        "request to https://example.com/binary.tar.gz failed: connect ECONNREFUSED",
+        "src/index.ts(12,3): error TS2688: Cannot find type definition file for 'vite/client'.",
       ),
     ).toBe(false);
   });
