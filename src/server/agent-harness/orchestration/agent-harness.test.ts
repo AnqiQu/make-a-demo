@@ -4021,7 +4021,10 @@ describe("runAgentHarnessPipeline", () => {
         async adviseRepairStrategy() {
           consultations += 1;
           return consultations === 1
-            ? { kind: "spend-bonus-round" }
+            ? {
+                kind: "spend-bonus-round",
+                reason: "The failure moved last round; one more converges.",
+              }
             : { kind: "continue" };
         },
         capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),

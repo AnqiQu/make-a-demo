@@ -2527,12 +2527,13 @@ function readRepairAdviceLedgerRecord(
       ? advice.hint
       : advice.kind === "directive"
         ? advice.directive
-        : advice.kind === "stop"
+        : advice.kind === "stop" || advice.kind === "spend-bonus-round"
           ? advice.reason
           : null;
   return {
     applied,
     kind: advice.kind,
+    ...(advice.memo === undefined ? {} : { memo: advice.memo }),
     textDigest: text,
   };
 }

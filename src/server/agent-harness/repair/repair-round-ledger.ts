@@ -17,6 +17,8 @@ export type RepairBudgetSnapshot = {
 type RepairRoundAdviceRecord = {
   applied: boolean;
   kind: RepairAdvice["kind"];
+  /** The strategist's cross-run note, when the advice carried one. */
+  memo?: string;
   textDigest: string | null;
 };
 

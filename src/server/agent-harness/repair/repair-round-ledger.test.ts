@@ -90,6 +90,31 @@ describe("createRepairRoundLedger", () => {
     });
   });
 
+  it("carries strategist memos and bonus reasons into the comparative record", () => {
+    const source = (
+      ghostfolioWave13.rounds as RepairRoundSource[]
+    )[0] as RepairRoundSource;
+    const ledger = createRepairRoundLedger([
+      {
+        ...source,
+        advice: {
+          applied: true,
+          kind: "spend-bonus-round",
+          memo: "This repo converges slowly; the seed path is the long pole.",
+          textDigest: "Round 5 moved the failure; one more converges.",
+        },
+        outcomeOfAdvice: "failure-moved",
+      },
+    ]);
+
+    expect(ledger.rounds[0]?.advice).toEqual({
+      applied: true,
+      kind: "spend-bonus-round",
+      memo: "This repo converges slowly; the seed path is the long pole.",
+      textDigest: "Round 5 moved the failure; one more converges.",
+    });
+  });
+
   it("records outline wave-14's repeated evidence-citation failures", () => {
     const ledger = createRepairRoundLedger(
       outlineWave14.rounds as RepairRoundSource[],
