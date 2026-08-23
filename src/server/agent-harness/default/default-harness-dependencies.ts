@@ -3229,6 +3229,7 @@ async function validateResolvedSubmittedCodeRuntime(
   const guardedRuntimeEnv = {
     ...manifest.envUsed,
     ...sealedRuntimeTelemetryOptOuts,
+    ...toolchainBootstrapEnv,
     // Node 24 resolves localhost to IPv6 ::1 first, so a dev server that binds
     // localhost (Vite's default) never listens on 127.0.0.1 — the address the
     // readiness probe, the browser explorer, and capture all dial through
@@ -4175,16 +4176,38 @@ async function executeSubmitted(
 const sealedCommandInactivityTimeoutMs = 5 * 60_000;
 
 /**
- * Ecosystem-standard telemetry opt-outs, declared by the sealed runtime for
- * every heavy submitted-code command and the managed app itself: the sealed
- * network makes phone-homes fail slowly instead of succeeding, and their
- * children hold stdio open (ghostfolio's prisma checkpoint, 2026-08-09).
- * Industry conventions honored across tools — not per-repo patches.
+ * Ecosystem-standard telemetry and cloud opt-outs, declared by the sealed
+ * runtime for every heavy submitted-code command and the managed app itself:
+ * the sealed network makes phone-homes fail slowly instead of succeeding,
+ * and their children hold stdio open (ghostfolio's prisma checkpoint,
+ * 2026-08-09); nx's cloud client fetch to cloud.nx.app was blocked and
+ * logged on every start (ghost, 2026-08-22). Industry conventions honored
+ * across tools — the runtime declares itself offline instead of letting
+ * tools discover the seal through failed fetches. Not per-repo patches.
  */
 const sealedRuntimeTelemetryOptOuts = {
   CHECKPOINT_DISABLE: "1",
   DO_NOT_TRACK: "1",
   NEXT_TELEMETRY_DISABLED: "1",
+  NX_NO_CLOUD: "true",
+};
+
+/**
+ * Deterministic toolchain bootstrap (N164): corepack materializes every
+ * pinned packageManager lazily with its own network fetch, which runs
+ * before the manager exists and so obeys no manager-level network switch.
+ * Its default yarn host (repo.yarnpkg.com) proved unreachable from the
+ * sandbox even inside the open install window while the npm registry family
+ * resolved all wave (twenty, 2026-08-22) — so every corepack fetch, for any
+ * manager and version, routes to the registry installs already depend on.
+ * The interactive first-download prompt is disabled because under a sealed
+ * or headless phase it is a silent stdio hang that burns the inactivity
+ * window before the fetch even fails. The snapshot image declares the same
+ * values; this ambient merge keeps them deterministic when the image lags.
+ */
+const toolchainBootstrapEnv = {
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+  COREPACK_NPM_REGISTRY: "https://registry.npmjs.org",
 };
 
 /**
@@ -4207,7 +4230,11 @@ async function executeSubmittedWithDeadlineEvidence(
     return await workspace.executeSubmittedCode(command, {
       inactivityTimeoutMs: sealedCommandInactivityTimeoutMs,
       ...options,
-      env: { ...options.env, ...sealedRuntimeTelemetryOptOuts },
+      env: {
+        ...options.env,
+        ...sealedRuntimeTelemetryOptOuts,
+        ...toolchainBootstrapEnv,
+      },
       onStdout: (chunk) => {
         streamed.push(chunk);
         options.onStdout?.(chunk);

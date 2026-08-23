@@ -8456,6 +8456,63 @@ describe("createDefaultAgentHarnessDependencies", () => {
         CHECKPOINT_DISABLE: "1",
         DO_NOT_TRACK: "1",
         NEXT_TELEMETRY_DISABLED: "1",
+        // N165 (ghost, 2026-08-22): nx's cloud client fetch to cloud.nx.app
+        // is blocked by the sealed runtime on every start — declare the
+        // documented offline switch instead of letting nx discover the seal
+        // through failed fetches.
+        NX_NO_CLOUD: "true",
+      });
+    }
+  });
+
+  it("provisions corepack's toolchain bootstrap deterministically across the sealed runtime", async () => {
+    // N164 (twenty, 2026-08-22): corepack materializes the pinned package
+    // manager lazily with its own network fetch, before the manager exists —
+    // no manager-level network switch governs it, and its default yarn host
+    // (repo.yarnpkg.com) proved unreachable even inside the open install
+    // window. Bootstrap is part of the install: every corepack fetch routes
+    // to the registry family installs already depend on, and the interactive
+    // first-download prompt (a silent stdio hang under a sealed or headless
+    // phase) is disabled.
+    let installEnv: Record<string, string> | undefined;
+    let lifecycleEnv: Record<string, string> | undefined;
+    let startEnv: Record<string, string> | undefined;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command, options) {
+        if (command.includes("npm ci")) {
+          installEnv = options?.env;
+        }
+        if (command.includes("npm rebuild")) {
+          lifecycleEnv = options?.env;
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async startSubmittedCodeApp(input) {
+        startEnv = input.env;
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(installEnv).toBeDefined();
+    for (const env of [installEnv, lifecycleEnv, startEnv]) {
+      expect(env).toMatchObject({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        COREPACK_NPM_REGISTRY: "https://registry.npmjs.org",
       });
     }
   });
@@ -9384,11 +9441,14 @@ describe("createDefaultAgentHarnessDependencies", () => {
           cwd: "/workspace/repo",
           env: {
             CHECKPOINT_DISABLE: "1",
+            COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+            COREPACK_NPM_REGISTRY: "https://registry.npmjs.org",
             DO_NOT_TRACK: "1",
             MAKEADEMO_OFFLINE: "1",
             NEXT_TELEMETRY_DISABLED: "1",
             NODE_OPTIONS:
               "--dns-result-order=ipv4first --require=/workspace/.makeademo/runtime-network-guard.cjs",
+            NX_NO_CLOUD: "true",
             npm_config_engine_strict: "false",
           },
         },
