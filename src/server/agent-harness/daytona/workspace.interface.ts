@@ -31,20 +31,47 @@ export class AgentHarnessCommandTimeoutError extends Error {
 }
 
 /**
- * Signals that the whole pipeline job exceeded its wall-clock budget. The
- * orchestrator throws this at stage-loop boundaries so a repair spiral ends
- * as one classified timeout with the accumulated stage evidence instead of a
- * many-hour hang; it must never be converted into agent retry feedback.
+ * Signals that the whole pipeline job exceeded its wall-clock budget, or —
+ * when `refusedRepairCycle` is present — that the orchestrator refused to
+ * admit another repair cycle the remaining budget provably cannot fit
+ * (N165: calcom's round 5 was admitted with ~1 minute left and killed 12
+ * seconds in). The orchestrator throws this at stage-loop boundaries so a
+ * repair spiral ends as one classified timeout with the accumulated stage
+ * evidence instead of a many-hour hang; it must never be converted into
+ * agent retry feedback. A refusal names the remaining budget and the bound
+ * that outweighed it so the run report explains the early stop.
  */
 export class AgentHarnessJobDeadlineError extends Error {
   readonly jobDeadlineMs: number;
+  readonly refusedRepairCycle?: {
+    fastestCompletedCycleMs?: number;
+    remainingMs: number;
+    requiredMs: number;
+  };
 
-  constructor(jobDeadlineMs: number) {
+  constructor(
+    jobDeadlineMs: number,
+    refusedRepairCycle?: {
+      fastestCompletedCycleMs?: number;
+      remainingMs: number;
+      requiredMs: number;
+    },
+  ) {
+    const minutes = (ms: number) => `${(ms / 60_000).toFixed(1)} minutes`;
     super(
-      `Agent harness job exceeded its ${Math.round(jobDeadlineMs / 60_000)}-minute wall-clock budget.`,
+      refusedRepairCycle === undefined
+        ? `Agent harness job exceeded its ${Math.round(jobDeadlineMs / 60_000)}-minute wall-clock budget.`
+        : `Agent harness job refused another repair cycle: ${minutes(refusedRepairCycle.remainingMs)} of its ${Math.round(jobDeadlineMs / 60_000)}-minute wall-clock budget remain and ${
+            refusedRepairCycle.fastestCompletedCycleMs === undefined
+              ? `no repair cycle has completed yet (admission floor: ${minutes(refusedRepairCycle.requiredMs)})`
+              : `the fastest completed repair cycle took ${minutes(refusedRepairCycle.fastestCompletedCycleMs)}`
+          }.`,
     );
     this.name = "AgentHarnessJobDeadlineError";
     this.jobDeadlineMs = jobDeadlineMs;
+    if (refusedRepairCycle !== undefined) {
+      this.refusedRepairCycle = refusedRepairCycle;
+    }
   }
 }
 

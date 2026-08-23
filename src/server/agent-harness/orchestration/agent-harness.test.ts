@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
+  AgentHarnessJobDeadlineError,
   AgentHarnessSandboxUnavailableError,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
@@ -11,8 +12,74 @@ import {
   type AgentHarnessPipelineDependencies,
   type AgentHarnessPipelineInput,
   isStopEligibleFailure,
+  readFastestCompletedRepairCycleMs,
   runAgentHarnessPipeline,
 } from "./agent-harness";
+
+const timing = (stage: string, startedAtMs: number, finishedAtMs: number) => ({
+  durationMs: finishedAtMs - startedAtMs,
+  finishedAt: new Date(finishedAtMs).toISOString(),
+  stage,
+  startedAt: new Date(startedAtMs).toISOString(),
+});
+
+describe("readFastestCompletedRepairCycleMs", () => {
+  it("returns undefined before any repair cycle completes", () => {
+    expect(readFastestCompletedRepairCycleMs([])).toBeUndefined();
+    expect(
+      readFastestCompletedRepairCycleMs([
+        timing("repo-preparation", 0, 60_000),
+        timing("preparation-preflight", 60_000, 120_000),
+        // A repair with no validated follow-up is an incomplete cycle.
+        timing(
+          "preparation-preflight-repo-preparation-repair-1",
+          120_000,
+          300_000,
+        ),
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("measures a cycle from repair start to the last validation that judged it", () => {
+    expect(
+      readFastestCompletedRepairCycleMs([
+        timing("preparation-preflight", 0, 60_000),
+        timing(
+          "preparation-preflight-repo-preparation-repair-1",
+          60_000,
+          360_000,
+        ),
+        timing("preparation-fidelity", 370_000, 400_000),
+        timing("preparation-preflight", 400_000, 560_000),
+      ]),
+    ).toBe(500_000);
+  });
+
+  it("returns the fastest completed cycle and ignores a repair not yet validated", () => {
+    expect(
+      readFastestCompletedRepairCycleMs([
+        timing("preparation-preflight", 0, 60_000),
+        timing(
+          "preparation-preflight-repo-preparation-repair-1",
+          60_000,
+          660_000,
+        ),
+        timing("preparation-preflight", 660_000, 900_000),
+        timing(
+          "static-script-contract-validation-script-repair-1",
+          900_000,
+          1_000_000,
+        ),
+        timing("static-script-contract-validation", 1_000_000, 1_080_000),
+        timing(
+          "preparation-preflight-repo-preparation-repair-2",
+          1_100_000,
+          1_700_000,
+        ),
+      ]),
+    ).toBe(180_000);
+  });
+});
 
 describe("isStopEligibleFailure", () => {
   it.each([
@@ -550,6 +617,65 @@ describe("runAgentHarnessPipeline", () => {
 
     expect(String(error)).toMatch(/wall-clock budget/i);
     expect(isAgentHarnessInfrastructureError(error)).toBe(true);
+  });
+
+  it("refuses a repair round the remaining wall-clock budget cannot fit", async () => {
+    // N165 (calcom, 2026-08-22): repair round 5 was admitted with roughly
+    // one minute of wall clock left and killed twelve seconds in — a round
+    // that could never have finished. Admission requires the remaining
+    // budget to cover the fastest completed repair cycle, or the admission
+    // floor before any cycle completes; the refusal names both numbers so
+    // the report explains the early stop.
+    const calls: string[] = [];
+    const error: unknown = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_admission" }),
+      stubPipelineDependencies({
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          calls.push("repair");
+          return {
+            manifest: { ...preparationManifest(), id: "prep_repaired" },
+          };
+        },
+        async validatePreparation() {
+          calls.push("preflight");
+          return {
+            ...report("preparation-preflight", "failed"),
+            failureClassification: "start failure",
+            logsSummary: "App exited before it became ready",
+          };
+        },
+      }),
+      { jobDeadlineMs: 60_000 },
+    ).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(calls).toEqual(["preflight"]);
+    expect(String(error)).toMatch(/refused another repair cycle/i);
+    expect(String(error)).toMatch(/wall-clock budget/i);
+    expect(String(error)).toMatch(/admission floor/i);
+    expect(isAgentHarnessInfrastructureError(error)).toBe(true);
+  });
+
+  it("names the fastest completed cycle when refusing a repair admission", () => {
+    // The refusal message must carry the two numbers the spec requires:
+    // remaining budget and the observed bound that outweighed it.
+    expect(
+      new AgentHarnessJobDeadlineError(90 * 60_000, {
+        fastestCompletedCycleMs: 5.4 * 60_000,
+        remainingMs: 3.2 * 60_000,
+        requiredMs: 5.4 * 60_000,
+      }).message,
+    ).toBe(
+      "Agent harness job refused another repair cycle: 3.2 minutes of its 90-minute wall-clock budget remain and the fastest completed repair cycle took 5.4 minutes.",
+    );
+    expect(new AgentHarnessJobDeadlineError(90 * 60_000).message).toBe(
+      "Agent harness job exceeded its 90-minute wall-clock budget.",
+    );
   });
 
   it("hands the workspace seam the job deadline so stage timeouts cap at the remaining budget", async () => {

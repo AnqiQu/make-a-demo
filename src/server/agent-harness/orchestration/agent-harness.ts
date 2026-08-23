@@ -379,6 +379,12 @@ export type AgentHarnessPipelineOptions = {
  */
 const transientCaptureRetryLimit = 2;
 
+// Repair-cycle admission bound before any cycle completes (N165): no
+// repair+validation cycle has ever finished this fast, so a smaller
+// remainder can only buy a round that dies mid-repair — calcom's round 5
+// was admitted with ~1 minute left and killed 12 seconds in (2026-08-22).
+const repairCycleAdmissionFloorMs = 2 * 60_000;
+
 const artifactPaths = makeADemoArtifactPaths;
 
 export async function runAgentHarnessPipeline(
@@ -401,11 +407,6 @@ export async function runAgentHarnessPipeline(
   // timeout with the accumulated stage evidence, never a many-hour hang.
   const jobDeadlineMs = options.jobDeadlineMs ?? 90 * 60_000;
   const jobDeadlineAtMs = Date.now() + jobDeadlineMs;
-  const assertJobWithinDeadline = () => {
-    if (Date.now() >= jobDeadlineAtMs) {
-      throw new AgentHarnessJobDeadlineError(jobDeadlineMs);
-    }
-  };
   const stageStatuses: Record<
     string,
     | PipelineRunManifest["finalStatus"]
@@ -415,6 +416,34 @@ export async function runAgentHarnessPipeline(
     | "skipped"
   > = {};
   const stageTimings: PipelineRunManifest["stageTimings"] = [];
+  const assertJobWithinDeadline = (options?: {
+    beforeRepairCycle?: boolean;
+  }) => {
+    const remainingMs = jobDeadlineAtMs - Date.now();
+    if (remainingMs <= 0) {
+      throw new AgentHarnessJobDeadlineError(jobDeadlineMs);
+    }
+    if (options?.beforeRepairCycle !== true) {
+      return;
+    }
+    // Zero lookahead admitted calcom's doomed round 5 with ~1 minute left
+    // (N165). Another repair cycle is admitted only when the remaining
+    // budget covers the fastest cycle this run has completed — fastest, not
+    // median, so only provably-doomed admissions are refused and a
+    // converging run keeps its quick final rounds.
+    const fastestCompletedCycleMs =
+      readFastestCompletedRepairCycleMs(stageTimings);
+    const requiredMs = fastestCompletedCycleMs ?? repairCycleAdmissionFloorMs;
+    if (remainingMs < requiredMs) {
+      throw new AgentHarnessJobDeadlineError(jobDeadlineMs, {
+        ...(fastestCompletedCycleMs === undefined
+          ? {}
+          : { fastestCompletedCycleMs }),
+        remainingMs,
+        requiredMs,
+      });
+    }
+  };
   const validationReports: ValidationReport[] = [];
   const opencodeSessionIds: string[] = [];
   const recordOpenCodeSessionId = (sessionId?: string) => {
@@ -883,6 +912,7 @@ export async function runAgentHarnessPipeline(
             locatorAlternation = undefined;
           }
           pendingCaptureLocatorFailure = undefined;
+          assertJobWithinDeadline({ beforeRepairCycle: true });
           scriptCandidate = await repairScriptCandidate({
             actionCatalog,
             appMap,
@@ -1012,6 +1042,7 @@ export async function runAgentHarnessPipeline(
             continue pipelineAttempt;
           }
 
+          assertJobWithinDeadline({ beforeRepairCycle: true });
           scriptCandidate = await repairScriptCandidate({
             actionCatalog,
             appMap,
@@ -1201,6 +1232,7 @@ export async function runAgentHarnessPipeline(
           await replanFlow();
         }
 
+        assertJobWithinDeadline({ beforeRepairCycle: true });
         scriptCandidate = await repairScriptCandidate({
           actionCatalog,
           appMap,
@@ -1600,7 +1632,7 @@ type PreparationRepairBudget = {
 
 async function ensureValidPreparation(input: {
   acceptedPreparation?: AcceptedPreparationCandidate;
-  assertJobWithinDeadline: () => void;
+  assertJobWithinDeadline: (options?: { beforeRepairCycle?: boolean }) => void;
   capturePreparationWorkspaceDiff: () => Promise<PreparationWorkspaceDiff>;
   dependencies: AgentHarnessPipelineDependencies;
   initialFailure?: ValidationReport;
@@ -1665,7 +1697,14 @@ async function ensureValidPreparation(input: {
   attemptedInstallScopes.add(input.preparationManifest.installCommandUsed);
 
   for (;;) {
-    input.assertJobWithinDeadline();
+    // A failed report in hand means this iteration admits another repair
+    // cycle (or an install-scope expansion, which also charges and
+    // revalidates); an internal-failure retry is agent-free and exempt.
+    input.assertJobWithinDeadline({
+      beforeRepairCycle:
+        failure !== undefined &&
+        failure.failureClassification !== "harness/internal failure",
+    });
     if (failure?.failureClassification === "harness/internal failure") {
       // Repair-evidence contract clause 5 (N62): infra errors never reach
       // agent prompts or spend repair budget. One agent-free revalidation
@@ -2946,6 +2985,40 @@ function assertValidationPassed(
   if (report.status !== "passed") {
     throw new Error(`${report.stage} failed: ${report.logsSummary}`);
   }
+}
+
+/**
+ * The wall-clock cost of the fastest repair+validation cycle this run has
+ * completed, measured from stage timings (N165). A cycle spans from a repair
+ * stage's start to the finish of the last stage recorded before the next
+ * repair begins — the validations that judged it, plus the unstaged work
+ * between them. A repair with no recorded follow-up is incomplete and never
+ * counts. Returns undefined until at least one cycle completes. Callers use
+ * this as a lower bound for admitting another repair cycle: fastest, not
+ * median, so only provably-doomed admissions are refused (a median bound
+ * would have sacrificed midday's converging final rounds, 2026-08-22).
+ */
+export function readFastestCompletedRepairCycleMs(
+  stageTimings: PipelineRunManifest["stageTimings"],
+): number | undefined {
+  const isRepairStage = (stage: string) => /-repair-\d+$/.test(stage);
+  let fastest: number | undefined;
+  for (let index = 0; index < stageTimings.length; index += 1) {
+    const repair = stageTimings[index];
+    if (repair === undefined || !isRepairStage(repair.stage)) continue;
+    let cycleFinishedAt: string | undefined;
+    for (const follower of stageTimings.slice(index + 1)) {
+      if (isRepairStage(follower.stage)) break;
+      cycleFinishedAt = follower.finishedAt;
+    }
+    if (cycleFinishedAt === undefined) continue;
+    const cycleMs = Date.parse(cycleFinishedAt) - Date.parse(repair.startedAt);
+    if (!Number.isFinite(cycleMs) || cycleMs <= 0) continue;
+    if (fastest === undefined || cycleMs < fastest) {
+      fastest = cycleMs;
+    }
+  }
+  return fastest;
 }
 
 function runStage<T>(
