@@ -13,6 +13,7 @@
     "dev": "concurrently -k \"bun run dev:api\" \"bun run dev:web\"",
     "dev:api": "bun --watch src/server/api/server.mts",
     "dev:web": "vite",
+    "diagnose:run": "bun scripts/diagnose-run.mts",
     "fmt": "biome format --write .",
     "graph:deps": "bun scripts/regenerate-dependency-graphs.mts",
     "knip": "knip",
