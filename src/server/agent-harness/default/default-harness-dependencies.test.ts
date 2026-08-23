@@ -2699,6 +2699,117 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
   });
 
+  it("records that a wall-killed attempt never produced model output", async () => {
+    // N170 (conduit, wave-18): the wedged attempt emitted PTY bootstrap and
+    // fifteen CPU beats, zero OpenCode output ever. The attempt's failure
+    // log must carry that discriminator, and the wired filter must deny
+    // the beats so the inactivity watchdog can end the wedge early.
+    const logLines: string[] = [];
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          write(line) {
+            logLines.push(line);
+          },
+        },
+      ],
+    });
+    const beatVerdicts: boolean[] = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      logger,
+      openCodeRunner: {
+        async run(input) {
+          for (let beat = 0; beat < 3; beat += 1) {
+            beatVerdicts.push(
+              input.activityFilter?.("[makeademo:alive] cpu 42\r\n") ?? true,
+            );
+          }
+          const error = new Error(
+            "Daytona command produced no output for 300000ms.",
+          );
+          error.name = "AgentHarnessCommandTimeoutError";
+          throw error;
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace: repairableRepoPreparationWorkspace(),
+      }),
+    ).rejects.toThrow("did not produce valid required artifact");
+    await logger.flush();
+
+    expect(beatVerdicts.slice(0, 3)).toEqual([false, false, false]);
+    const failure = logLines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.event === "agent.command.failed");
+    expect(failure).toMatchObject({
+      cpuBeatCount: 3,
+      modelOutputSeen: false,
+    });
+    expect(failure).not.toHaveProperty("modelSilenceMs");
+  });
+
+  it("records when a completed attempt's model last spoke", async () => {
+    const logLines: string[] = [];
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          write(line) {
+            logLines.push(line);
+          },
+        },
+      ],
+    });
+    const workspace = repairableRepoPreparationWorkspace();
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      logger,
+      openCodeRunner: {
+        async run(input) {
+          expect(input.activityFilter?.('{"type":"session.created"}\r\n')).toBe(
+            true,
+          );
+          expect(input.activityFilter?.("[makeademo:alive] cpu 42\r\n")).toBe(
+            true,
+          );
+          workspace.writePreparationManifest();
+          return { exitCode: 0, stderr: "", stdout: "done" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+    await logger.flush();
+
+    const succeeded = logLines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.event === "agent.command.succeeded");
+    expect(succeeded).toMatchObject({
+      cpuBeatCount: 1,
+      modelOutputSeen: true,
+      modelSilenceMs: expect.any(Number),
+    });
+  });
+
   it("accepts a valid Preparation Manifest written before the agent times out", async () => {
     const workspace = repairableRepoPreparationWorkspace();
     let runs = 0;

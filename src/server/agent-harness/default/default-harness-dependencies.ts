@@ -61,6 +61,7 @@ import {
 } from "../daytona/workspace.interface";
 import { readGroundableFeatureIds } from "../flow-planning/feature-groundability";
 import { DefaultOpenCodeHarnessRunner } from "../opencode/default-opencode-harness-runner";
+import { createModelActivityObserver } from "../opencode/model-activity-observer";
 import {
   type OpenCodeHarnessRunInput,
   type OpenCodeHarnessRunResult,
@@ -2339,6 +2340,20 @@ async function runLoggedOpenCode(input: {
   let lastOutputAt: string | undefined;
   let partialStderr = "";
   let partialStdout = "";
+  // N170: one observer per attempt separates the model's own output from
+  // harness transport, so a launch that never speaks stops feeding the
+  // inactivity watchdog and its termination log names the wedge shape.
+  const activityObserver = createModelActivityObserver();
+  const activityEvidence = () => {
+    const snapshot = activityObserver.snapshot();
+    return {
+      cpuBeatCount: snapshot.cpuBeatCount,
+      modelOutputSeen: snapshot.modelOutputSeen,
+      ...(snapshot.lastModelOutputAtMs === undefined
+        ? {}
+        : { modelSilenceMs: Date.now() - snapshot.lastModelOutputAtMs }),
+    };
+  };
   const startedEntry = {
     event: "agent.command.started",
     message: `${input.input.stage} agent command started.`,
@@ -2357,6 +2372,7 @@ async function runLoggedOpenCode(input: {
   try {
     const result = await input.openCodeRunner.run({
       ...input.input,
+      activityFilter: activityObserver.observe,
       onStderr: (chunk) => {
         lastOutputAt = new Date().toISOString();
         partialStderr = appendTail(partialStderr, chunk, 4_000);
@@ -2372,6 +2388,7 @@ async function runLoggedOpenCode(input: {
     await writeAgentStageLog(
       input,
       {
+        ...activityEvidence(),
         durationMs: Date.now() - startedAt,
         event:
           result.exitCode === 0
@@ -2396,6 +2413,7 @@ async function runLoggedOpenCode(input: {
     await writeAgentStageLog(
       input,
       {
+        ...activityEvidence(),
         durationMs: Date.now() - startedAt,
         error: readErrorMessage(error),
         event: "agent.command.failed",

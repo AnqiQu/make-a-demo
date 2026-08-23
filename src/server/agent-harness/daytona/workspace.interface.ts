@@ -215,6 +215,15 @@ export type AgentHarnessWorkspaceDownloadFile = {
 export const defaultWorkspaceCommandTimeoutMs = 10 * 60_000;
 
 export type AgentHarnessWorkspaceExecuteOptions = {
+  /**
+   * Decides whether a streamed output chunk counts as liveness for the
+   * `inactivityTimeoutMs` watchdog (N170). Providers must consult it on
+   * every chunk before touching the watchdog, must still deliver every
+   * chunk to `onStdout`/`onStderr` regardless of the verdict, and must
+   * fail open — a filter that throws counts the chunk as activity, never
+   * as silence. Omitted means every chunk counts (the pre-N170 behavior).
+   */
+  activityFilter?: (chunk: string) => boolean;
   env?: Record<string, string>;
   /** Maximum silence between streamed output chunks; omitted for no idle limit. */
   inactivityTimeoutMs?: number;

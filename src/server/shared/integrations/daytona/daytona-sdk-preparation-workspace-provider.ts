@@ -1597,8 +1597,20 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       envs: options.env ?? {},
       id: `makeademo-${randomUUID()}`,
       onData: (data) => {
-        inactivityDeadline.touch();
         const chunk = decoder.decode(data);
+        // N170: only chunks the caller's filter accepts count as liveness,
+        // so a stream carrying nothing but harness heartbeats can still
+        // starve the watchdog. Fail open: a broken filter must never turn
+        // a working agent's output into silence.
+        let countsAsActivity = true;
+        try {
+          countsAsActivity = options.activityFilter?.(chunk) ?? true;
+        } catch {
+          countsAsActivity = true;
+        }
+        if (countsAsActivity) {
+          inactivityDeadline.touch();
+        }
         output.push(chunk);
         const visibleChunk = removeExitMarker(chunk, exitSentinel);
         if (visibleChunk.length > 0) {

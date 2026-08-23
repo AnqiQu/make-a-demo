@@ -16,6 +16,13 @@ export type OpenCodeHarnessStage =
   | "script-writing";
 
 export type OpenCodeHarnessRunInput = {
+  /**
+   * Forwarded to the workspace execute seam (N170): decides whether a
+   * streamed chunk counts as liveness for `inactivityTimeoutMs`. Runners
+   * must pass it through unchanged so the caller's model-activity observer
+   * sees the same stream the watchdog does.
+   */
+  activityFilter?: (chunk: string) => boolean;
   availableTools: string[];
   configDir: string;
   inactivityTimeoutMs?: number;

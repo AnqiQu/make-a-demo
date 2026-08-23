@@ -1507,6 +1507,79 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls).toContainEqual({ disconnect: true });
   });
 
+  it("lets the activity filter deny streamed output to the inactivity watchdog", async () => {
+    // N170 (conduit, wave-18): the CPU heartbeat alone fed the watchdog for
+    // a quarter-hour while OpenCode never spoke. Output the filter rejects
+    // must not count as liveness.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        ptyPeriodicOutputIntervalMs: 20,
+        ptyPeriodicOutputLine: "[makeademo:alive] cpu 42",
+        ptyWaitsForDisconnect: true,
+      }),
+      commandTimeoutMs: 10_000,
+    });
+    const handle = await provider.create();
+    const filteredChunks: string[] = [];
+
+    await expect(
+      handle.workspace.execute("opencode run wedged", {
+        activityFilter: (chunk) => {
+          filteredChunks.push(chunk);
+          return false;
+        },
+        inactivityTimeoutMs: 200,
+        onStdout: () => {},
+      }),
+    ).rejects.toThrow("Daytona command produced no output for 200ms.");
+    expect(filteredChunks.join("")).toContain("[makeademo:alive] cpu 42");
+  });
+
+  it("keeps a command alive while the activity filter accepts its output", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        ptyPeriodicOutputIntervalMs: 20,
+        ptyWaitsForDisconnect: true,
+      }),
+      commandTimeoutMs: 500,
+    });
+    const handle = await provider.create();
+
+    // The overall deadline firing (not the 200ms inactivity window) proves
+    // every accepted chunk touched the watchdog.
+    await expect(
+      handle.workspace.execute("opencode run busy", {
+        activityFilter: () => true,
+        inactivityTimeoutMs: 200,
+        onStdout: () => {},
+      }),
+    ).rejects.toThrow("Daytona command did not finish within 500ms.");
+  });
+
+  it("treats a throwing activity filter as activity instead of starving the watchdog", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        ptyPeriodicOutputIntervalMs: 20,
+        ptyWaitsForDisconnect: true,
+      }),
+      commandTimeoutMs: 500,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run busy", {
+        activityFilter: () => {
+          throw new Error("classifier crashed");
+        },
+        inactivityTimeoutMs: 200,
+        onStdout: () => {},
+      }),
+    ).rejects.toThrow("Daytona command did not finish within 500ms.");
+  });
+
   it("preserves a command timeout when PTY disconnection stalls", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -3244,6 +3317,8 @@ function fakeClient(
     ptyNeverConnects?: boolean;
     ptyRequiresSandboxRestart?: boolean;
     ptySentinelLost?: boolean;
+    ptyPeriodicOutputIntervalMs?: number;
+    ptyPeriodicOutputLine?: string;
     ptyStaleDuplicateIdOnFirstCreate?: boolean;
     ptyWaitFails?: boolean;
     ptyWaitsForDisconnect?: boolean;
@@ -3344,6 +3419,19 @@ function fakeClient(
           },
           async sendInput(data: string | Uint8Array) {
             calls.push({ sendInput: data });
+            if (options.ptyPeriodicOutputIntervalMs !== undefined) {
+              const interval = setInterval(() => {
+                if (disconnected) {
+                  clearInterval(interval);
+                  return;
+                }
+                ptyOptions.onData(
+                  new TextEncoder().encode(
+                    `${options.ptyPeriodicOutputLine ?? "hello"}\n`,
+                  ),
+                );
+              }, options.ptyPeriodicOutputIntervalMs);
+            }
             ptyOptions.onData(new TextEncoder().encode("hello\n"));
             if (options.ptyForgedExitSentinel !== undefined) {
               ptyOptions.onData(

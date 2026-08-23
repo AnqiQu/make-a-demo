@@ -170,10 +170,12 @@ describe("OpenCode harness seam", () => {
     let executeOptions: AgentHarnessWorkspaceExecuteOptions | undefined;
     const stdout: string[] = [];
     const stderr: string[] = [];
+    const activityFilter = (chunk: string) => chunk.length > 0;
     const input: OpenCodeHarnessRunInput & {
       onStderr(chunk: string): void;
       onStdout(chunk: string): void;
     } = {
+      activityFilter,
       availableTools: ["read", "write"],
       configDir: "/tmp/makeademo/opencode",
       inactivityTimeoutMs: 321,
@@ -198,6 +200,7 @@ describe("OpenCode harness seam", () => {
 
     expect(executeOptions?.timeoutMs).toBe(1_234);
     expect(executeOptions?.inactivityTimeoutMs).toBe(321);
+    expect(executeOptions?.activityFilter).toBe(activityFilter);
     expect(stdout).toEqual(["progress\n"]);
     expect(stderr).toEqual(["warning\n"]);
   });
