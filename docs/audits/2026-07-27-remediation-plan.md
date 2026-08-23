@@ -9535,8 +9535,7 @@ the watch, no change proposed.
   headline and repeated-stack collapsing keep
   their coverage through a non-network fixture.
   Gates green (1425 tests).
-- N164, N165 — specced above, not yet
-  implemented; both specs refined per review
+- N164, N165 — specs refined per review
   (2026-08-22) to land at existing general seams:
   ambient corepack env plus image profile instead
   of gate-local yarn handling (N164), the
@@ -9546,3 +9545,55 @@ the watch, no change proposed.
   admission bound corrected from median to
   fastest-observed cycle so it refuses only
   provably-doomed rounds.
+- N164 — landed (2026-08-23) exactly at the
+  refined seams. A toolchainBootstrapEnv const
+  (COREPACK_NPM_REGISTRY=https://registry.npmjs.org,
+  COREPACK_ENABLE_DOWNLOAD_PROMPT=0) rides the
+  same ambient merges as the telemetry opt-outs,
+  so every harness-run install, lifecycle, and
+  build command and the managed app's runtime env
+  carry it regardless of image staleness; the seam
+  test captures all three envs. The submitted-code
+  image adds the registry route to its existing
+  corepack ENV block (the prompt was already off
+  there) and the agent image gains both values so
+  agent terminals inherit them; both Dockerfiles
+  cross-reference the harness const to keep the
+  values in sync. Ambient values deliberately
+  override manifest envUsed — bootstrap
+  provisioning is harness policy, not
+  agent-repairable surface.
+- N165 — landed (2026-08-23), both guards.
+  (1) assertJobWithinDeadline gains a lookahead
+  that fires only when a call site declares it is
+  admitting another repair cycle: remaining wall
+  clock must cover the fastest completed
+  repair+validation cycle this run (measured from
+  stage timings, repair-stage start to the last
+  stage recorded before the next repair; repairs
+  with no recorded follow-up never count), with a
+  2-minute floor before any cycle completes. Four
+  admission points are flagged — the preparation
+  stage-loop boundary (covering preflight,
+  fidelity, and exploration phases;
+  internal-failure retries exempt as agent-free)
+  and the three script-repair admissions (static
+  contract, capture-path, footage). Validations,
+  transient capture retries, and footage capture
+  itself are never refused, so a converging run
+  keeps its quick final rounds. A refusal ends the
+  run as the same classified job-deadline error
+  with both numbers named ("3.2 minutes of its
+  90-minute wall-clock budget remain and the
+  fastest completed repair cycle took 5.4
+  minutes"); the deadline-past message is
+  unchanged. Known bound: the fastest-cycle bound
+  is global across repair families, so a quick
+  script-repair cycle lowers the bound for a
+  slower preparation repair — the conservative
+  direction (admits more), consistent with
+  fastest-not-median. (2) NX_NO_CLOUD=true joined
+  sealedRuntimeTelemetryOptOuts — one const,
+  already reaching every heavy command and the
+  managed app. Gates green (lint, typecheck, 1431
+  tests, knip).
