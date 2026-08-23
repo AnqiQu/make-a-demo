@@ -152,6 +152,82 @@ describe("runDefaultDemoPipeline", () => {
     ]);
   });
 
+  it("feeds strategist memory into the harness and records the run back into it", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-memory-"));
+    const priorEntry = {
+      adviceNotes: [
+        { kind: "directive", memo: "Seed auth through the demo gate." },
+      ],
+      outcome: "failed" as const,
+      recordedAt: "2026-08-22T04:00:00.000Z",
+      runId: "matrix-prior",
+    };
+    const reads: unknown[] = [];
+    const appended: unknown[] = [];
+    let handedMemory: unknown;
+    const sourceArchive = {
+      commitSha: "abc123def456",
+      path: join(outputRoot, "screened-repo.tar.gz"),
+      sha256: "archive-sha256",
+      sizeBytes: 2,
+    };
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: [],
+          repoUrl: "https://github.com/acme/remembered-app",
+        },
+        {
+          async createHarnessDependencies(dependencyInput) {
+            handedMemory = dependencyInput.strategistMemory;
+            throw new Error("memory handoff observed");
+          },
+          outputRoot,
+          async readRepoSnapshot() {
+            return {
+              commitSha: sourceArchive.commitSha,
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 2 },
+              secretQuarantineManifest: {
+                entries: [],
+                version: "2026-07-15",
+              },
+              sourceArchive,
+            };
+          },
+          runId: "remembered-run",
+          strategistMemoryStore: {
+            async append(input) {
+              appended.push(input);
+            },
+            async readRecent(input) {
+              reads.push(input);
+              return [priorEntry];
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("memory handoff observed");
+
+    expect(reads).toEqual([
+      { limit: 3, repoUrl: "https://github.com/acme/remembered-app" },
+    ]);
+    expect(handedMemory).toEqual([priorEntry]);
+    expect(appended).toEqual([
+      {
+        entry: {
+          adviceNotes: [],
+          outcome: "failed",
+          recordedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+          runId: "remembered-run",
+        },
+        repoUrl: "https://github.com/acme/remembered-app",
+      },
+    ]);
+  });
+
   it("runs the default harness, Footage Capture, and Compositing rails", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-default-"));
     const calls: string[] = [];

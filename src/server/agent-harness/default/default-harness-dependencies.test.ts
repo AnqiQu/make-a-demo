@@ -8054,6 +8054,179 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
   });
 
+  it("mirrors the round ledger and logs each consultation for the run audit", async () => {
+    // Wave-16/17 meta-audits: advice application was invisible in the
+    // pipeline log and repair-round-ledger.json appeared in no run mirror,
+    // so every meta-audit required manual sandbox archaeology.
+    const artifactWrites: Array<{ path: string; value: unknown }> = [];
+    const logLines: string[] = [];
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          write(line) {
+            logLines.push(line);
+          },
+        },
+      ],
+    });
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command.includes("cat") && command.includes("repair-advice.json")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({ kind: "continue" }),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: {
+        async writeJson(path, value) {
+          artifactWrites.push({ path, value });
+        },
+      },
+      logger,
+      openCodeRunner: {
+        async run() {
+          return {
+            exitCode: 0,
+            sessionId: "s",
+            stderr: "",
+            stdout: "strategy written",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: repoProfile(),
+    });
+
+    const roundLedger = { rounds: [] };
+    await harness.dependencies.adviseRepairStrategy?.({
+      budgets: { bonusRounds: 0, fingerprintAttempts: 1, totalAttempts: 2 },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        failureClassification: "start failure",
+      },
+      preparationManifest: preparationManifest(),
+      roundLedger,
+    });
+
+    expect(artifactWrites).toContainEqual({
+      path: "/workspace/.makeademo/repair-round-ledger.json",
+      value: roundLedger,
+    });
+    expect(
+      logLines.some(
+        (line) =>
+          line.includes('"strategist.repair-advice"') &&
+          line.includes('"continue"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("feeds prior-run strategist memory to consultations", async () => {
+    const workspaceWrites = new Map<string, string>();
+    const memory = [
+      {
+        adviceNotes: [
+          {
+            kind: "directive",
+            memo: "Seed auth through the demo gate.",
+            text: "Repair the demo authentication path.",
+          },
+        ],
+        finalFailureStage: "preparation-preflight",
+        outcome: "failed" as const,
+        recordedAt: "2026-08-22T04:00:00.000Z",
+        runId: "matrix-prior",
+      },
+    ];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command.includes("cat") && command.includes("repair-advice.json")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({ kind: "continue" }),
+          };
+        }
+        if (
+          command.includes("cat") &&
+          command.includes("run-triage-advice.json")
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({ preparationStrategyHints: ["dev serve"] }),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeTextFile(path, contents) {
+        workspaceWrites.set(path, contents);
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          return { exitCode: 0, sessionId: "s", stderr: "", stdout: "done" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      strategistMemory: memory,
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: repoProfile(),
+    });
+
+    await harness.dependencies.adviseRepairStrategy?.({
+      budgets: { bonusRounds: 0, fingerprintAttempts: 1, totalAttempts: 2 },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        failureClassification: "start failure",
+      },
+      preparationManifest: preparationManifest(),
+      roundLedger: { rounds: [] },
+    });
+    expect(
+      JSON.parse(
+        workspaceWrites.get("/workspace/.makeademo/strategist-memory.json") ??
+          "null",
+      ),
+    ).toEqual(memory);
+
+    workspaceWrites.delete("/workspace/.makeademo/strategist-memory.json");
+    await harness.dependencies.adviseRunTriage?.({
+      repoProfile: repoProfile(),
+      submittedCodeSandboxClass: "heavyweight",
+    });
+    expect(
+      JSON.parse(
+        workspaceWrites.get("/workspace/.makeademo/strategist-memory.json") ??
+          "null",
+      ),
+    ).toEqual(memory);
+  });
+
   it("fails open when repair strategy writes schema-invalid advice", async () => {
     const scenario = await runRepairStrategyScenario({
       artifact: { kind: "directive" },

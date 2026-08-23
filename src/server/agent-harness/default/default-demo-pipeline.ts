@@ -23,6 +23,13 @@ import {
   runAgentHarnessPipeline,
 } from "../orchestration/agent-harness";
 import {
+  type StrategistMemoryStore,
+  type StrategistRunMemoryEntry,
+  createFileStrategistMemoryStore,
+  readFailedStage,
+  readStrategistAdviceNotes,
+} from "../repair/strategist-memory";
+import {
   type ValidationReport,
   readValidationReport,
 } from "../schemas/artifacts";
@@ -87,6 +94,7 @@ export type DefaultDemoPipelineOptions = {
     repoSourceArchive: RepoSourceArchive;
     retryPolicy: AgentHarnessRetryPolicy;
     staticImageAssets?: CompositeVideoFromScriptInput["staticImageAssets"];
+    strategistMemory?: readonly StrategistRunMemoryEntry[];
   }) => Promise<DefaultHarnessDependencies>;
   env?: Record<string, string | undefined>;
   installationTokenProvider?: GithubInstallationTokenProvider;
@@ -96,6 +104,13 @@ export type DefaultDemoPipelineOptions = {
   runHarnessPipeline?: typeof runAgentHarnessPipeline;
   runId?: string;
   staticImageAssets?: CompositeVideoFromScriptInput["staticImageAssets"];
+  /**
+   * Cross-run strategist memory. Defaults to an append-only JSONL store
+   * under `<outputRoot>/strategist-memory`, so consecutive runs of the same
+   * repository on one machine share history. Reads and appends are both
+   * advisory: any store failure means "no memory", never a failed run.
+   */
+  strategistMemoryStore?: StrategistMemoryStore;
 };
 
 const defaultOutputRoot = ".makeademo-terminal-runs";
@@ -167,22 +182,74 @@ export async function runDefaultDemoPipeline(
   await writeRepoSnapshotSummary(runDirectory, repoSnapshot);
 
   const artifactStore = new LocalJsonArtifactStore(artifactDirectory, log);
-  const harnessDependencies = await (
-    options.createHarnessDependencies ?? createDefaultAgentHarnessDependencies
-  )({
-    artifactStore,
-    ...(options.bulkTransferLimiter === undefined
-      ? {}
-      : { bulkTransferLimiter: options.bulkTransferLimiter }),
-    ...(options.env === undefined ? {} : { env: options.env }),
-    logger,
-    outputRoot: runDirectory,
-    repoSourceArchive: repoSnapshot.sourceArchive,
-    retryPolicy,
-    ...(options.staticImageAssets === undefined
-      ? {}
-      : { staticImageAssets: options.staticImageAssets }),
-  });
+  const strategistMemoryStore =
+    options.strategistMemoryStore ??
+    createFileStrategistMemoryStore({
+      directory: join(outputRoot, "strategist-memory"),
+    });
+  let strategistMemory: StrategistRunMemoryEntry[] = [];
+  try {
+    strategistMemory = await strategistMemoryStore.readRecent({
+      limit: 3,
+      repoUrl: input.repoUrl,
+    });
+  } catch {
+    // Unreadable memory means no memory; the run proceeds without history.
+  }
+  // The durable record of this run for the strategist's future
+  // consultations: deterministically assembled from the run's own mirrored
+  // artifacts, appended for every outcome including failures before the
+  // pipeline proper (an infra death is history worth remembering).
+  const appendRunMemory = async (outcome: "passed" | "failed") => {
+    try {
+      const failedStage = await readFailedStage(
+        artifactStore.resolveArtifactPath(
+          "/workspace/.makeademo/pipeline-run-manifest.json",
+        ),
+      );
+      await strategistMemoryStore.append({
+        entry: {
+          adviceNotes: await readStrategistAdviceNotes(
+            artifactStore.resolveArtifactPath(
+              "/workspace/.makeademo/agent-artifact-attempts",
+            ),
+          ),
+          ...(failedStage === undefined
+            ? {}
+            : { finalFailureStage: failedStage }),
+          outcome,
+          recordedAt: new Date().toISOString(),
+          runId,
+        },
+        repoUrl: input.repoUrl,
+      });
+    } catch {
+      // Memory is advisory; a failed append never masks the run's result.
+    }
+  };
+  let harnessDependencies: DefaultHarnessDependencies;
+  try {
+    harnessDependencies = await (
+      options.createHarnessDependencies ?? createDefaultAgentHarnessDependencies
+    )({
+      artifactStore,
+      ...(options.bulkTransferLimiter === undefined
+        ? {}
+        : { bulkTransferLimiter: options.bulkTransferLimiter }),
+      ...(options.env === undefined ? {} : { env: options.env }),
+      logger,
+      outputRoot: runDirectory,
+      repoSourceArchive: repoSnapshot.sourceArchive,
+      retryPolicy,
+      ...(options.staticImageAssets === undefined
+        ? {}
+        : { staticImageAssets: options.staticImageAssets }),
+      ...(strategistMemory.length === 0 ? {} : { strategistMemory }),
+    });
+  } catch (error) {
+    await appendRunMemory("failed");
+    throw error;
+  }
   const workspaceHandle = () => harnessDependencies.getWorkspaceHandle();
   let cleanupFailure: unknown;
   let completedResult: DefaultDemoPipelineResult | undefined;
@@ -340,6 +407,7 @@ export async function runDefaultDemoPipeline(
         // Preserve the primary pipeline or cleanup failure.
       }
     }
+    await appendRunMemory(completedResult === undefined ? "failed" : "passed");
   }
 
   if (primaryFailure !== undefined) {

@@ -46,6 +46,7 @@ export const makeADemoArtifactPaths = {
   runtimeTargetSelection: `${makeADemoDirectory}/runtime-target-selection.json`,
   runtimeTargetSelectionContract: `${makeADemoDirectory}/runtime-target-selection-contract.json`,
   scriptCandidate: `${makeADemoDirectory}/script-candidate.json`,
+  strategistMemory: `${makeADemoDirectory}/strategist-memory.json`,
   staticScriptContract: `${makeADemoDirectory}/static-script-contract-validation.json`,
   supportingDocuments: `${makeADemoDirectory}/supporting-documents.json`,
   validationAttempts: `${makeADemoDirectory}/validation-attempts`,
