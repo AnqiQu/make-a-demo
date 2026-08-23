@@ -3752,6 +3752,145 @@ describe("runAgentHarnessPipeline", () => {
     expect(repairAttempts).toBe(2);
   });
 
+  it("leads repair evidence with the lifecycle command mutation while ledgering the raw failure", async () => {
+    // N171 (midday, wave-19): the install command mutated across repair
+    // rounds and then failed in its mutated form for three straight rounds
+    // without the evidence ever surfacing the delta. The mutation must lead
+    // the repair prompt's failure summary while the ledger and fingerprints
+    // keep the raw report.
+    let preflightAttempts = 0;
+    const consultations: Parameters<
+      NonNullable<AgentHarnessPipelineDependencies["adviseRepairStrategy"]>
+    >[0][] = [];
+    const repairSummaries: string[] = [];
+    // Once install failures begin, source changes freeze while package.json
+    // keeps advancing: a dependency repair passes the fidelity gate only
+    // when its delta is package-manifest changes and nothing else, and that
+    // gate is not the seam under test here.
+    let diffFrozen = false;
+    let sourceCaptures = 0;
+    let manifestCaptures = 0;
+    const dependencyAwareDiffCapture = async () => {
+      if (!diffFrozen) {
+        sourceCaptures += 1;
+      }
+      manifestCaptures += 1;
+      const sourceDigit = String(sourceCaptures % 10);
+      const manifestDigit = String(manifestCaptures % 10);
+      return {
+        changedFileSha256: {
+          "package.json": `sha256:${manifestDigit.repeat(64)}` as const,
+          "src/demo.ts": `sha256:${sourceDigit.repeat(64)}` as const,
+        },
+        changedPaths: [
+          "/workspace/repo/package.json",
+          "/workspace/repo/src/demo.ts",
+        ],
+        patch: `diff --git a/package.json b/package.json\n+// capture ${manifestCaptures}\ndiff --git a/src/demo.ts b/src/demo.ts\n+// capture ${sourceCaptures}`,
+        patchSha256: `sha256:${manifestDigit.repeat(64)}` as const,
+        sourceCommitSha: "abc123def456",
+      };
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_lifecycle_mutation_evidence" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy(input) {
+          consultations.push(input);
+          return { kind: "continue" };
+        },
+        capturePreparationWorkspaceDiff: dependencyAwareDiffCapture,
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport, preparationManifest }) {
+          repairSummaries.push(failureReport.logsSummary);
+          return {
+            manifest: {
+              ...preparationManifest,
+              id: `prep_repair_${repairSummaries.length}`,
+              // The round-2 repair mutates the install command while
+              // repairing an unrelated listen failure.
+              installCommandUsed:
+                repairSummaries.length === 1
+                  ? "bun install --frozen-lockfile"
+                  : "npm install --legacy-peer-deps",
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "render timeout",
+              logsSummary: "Feature render timed out after 90000ms",
+            };
+          }
+          if (preflightAttempts === 2) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "listen failure",
+              logsSummary: "Start command could not listen on 127.0.0.1:3000",
+            };
+          }
+          if (preflightAttempts <= 4) {
+            diffFrozen = true;
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "npm install --legacy-peer-deps",
+              failureClassification: "install failure",
+              logsSummary: "Install command failed: npm error code ERESOLVE",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairSummaries).toHaveLength(4);
+    expect(repairSummaries[0]).not.toContain("mutation suspected");
+    expect(repairSummaries[1]).not.toContain("mutation suspected");
+    expect(repairSummaries[2]).toMatch(
+      /^Lifecycle command mutation suspected: the failing install command `npm install --legacy-peer-deps` differs from `bun install --frozen-lockfile`, which the round-1 repair declared while repairing a different failure \(render timeout\)\./,
+    );
+    expect(repairSummaries[2]).toContain(
+      "Install command failed: npm error code ERESOLVE",
+    );
+    expect(consultations).toHaveLength(1);
+    expect(consultations[0]?.failureReport.logsSummary).toContain(
+      "Lifecycle command mutation suspected",
+    );
+    // The ledger must keep the raw failure: causal headlines and repeat
+    // fingerprints break if they absorb prompt-facing steering prose.
+    expect(consultations[0]?.roundLedger.rounds[2]?.causalHeadline).toBe(
+      "Install command failed: npm error code ERESOLVE",
+    );
+  });
+
   it("adds strategist hints to the existing repair-hint channel", async () => {
     let preflightAttempts = 0;
     const repairHints: string[][] = [];

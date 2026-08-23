@@ -16,6 +16,7 @@ import {
   type SubmittedCodeSandboxClass,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
+import { appendLifecycleCommandMutationEvidence } from "../repair/lifecycle-mutation-evidence";
 import {
   type RepairBudgetSnapshot,
   type RepairRoundLedger,
@@ -1759,9 +1760,17 @@ async function ensureValidPreparation(input: {
           input.preparationRepairBudget,
           repairFailure,
         );
+        // Enriched after fingerprinting, and never ledgered: the mutation
+        // prose is prompt-facing evidence (N171), while fingerprints and
+        // ledger headlines must keep comparing raw reports.
+        const steeredFailureReport = appendLifecycleCommandMutationEvidence({
+          failure: repairFailure,
+          preparationManifest,
+          repairRounds: input.repairRoundSources,
+        });
         const advice = await consultRepairStrategy({
           dependencies: input.dependencies,
-          failureReport: repairFailure,
+          failureReport: steeredFailureReport,
           fingerprintRepairAttempts,
           preparationManifest,
           preparationRepairBudget: input.preparationRepairBudget,
@@ -1773,7 +1782,7 @@ async function ensureValidPreparation(input: {
             input.repairRoundSources.filter(
               (round) => round.outcomeOfAdvice !== "resolved",
             ).length + 1,
-          failureReport: repairFailure,
+          failureReport: steeredFailureReport,
           preparationRepairBudget: input.preparationRepairBudget,
         });
         const repair = await repairPreparationManifest({
