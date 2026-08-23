@@ -10203,3 +10203,225 @@ outside the consultation gate.
 - ghost: rung compliance with correct evidence —
   watch whether memory's record of three
   identical violations changes round one.
+
+## Addendum (2026-08-23, wave-20 — 5/11 and the memory layer's first payoff: midday's first pass since wave-13; two regressions expose a classifier lie and the watchdog's residual tax: N174–N176)
+
+Batch matrix-2026-08-23T20-01-10-267Z, report
+matrix-report-2026-08-23T21-36-31-419Z. Five of
+eleven passed: conduit (20.6m), midday (88.4m —
+its FIRST pass since wave-13, on N171's evidence
+and the memory memo naming its bun resolution
+trap), excalidraw (73.8m — wave-19's near-miss
+converted), cyberchef (61.0m — flow planning went
+from three blind rejections to first-attempt
+success on N172's route list), ghostfolio
+(89.8m). Failures: homer (60.5m, REGRESSED),
+outline (71.8m, REGRESSED after its first pass),
+calcom (86.6m, N165 refusal), directus (90.2m,
+hard ceiling), ghost (84.5m), twenty (64.1m).
+The batch launched at 20:01:10Z with the
+N171–N173 commits (13:02–13:04 PDT) in the tree;
+twenty's final message quotes N171's sentence,
+so the landing is confirmed live.
+
+### What wave-20 proved
+
+- N171 fired true on twenty: rounds 1–4 failed
+  "unbuilt workspace dependency" under yarn run
+  build, the round-4 repair declared the
+  dependency-graph build (npx nx run-many
+  --target=build --projects=...), and the
+  round-5 repair REVERTED it. The evidence
+  caught the revert exactly as designed — named
+  both forms, named the round, prescribed the
+  revert-back — but arrived with the final
+  round's failure, so no budget remained to
+  obey it. The catch is correct; the profit
+  needs an earlier wave's memory or a spare
+  round.
+- N172 validated: cyberchef's flow planner
+  produced a valid FlowSpec on its first
+  attempt against the same hash-route app that
+  burned three attempts blind in wave-19.
+- N173 landed quietly: no stack-frame headlines
+  and no warning-flood excerpts appear in any
+  wave-20 failure evidence.
+- M5 memory reached consultations. Local
+  artifacts cannot show it (N176), but
+  replaying the exact read the pipeline makes —
+  same store directory, same repo URLs —
+  returns the wave-19 entries, and the runs'
+  appends into the same files prove the paths
+  agree end to end. The outcomes are
+  consistent with payoff: midday (memo named
+  the resolution trap) passed; directus (memo
+  named the graph build) cleared preflight in
+  two rounds and reached script-writing — its
+  deepest point ever.
+- N170's discriminators exposed the watchdog's
+  residual tax (N174): calcom's kill evidence
+  shows one clean wedge (5 beats, no model
+  output, killed at 5 minutes) and two
+  spoke-then-wedged attempts — modelOutputSeen
+  true with modelSilenceMs of 1,186,511 and
+  502,987 — that ran to their 20- and 15-minute
+  walls because after the first model output,
+  heartbeats count as activity again. Roughly
+  40 minutes lost in the run that missed
+  admission by 3.9 minutes against a
+  5.2-minute fastest cycle. The stall tax is
+  now measurably the thing standing between
+  calcom and a pass.
+
+### Diagnoses
+
+- homer (60.5m, REGRESSED): a classifier lie,
+  not a network outage. The prepared repo's
+  packageManager field carries the floating
+  selector pnpm@10, which corepack cannot
+  materialize without resolving the tag against
+  the registry at install time; when that fetch
+  failed, the evidence said "Dependency install
+  cannot reach registry.npmjs.org" and hinted
+  about lockfile tarball pins — the wrong layer
+  entirely. Attempts 1–4 classified plain
+  "install failure" on the same underlying
+  cause ("Automatic lockfile reconciliation
+  failed", with PTY echo polluting the
+  excerpt); attempt 5 upgraded the
+  misdiagnosis to "external network required".
+  The strategist saw through it — its directive
+  says pin a concrete pnpm version, its memo
+  says the failure happens before dependency
+  resolution — but five rounds and an hour went
+  to a one-line pin. N175.
+- outline (71.8m, REGRESSED after first pass):
+  seeded-content drift. The declared proof
+  wants "# Release checklist" in the seeded
+  document at /doc/project-atlas-demodoc001/
+  edit and the preparation seeded something
+  else; rounds exhausted reconciling proof and
+  seed. Preparation variance at the layer that
+  passed cleanly in wave-19; no code change
+  involved. Watchlist — this is the memo the
+  run-end digest now carries.
+- calcom (86.6m, N165 refusal): the loop keeps
+  converging faster (fastest cycle 8.6 → 6.9 →
+  5.2 minutes across waves) and keeps missing
+  by the width of the stall tax (N174 above).
+- directus (90.2m, hard ceiling): deepest reach
+  ever — preflight in two repair rounds
+  (memory's graph-build memo on file),
+  exploration, flow planning, then
+  script-writing failed and the clock died.
+  Script-family repairs still sit outside the
+  consultation gate; that gap has now shaped
+  the terminal failure two waves running.
+- ghost (84.5m): past repo-preparation for the
+  first time in two waves; the demo-gate
+  bootstrap (node -e running the admin build
+  when MAKEADEMO_DEMO=true) exits 1 because
+  @tryghost/koenig-lexical:build fails — the
+  same admin-build frontier as waves 17–19,
+  now one task narrower and reached through a
+  cleaner path.
+- twenty (64.1m): the N171 arc above. The
+  unbuilt-dependency loop itself is wave-19
+  directus's exact shape; the memo layer now
+  carries the graph-build lesson for twenty
+  too.
+
+### N174 (High, bugfix) — after the model speaks, silence must still mean something
+
+N170 starves the watchdog only until the first
+model output; afterward, heartbeats count again
+and a spoke-then-wedged attempt runs to the
+wall. The observer already tracks
+lastModelOutputAtMs — add a model-silence bound:
+once the model has spoken, sustained silence
+from the model (heartbeats notwithstanding)
+past a generous limit (10 minutes; twice the
+pre-speech limit, since thinking pauses are
+real) aborts the attempt with the same
+discriminator evidence (modelSilenceMs is
+already on the kill record). Calcom's 19.8- and
+8.4-minute model silences were pure loss; a
+10-minute bound reclaims the difference without
+touching attempts that are visibly working.
+
+### N175 (High, bugfix) — a floating packageManager selector is repo state, not weather
+
+Corepack resolves floating selectors (pnpm@10)
+against the registry at install time, so their
+failures wear a network costume the classifier
+currently believes. Two fixes at the N164 seam:
+(1) the unreachable-host classifier must not
+classify a corepack selector-resolution failure
+as "external network required" — when the
+failing fetch is corepack materializing the
+packageManager field, the evidence must name
+the field, the floating selector, and the fix
+(pin the concrete version the lockfile was
+written with); (2) preparation-manifest
+validation should flag a non-exact
+packageManager selector the moment a manifest
+declares or inherits one — deterministically,
+before any install spends a round discovering
+it. The strategist's homer directive is the
+regression fixture: the deterministic layer
+should have said what it said.
+
+### N176 (Medium, bugfix) — the memory feed must be visible in the run record
+
+Whether a run's consultations received prior-run
+memory is currently unknowable from local
+artifacts: the memory file is written only into
+the sandbox, and no event records the feed.
+Mirror it like the round ledger (an
+artifactStore copy beside the advice attempts)
+and log entry count on a strategist event at
+harness creation — one line, answering "did
+memory reach this run" without replaying reads.
+This addendum's M5 verification required
+exactly that replay; the next one should not.
+
+### Meta-orchestrator audit (sixth live wave)
+
+Consultations in five runs plus two triages,
+memory-fed for the first time. Homer's directive
+and memo are the wave's best work — a correct
+diagnosis through a deterministic
+misclassification, which inverts the usual
+bound: this time strategist quality exceeded
+evidence quality, and N175 exists to close the
+gap from below. Twenty drew a directive during
+its yarn-build loop; the round-4 graph build
+suggests it landed. The adherence ledger
+recorded twenty's round-5 revert as the
+counterexample; homer's five rounds against a
+misclassified cause show repair agents follow
+evidence over advice when the two disagree —
+the second time evidence quality has bounded
+the system (midday's wave-19 stops were the
+first). Standing gaps, both now material:
+script-family repairs consult nobody (directus
+terminal failure, twice), and memory feeds are
+invisible locally (N176).
+
+### Watchlist (updated)
+
+- calcom: N174 is its item — the arithmetic
+  says reclaiming either wedge flips the run.
+- twenty: memory now carries the graph-build
+  memo; wave-21 tests whether round 1 starts
+  from it.
+- directus: script-writing is the new frontier;
+  the consultation-gate question is now urgent
+  rather than open.
+- homer: N175's pin evidence should make
+  wave-21 a five-minute pass again.
+- outline: seed-versus-proof drift; the digest
+  remembers the wave-19 shape that worked.
+- ghost: koenig-lexical is the last failing
+  admin-build task; watch whether the repair
+  finds the prebuilt-assets path.
