@@ -9459,4 +9459,36 @@ the watch, no change proposed.
   quarantined and screened — the plain readable
   list was deliberately NOT used, because it would
   have bypassed credential screening.
+- N163 refined per review (2026-08-22): the
+  predicate must not match wording at all —
+  message prose is a per-manager, per-version,
+  per-locale moving target, and chasing yarn's
+  sentences is how the YN0080 miss happened in the
+  first place. The refusal seam is structural: the
+  offline pass runs after the harness seals the
+  network AND disables the manager's own, so ANY
+  network-shaped failure in it is harness-owned by
+  definition. isOfflineLifecycleNetworkRefusal now
+  matches stable machine identifiers only — errno
+  names (EAI_AGAIN, ECONNREFUSED/RESET/ABORTED,
+  EHOSTUNREACH, ENETUNREACH, ENOTFOUND, ETIMEDOUT),
+  DNS and undici sentinels (getaddrinfo,
+  UND_ERR*, fetch failed), and manager diagnostic
+  codes (YN0080, enableNetwork, ENOTCACHED,
+  only-if-cached, ERR_PNPM_NO_OFFLINE*,
+  ERR_SOCKET*) — and both prose sentences were
+  removed. Two deliberate wave-16 choices fell
+  with the prose: the bare-ECONNREFUSED
+  agent-repairable carve-out (a script's own
+  download is equally impossible under the seal;
+  preflight, not the pass, judges whether the
+  missing download matters) and the
+  lifecycle-timeout charge for a pass killed while
+  retrying the network (the stacks prove the time
+  went to downloads the harness made impossible —
+  twenty's pre-N160 kill now skips instead of
+  charging the round). The killed-lifecycle
+  headline and repeated-stack collapsing keep
+  their coverage through a non-network fixture.
+  Gates green (1425 tests).
 - N164, N165 — specced above, not yet implemented.
