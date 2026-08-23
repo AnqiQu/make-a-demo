@@ -202,4 +202,50 @@ describe("readLastErrorCauseLine", () => {
       ),
     ).toBe("ELIFECYCLE  Command failed with exit code 1.");
   });
+
+  it("lands on the error text above rolldown's error-named stack frames", () => {
+    // N173 (twenty and directus, wave-19): rolldown's error-translation
+    // files are literally named error-<hash>.mjs, so every stack frame
+    // matches the error-word pattern and the LAST frame — not the error
+    // text above it — became the headline of two repos' build failures.
+    expect(
+      readLastErrorCauseLine(
+        [
+          "error during build:",
+          "Build failed with 2 errors:",
+          "[UNLOADABLE_DEPENDENCY] Could not load src/modules/demo/isDemoMode",
+          "│                                     ╰─────────── No such file or directory (os error 2)",
+          "at aggregateBindingErrorsIntoJsError (file:///workspace/repo/node_modules/rolldown/dist/shared/error-BuvQYXuZ.mjs:48:18)",
+          "at unwrapBindingResult (file:///workspace/repo/node_modules/rolldown/dist/shared/error-BuvQYXuZ.mjs:18:128)",
+          "at async buildEnvironment (file:///workspace/repo/node_modules/vite/dist/node/chunks/node.js:33253:64)",
+        ].join("\n"),
+      ),
+    ).toBe(
+      "│                                     ╰─────────── No such file or directory (os error 2)",
+    );
+  });
+
+  it("keeps a stack frame as the cause when nothing but frames name an error", () => {
+    expect(
+      readLastErrorCauseLine(
+        [
+          "building for production...",
+          "at unwrapBindingResult (file:///workspace/repo/node_modules/rolldown/dist/shared/error-BuvQYXuZ.mjs:18:128)",
+        ].join("\n"),
+      ),
+    ).toBe(
+      "at unwrapBindingResult (file:///workspace/repo/node_modules/rolldown/dist/shared/error-BuvQYXuZ.mjs:18:128)",
+    );
+  });
+
+  it("does not treat an error message that starts with 'at' as a stack frame", () => {
+    expect(
+      readLastErrorCauseLine(
+        [
+          "Error: build wrapper died",
+          "at line 3: syntax error near unexpected token",
+        ].join("\n"),
+      ),
+    ).toBe("at line 3: syntax error near unexpected token");
+  });
 });

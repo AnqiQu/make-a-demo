@@ -35,6 +35,13 @@ const causeProsePattern = /^x\s+no package found\b|no space left on device/i;
 // qualifying as causes.
 const wrapperEpiloguePattern =
   /\bELIFECYCLE\b|\bERR_PNPM_RECURSIVE_RUN_FIRST_FAIL\b|\bexit status \d+\b|\blifecycle script\b|npm err! (?:failed at the\b|this is probably not a problem with npm|a complete log of this run can be found in)|\bcommand failed with exit code \d+\.?$/i;
+// A V8/Node stack-frame line: `at fn (path:line:col)`, `at path:line:col`,
+// or `at async fn (…)`. Frames never carry failure identity — the error
+// text sits above them — but they can match the error-word pattern when
+// the frame's file path itself contains "error" (rolldown ships its error
+// translation layer as error-<hash>.mjs, N173). The whole-line anchor keeps
+// prose that merely begins with "at" ("at line 3: syntax error …") out.
+const stackFramePattern = /^at\s+(?:async\s+)?\S+(?:\s+\(.*\))?$/;
 
 /**
  * Extracts the error-class lines from a managed app's stderr tail. Dev
@@ -79,10 +86,14 @@ export function readStderrErrorSignal(
  * cause and reads identically for every distinct failure (N130: three
  * different directus crashes fingerprinted as one ` ELIFECYCLE ` repeat).
  * Epilogue lines are skipped while any tool-authored cause line exists and
- * kept as the answer only when nothing above them qualifies. Recognizes the
- * same error-word and errno shapes as {@link readStderrErrorSignal} plus
- * package-resolution and disk-exhaustion prose, and returns undefined when
- * no line qualifies so callers can fall back to their own summary line.
+ * kept as the answer only when nothing above them qualifies. Stack-frame
+ * lines rank below every other qualifying line (N173: rolldown's frames
+ * cite error-<hash>.mjs paths and sat below the real error, so the LAST
+ * matching line was a frame) and win only when nothing but frames qualify.
+ * Recognizes the same error-word and errno shapes as
+ * {@link readStderrErrorSignal} plus package-resolution and
+ * disk-exhaustion prose, and returns undefined when no line qualifies so
+ * callers can fall back to their own summary line.
  */
 export function readLastErrorCauseLine(
   outputExcerpt: string,
@@ -102,5 +113,12 @@ export function readLastErrorCauseLine(
   const toolAuthoredCauseLines = causeLines.filter(
     (line) => !wrapperEpiloguePattern.test(line),
   );
-  return toolAuthoredCauseLines.at(-1) ?? causeLines.at(-1);
+  const nonFrameCauseLines = toolAuthoredCauseLines.filter(
+    (line) => !stackFramePattern.test(line),
+  );
+  return (
+    nonFrameCauseLines.at(-1) ??
+    toolAuthoredCauseLines.at(-1) ??
+    causeLines.at(-1)
+  );
 }
