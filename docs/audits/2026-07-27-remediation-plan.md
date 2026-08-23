@@ -9338,60 +9338,104 @@ lifecycleScriptsDisabled: true in
 repo-profile.json and zero lifecycle-attributed
 repair rounds.
 
-### N164 (High, bugfix) — provision the repo-pinned package manager; corepack's fetch is outside every window we control
+### N164 (High, bugfix) — toolchain bootstrap is part of the install; provision it deterministically (refined 2026-08-22 per review)
 
 The dependency-install gate assumes the package
-manager exists, but corepack materializes the
-pinned version lazily from repo.yarnpkg.com — a
-host the sandbox cannot resolve even inside the
-open install window, and a fetch that ignores
-every yarn-level network switch because it runs
-before yarn does. Fix at the gate seam, in order
-of preference: (1) set
-COREPACK_NPM_REGISTRY=https://registry.npmjs.org
-in the gate's install environment so corepack
-fetches the pinned CLI from the npm registry
-(@yarnpkg/cli-dist), which demonstrably works in
-the window; (2) run corepack install inside the
-open window before the install command so the
-manager is cached before the network reseals;
-(3) pre-cache current yarn majors in the snapshot
-image as defense in depth (the cache held 4.11.0;
-twenty pins 4.13.0 — a cache can lag, so this is
-the backstop, not the fix). Acceptance: twenty's
-install reaches yarn's own output (even a
-failing install) instead of dying in corepack.
+manager exists, but corepack — the launcher for
+every packageManager pin, yarn and pnpm alike, and
+even a pinned npm — materializes the pinned
+version lazily with its own network fetch. That
+fetch runs before the manager exists, so it
+obeys no manager-level network switch, and its
+default host for yarn (repo.yarnpkg.com) proved
+unreachable from the sandbox even inside the open
+install window. The general principle: the harness
+must never let the toolchain bootstrap itself ad
+hoc off hosts the install doesn't otherwise need —
+bootstrap is part of the install and gets the same
+deterministic provisioning.
 
-### N165 (Medium, bugfix) — do not admit a repair round the budget cannot fit, and neutralize nx cloud in sealed runtimes
+Fix as ambient environment, not a per-command or
+per-manager patch:
+COREPACK_NPM_REGISTRY=https://registry.npmjs.org
+routes every corepack fetch (any manager, any
+version) to the registry family installs already
+depend on and which demonstrably resolves in the
+window, and COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+kills corepack's interactive first-download
+confirmation — under a sealed or headless phase
+that prompt is a silent stdio hang that burns the
+five-minute inactivity window before the fetch
+even fails. Set both in the shared sealed-command
+environment merge (the
+executeSubmittedWithDeadlineEvidence seam, which
+already carries sealedRuntimeTelemetryOptOuts to
+every harness-run install, lifecycle, and build)
+and in the snapshot image profile so agent
+terminals inherit them too. The previously specced
+in-window "corepack install" warm step is
+subsumed: the gated install command is itself the
+first manager invocation and now fetches in-window
+from a reachable host, then the corepack cache
+serves every sealed later invocation. Pre-caching
+current majors in the snapshot image stays as
+defense in depth only (the cache held 4.11.0;
+twenty pins 4.13.0 — a cache always lags).
+Acceptance: twenty's install reaches yarn's own
+output (even a failing install) instead of dying
+in corepack.
+
+### N165 (Medium, bugfix) — do not admit a repair round the budget cannot fit, and neutralize nx cloud in sealed runtimes (refined 2026-08-22 per review)
 
 Two small deterministic guards from this wave's
-wall-clock deaths:
+wall-clock deaths, each landing at a seam that
+already exists:
 
 1. Round admission: calcom's repair round 5 was
    admitted with ~1 minute of remaining wall
-   clock against a run whose median
-   repair-plus-preflight cycle cost ~10 minutes;
-   it was killed 12 seconds in. Before starting a
-   repair round, compare remaining wall clock
-   against the run's own observed cycle cost
-   (median of completed repair+validation cycles,
-   or a floor constant before any completes);
-   when the budget cannot fit another cycle, end
-   the run with the named budget outcome
-   immediately. That converts a doomed
-   mid-round kill into an honest early stop and
-   returns the leftover minutes to the matrix.
+   clock and killed 12 seconds in. The seam is
+   assertJobWithinDeadline in the orchestration
+   stage loop — it already runs at every
+   stage-loop boundary with stageTimings in
+   scope, but it only asks "is the deadline
+   already past", a zero-lookahead test. Extend
+   it: before admitting another repair cycle,
+   require remaining wall clock >= the FASTEST
+   completed repair+validation cycle this run
+   (floor constant before any cycle completes).
+   Fastest, not median — a median bound would
+   have refused midday's final ~5-minute rounds
+   against its ~10-minute median and sacrificed a
+   possible pass; the fastest-observed bound
+   refuses only provably-doomed admissions while
+   still catching calcom's one-minute round. On
+   refusal, end the run with the named budget
+   outcome plus the two numbers (fastest cycle,
+   remaining budget) so the report explains the
+   early stop. Because the guard lives at the
+   generic stage-loop boundary, every budgeted
+   repair loop — preflight, fidelity, future ones
+   — inherits it; do not implement it inside any
+   single loop.
 2. nx cloud: ghost's sealed runtime logged a
    blocked cloud.nx.app client fetch on every
-   start; twenty is nx-managed too. Export
-   NX_NO_CLOUD=true (and drop
-   NX_CLOUD_ACCESS_TOKEN if present) in the
-   prepared runtime environment so nx never
-   reaches for its cloud client under the sealed
-   network. Removes a stall risk and a recurring
-   red herring from preflight logs; it would not
-   have saved ghost, which is why this rides
-   along at Medium instead of standing alone.
+   start; twenty is nx-managed too. This is not a
+   new mechanism: sealedRuntimeTelemetryOptOuts
+   already declares ecosystem-standard opt-outs
+   (CHECKPOINT_DISABLE, DO_NOT_TRACK,
+   NEXT_TELEMETRY_DISABLED) and already reaches
+   both every heavy submitted-code command and
+   the managed app's runtime env. Add
+   NX_NO_CLOUD=true to that one const — nx's own
+   documented switch, same family: the sealed
+   runtime declaring itself offline through
+   industry conventions so tools take their
+   offline paths instead of discovering the seal
+   through failed fetches. Removes a stall risk
+   and a recurring red herring from preflight
+   logs; it would not have saved ghost, which is
+   why this rides along at Medium instead of
+   standing alone.
 
 ### Meta-orchestrator audit (third live wave)
 
@@ -9491,4 +9535,14 @@ the watch, no change proposed.
   headline and repeated-stack collapsing keep
   their coverage through a non-network fixture.
   Gates green (1425 tests).
-- N164, N165 — specced above, not yet implemented.
+- N164, N165 — specced above, not yet
+  implemented; both specs refined per review
+  (2026-08-22) to land at existing general seams:
+  ambient corepack env plus image profile instead
+  of gate-local yarn handling (N164), the
+  stage-loop deadline check plus the existing
+  telemetry-opt-out const instead of new per-loop
+  or per-tool mechanisms (N165), and the round
+  admission bound corrected from median to
+  fastest-observed cycle so it refuses only
+  provably-doomed rounds.
