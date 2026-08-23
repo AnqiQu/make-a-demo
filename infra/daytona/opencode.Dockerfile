@@ -24,6 +24,14 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
 RUN npm install -g --force pnpm@10.12.1 yarn@1.22.22 \
   && npm cache clean --force
 
+# Deterministic toolchain bootstrap for agent terminals (N164): a repo with
+# a packageManager pin routes any corepack fetch to the reachable registry
+# family, and the interactive first-download prompt (a silent stdio hang in
+# a headless terminal) stays off. Keep in sync with toolchainBootstrapEnv
+# (src/server/agent-harness/default/default-harness-dependencies.ts).
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  COREPACK_NPM_REGISTRY=https://registry.npmjs.org
+
 # Pinned so snapshot rebuilds are deterministic (N24b); keep in sync with
 # tools-lock.json.
 RUN OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | VERSION=1.17.19 bash \

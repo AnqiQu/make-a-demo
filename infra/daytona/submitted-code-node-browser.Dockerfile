@@ -59,10 +59,17 @@ ENV npm_config_nodedir=/usr/local
 # pinned "packageManager" resolves exactly (outline's yarn@4.11.0) and the
 # defaults below are cached for offline use. COREPACK_HOME lives outside
 # /usr/local so the cache survives line swaps; swaps re-run corepack enable
-# because the shims live in the swapped bin directory.
+# because the shims live in the swapped bin directory. COREPACK_NPM_REGISTRY
+# routes every corepack fetch to the registry family installs already depend
+# on (N164): corepack's default yarn host repo.yarnpkg.com proved
+# unreachable from the sandbox even inside the open install window (twenty,
+# 2026-08-22). The harness also sets these per command in case this image
+# lags; keep the values in sync with toolchainBootstrapEnv
+# (src/server/agent-harness/default/default-harness-dependencies.ts).
 ENV COREPACK_HOME=/opt/corepack-cache \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-  COREPACK_DEFAULT_TO_LATEST=0
+  COREPACK_DEFAULT_TO_LATEST=0 \
+  COREPACK_NPM_REGISTRY=https://registry.npmjs.org
 RUN corepack enable \
   && corepack install -g yarn@1.22.22 pnpm@10.12.1 \
   && yarn --version \
