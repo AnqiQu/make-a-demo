@@ -9622,3 +9622,329 @@ wave 18 on, the meta-audit reads pipeline-log
 events and the memory log instead of sandbox
 archaeology, and advice earned in one wave can
 finally claim (or forfeit) credit in the next.
+
+## Addendum (2026-08-23, wave-18 — 2/11, and the code held: every fresh landing behaved as specified, the regressions are strategy variance, and the stalled-agent tax becomes the frontier: N166–N170)
+
+Batch matrix-2026-08-23T07-01-03-310Z, report
+matrix-report-2026-08-23T08-35-31-142Z. Two of
+eleven repos passed: homer (4.9m), cyberchef
+(49.7m). Failures: conduit (27.7m, rounds
+exhausted), midday (80.7m), excalidraw (42.7m,
+rounds exhausted), calcom (84.6m, N165 refusal),
+directus (90.1m, hard ceiling), ghost (75.8m),
+ghostfolio (83.2m, strategist stop), outline
+(70.1m, rounds exhausted), twenty (76.9m). Four
+repos regressed from wave-17 passes: conduit,
+excalidraw, directus, ghostfolio. That headline
+demanded a code-regression hunt first, and the
+hunt came back clean: none of the four died in a
+seam any inter-wave commit touched.
+
+### What wave-18 actually ran
+
+The batch launched at 07:01:03Z — three minutes
+before the N164/N165 implementation commits were
+recorded (876874d, 5a345c6, 9cc660f, 00:04 PDT)
+and an hour before the M4/M5 commits. The working
+tree at launch carried the N-item code: calcom's
+run prints 876874d's refusal sentence verbatim,
+and twenty's install reached yarn itself, which
+only the toolchainBootstrapEnv merge explains.
+M4/M5 were NOT live: zero strategist.* events and
+no strategist-memory log exist in the batch
+(their code was written after launch). So wave-18
+exercised N163+N164+N165 exactly, and wave-19
+will be the first wave with strategist
+observability and cross-run memory.
+
+### What wave-18 proved
+
+- N163 held everywhere: zero false "lifecycle
+  timeout" charges across the batch, and zero
+  offline-refusal events — no offline lifecycle
+  pass even needed the predicate. Outline's
+  install gate cleared completely; its failure
+  moved forward to the migration frontier the
+  wave-17 watchlist predicted.
+- N164 worked on its target: twenty's five-fold
+  repo.yarnpkg.com death is gone (two blocked
+  corepack fetches in wave-17's log, zero in
+  wave-18's). The install completed, the workspace
+  built, and the run reached the envelope
+  frontier the watchlist predicted.
+- N165 fired true on its first live exercise:
+  calcom's run ended with "6.1 minutes of its
+  90-minute wall-clock budget remain and the
+  fastest completed repair cycle took 8.6
+  minutes" — a provably-doomed admission refused
+  with both numbers named. Wave-17's 12-second
+  round-5 death cannot recur. Directus's
+  hard-ceiling path still produces the unchanged
+  deadline message, and NX_NO_CLOUD removed
+  ghost's blocked cloud.nx.app fetches (two in
+  wave-17, zero now).
+- The strategist was right in every consultation
+  it made (details in the meta-audit below),
+  including an honest stop that saved ghostfolio
+  seven doomed minutes.
+
+### Diagnoses
+
+- conduit (27.7m, five repair rounds exhausted,
+  REGRESSED): the proof-ambiguity trap. The
+  preparation declared favorite-and-comment's
+  proof on the control "Favorite ( 8 )" — which
+  matches two elements on a RealWorld article
+  page (banner and article-meta both carry the
+  button), and the probe demands exactly one.
+  Every legal-looking exit was walled off in
+  turn: renaming the control's accessible name to
+  "Favorite article ( 8 )" failed the probe's
+  declared-name-versus-observed-text check
+  ("read 'Favorite ( 8 )' before the click");
+  editing FavButton/ArticlesButtons/Article
+  components died in the fidelity gate ("modifies
+  original product UI"); and the final round's
+  inventory rewrite left the probe finding zero
+  prepared features mapped onto the grounded
+  routes. Five rounds thrashed inside a trap
+  whose one legal move — reselect a different,
+  unique proof target — no evidence ever named.
+  The probe and fidelity seams are unchanged
+  since wave-17's 25.7m pass; this is strategy
+  variance meeting an evidence gap. N166.
+- excalidraw (42.7m, rounds exhausted,
+  REGRESSED): the preparation chose a
+  local-storage seeding strategy — three proofs
+  of the form "stored value under 'excalidraw'
+  contains 'diagram-start' on /?demo=diagram" —
+  and the seed never landed because the prepared
+  app had a server-side render error (the
+  convertToExcalidrawElements import failed to
+  resolve). The strategist found that root cause
+  from stderr in its one consultation, but every
+  round's probe evidence led with the symptom
+  ("marker missing") instead of the page's own
+  error, and the rounds ran out. Same seams as
+  its wave-17 pass; variance plus an
+  evidence-ordering gap. N167.
+- ghostfolio (83.2m, strategist stop, REGRESSED):
+  lifecycle variance. The resolved runtime served
+  the Nest API alone ("node dist/apps/api/main")
+  without the built Angular client, so the
+  readiness probe's /portfolio returned 404
+  deterministically; one round also declared a
+  build script ("build:makeademo") that does not
+  exist and was correctly rejected by manifest
+  validation. The strategist's directive named
+  the exact fix (serve the built client including
+  SPA routing on 3000), the loop could not land
+  it under the fidelity constraints, and the
+  second consultation stopped the run honestly.
+  Wave-13's fixture records this same
+  build-drop arc — this is the repo where M5
+  memory should pay first.
+- directus (90.1m, hard ceiling, REGRESSED):
+  wave-17's first-ever pass had a 42-second
+  margin; a repo that costs ~89 minutes clean is
+  a coin flip against a 90-minute ceiling. This
+  wave the run got deep — through preparation,
+  exploration, script writing, and into
+  capture-path validation and one flow-replanning
+  — while three agent commands ran to their kill
+  walls (one 20-minute, two 15-minute). The
+  failure is the standing stall tax landing on
+  the thinnest margin in the matrix, not any new
+  defect. N170.
+- calcom (84.6m, N165 refusal): the underlying
+  loop is unchanged from wave-17 — appDir lock
+  violations ("must remain locked to apps/web;
+  received .") and the seeded demo-session work
+  the standing directive describes. The refusal
+  cut the doomed tail; the watchlist entry
+  stands.
+- midday (80.7m): converging again, same class as
+  wave-17 — the invoicing proof ("INV-1042" on
+  /invoices) and transactions evidence missing;
+  preparation into a weak starting state and the
+  loop pays per round. Watchlist stands.
+- ghost (75.8m): same admin-build frontier as
+  wave-17, with the failing subtasks shifted
+  (kg-unsplash-selector and shade; exit 130;
+  nothing ever listens on 2368). The nx-cloud
+  noise is gone per N165. No new item; the
+  startup-repair watch continues.
+- outline (70.1m, rounds exhausted): the NEW
+  frontier the watchlist predicted, one layer
+  past N163. The declared migration runs
+  sequelize-cli under environment "production"
+  (dotenvx: MISSING_ENV_FILE, injected env (0) —
+  so outline defaults to production config) and
+  production config demands SSL; the provisioned
+  postgres speaks plaintext: "ERROR: The server
+  does not support SSL connections". Five rounds
+  exhausted without any evidence naming the
+  standard knobs. N168.
+- twenty (76.9m): the NEW frontier the watchlist
+  predicted, one layer past N164. The declared
+  migration ("yarn exec nx run
+  twenty-server:database:init") pulled the nx
+  dependency graph into building the frontend
+  (vite transformed 837 modules of twenty-front)
+  and the command was OOM-killed mid-build. The
+  envelope-versus-fidelity question is now
+  concrete: the migration target, not the app,
+  drags the whole workspace build into a bounded
+  sandbox. N169.
+
+### N166 (Medium, bugfix) — proof-failure evidence must name the legal moves
+
+When a declared feature proof fails on locator
+ambiguity ("matched 2 elements; the proof needs
+exactly one") or on declared-name-versus-observed
+mismatch, the deterministic failure evidence must
+enumerate the moves the other gates permit:
+reselect the proof onto a different unique
+control, route, or region — and say explicitly
+that renaming or restyling product controls will
+be rejected by the fidelity gate. Conduit burned
+five rounds discovering that wall by hitting it.
+Seam: the feature-verification failure evidence
+where the multi-match and name-mismatch verdicts
+are already produced. The gates themselves are
+correct and unchanged; this is evidence
+completeness, the same class as N148/N149's
+headline work.
+
+### N167 (High, bugfix) — probe evidence must lead with the page's own errors
+
+When the probed route logged console or page
+errors, the feature-probe failure evidence must
+lead with them and demote the missing
+proof/marker to a consequence. Excalidraw's
+prepared app failed server-side on an unresolved
+import; the probe reported "stored local-storage
+value does not contain 'diagram-start'" every
+round while the render error sat in stderr — the
+strategist saw it, the round evidence never did.
+A page that cannot render grounds no proof, so
+the render error IS the failure. Seam: the same
+evidence assembly as N166; the probe already
+collects consoleErrors and pageErrors — order
+them first and say what they imply.
+
+### N168 (Medium, bugfix) — plaintext-postgres refusals need their knobs named
+
+When a declared migration or seed fails with the
+postgres SSL-negotiation family ("The server does
+not support SSL connections" and its client-side
+variants), the deterministic evidence must state
+that the provisioned service speaks plaintext by
+design and name the standard resolution surface:
+sslmode=disable on the DATABASE_URL, PGSSLMODE,
+or the app's environment selection (outline fell
+into "production" config only because no .env
+existed). General across repos — any app whose
+production defaults demand SSL hits this against
+any local provisioned postgres; outline is merely
+the first. Seam: the migration-failure evidence
+at the provisioned-service validation, which
+already captures the command output.
+
+### N169 (Medium, bugfix) — an OOM-killed migration must say so and name the graph
+
+When a declared migration or seed command dies as
+"Killed", the deterministic evidence must name
+the sandbox memory envelope as the killer and
+summarize what the command actually ran (twenty's
+database:init built the entire frontend before
+touching the database). The repair agent saw
+"Killed" with a vite build log and no explanation
+of why or what to narrow. Evidence should steer
+toward the narrowest target that performs the
+migration — the same envelope language the
+run-triage consultation already uses at run
+start, applied at the failure site. Seam: the
+same migration-failure evidence as N168.
+
+### N170 (High, infra) — measure, then bound, the stalled-agent tax
+
+Nine OpenCode attempts across wave-18 ran to
+their 15-minute kill wall and produced nothing
+(seven in wave-17) — roughly 2¼ hours of pure
+loss per batch, spread unevenly: directus lost up
+to 50 minutes of a 90-minute budget to three
+command walls in the wave after passing with 42
+seconds to spare. The tax is standing, not new,
+but it now decides outcomes at the budget
+boundary. First instrument: per-attempt activity
+evidence at the OpenCode seam (does a
+wall-killed attempt emit session events up to
+the kill, or go silent early?), which M4's
+consultation events partially cover and M3's
+diagnostician was designed to read. Then bound:
+an inactivity-based abort well under the wall for
+attempts that go silent, so a wedged attempt
+costs minutes instead of a quarter-hour. No
+change to the wall for attempts that are visibly
+working.
+
+### Meta-orchestrator audit (fourth live wave)
+
+Six consultations across four runs; the seven
+other runs consulted zero times. Every piece of
+advice was accurate: conduit's hint named the
+two-element ambiguity precisely; excalidraw's
+hint identified the convertToExcalidrawElements
+import failure as the root cause upstream of all
+three missing markers (a second consultation
+attempt failed and, with M4 not yet live, left no
+pipeline-log trace — exactly the observability
+gap M4 closes); ghostfolio's directive named the
+serve-the-built-client fix and its follow-up
+stop was honest and correctly honored;
+calcom's run-triage envelope warning flagged the
+Turbo dependency closure risk that materialized.
+One gating observation: directus ground through
+capture-path and flow-replanning failures with
+zero consultations — the script-repair families
+sit outside the current consultation gate, and
+this wave's deepest budget death happened there.
+Watch whether script-family repairs deserve the
+same fingerprint-gated consultation; no change
+proposed yet. Wave-19 runs with M4/M5 live:
+consultations become pipeline-log events, the
+round ledger mirrors into artifacts, and every
+run-end writes the memory digest — ghostfolio
+and directus are the repos where memory should
+convert first.
+
+### Watchlist (updated)
+
+- conduit, excalidraw: wave-19 tests whether
+  N166/N167 evidence turns their five-round traps
+  into one-round fixes. Both passed wave-17;
+  neither failure touched a changed seam.
+- ghostfolio: with M5 live, the wave-13 and
+  wave-18 build-drop arcs are in memory; a
+  serve-the-built-client memo should shortcut the
+  loop. If it recurs with memory on file, the
+  question becomes directive adherence, not
+  knowledge.
+- directus: passes clean at ~89 minutes; any
+  stall flips it. N170 is its item; M5 memory of
+  the recurring extensions/constants build arc
+  should also cut early rounds.
+- midday, calcom: unchanged from wave-17 — one
+  converging repair short, with directives on
+  file. With M5, their arcs persist across waves.
+- outline: N168's knobs plus the standing
+  demo-mode migration directive; expect the
+  migration to clear or fail one layer deeper
+  (.env materialization).
+- twenty: N169 evidence plus the envelope
+  question in the open. If the narrowed migration
+  lands, the CRM's app build is next.
+- ghost: startup repair watch continues; the
+  admin build still fails at launch with shifting
+  subtasks.
