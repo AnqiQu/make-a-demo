@@ -6157,6 +6157,108 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(hints).toContain("narrower");
   });
 
+  it("names the SSL knobs when a migration negotiates SSL against the plaintext postgres", async () => {
+    // outline, wave-18: no .env existed, the app defaulted into its
+    // production config, and every round re-ran the same SSL negotiation
+    // against a service that speaks plaintext by design.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn db:migrate")) {
+          return {
+            exitCode: 1,
+            stderr:
+              "error: The server does not support SSL connections\n    at Socket.<anonymous> (node_modules/pg/lib/connection.js:76:37)",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        dataStrategy: [
+          {
+            detail: "harness Postgres on loopback with sequelize migrations",
+            migrationCommand: "yarn db:migrate",
+            rung: "provisioned-service",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.failureClassification).toBe("service migration failure");
+    const hints = report.suggestedRepairHints.join(" ");
+    expect(hints).toContain("plaintext by design");
+    expect(hints).toContain("sslmode=disable");
+    expect(hints).toContain("PGSSLMODE");
+    expect(hints).toContain("environment selection");
+  });
+
+  it("names what a killed migration actually built alongside the memory guidance", async () => {
+    // twenty, wave-18: database:init built the entire frontend — vite
+    // transformed 837 modules — before touching the database, and the
+    // evidence named only the heap knob.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn database:init")) {
+          return {
+            exitCode: 137,
+            stderr: "",
+            stdout: [
+              "vite v5.4.2 building for production...",
+              "✓ 837 modules transformed.",
+              "bash: line 3: 4120 Killed yarn database:init",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        dataStrategy: [
+          {
+            detail: "harness Postgres on loopback with workspace migrations",
+            migrationCommand: "yarn database:init",
+            rung: "provisioned-service",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.failureClassification).toBe("service migration failure");
+    const hints = report.suggestedRepairHints.join(" ");
+    expect(hints).toContain("vite transformed 837 modules");
+    expect(hints).toContain("narrowest target");
+    expect(hints).toContain("--max-old-space-size");
+  });
+
   it("classifies a failed seed command as a service seed failure", async () => {
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {

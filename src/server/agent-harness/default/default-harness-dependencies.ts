@@ -106,6 +106,10 @@ import {
   readModelRuntimeTargetSelection,
 } from "../run-planner/runtime-target-selection";
 import {
+  readKilledCommandBuildSummary,
+  readPlaintextServiceSslHint,
+} from "../sandbox-services/migration-failure-evidence";
+import {
   createServiceProvisionCommand,
   provisionableServices,
   readProvisionedServicePlans,
@@ -3391,6 +3395,20 @@ async function validateResolvedSubmittedCodeRuntime(
           stderr: result.stderr,
           stdout: result.stdout,
         });
+        const failureTranscript = [result.stdout, result.stderr, fileTail]
+          .filter((text) => text.length > 0)
+          .join("\n");
+        // N168: an SSL negotiation against the plaintext sandbox postgres
+        // never succeeds by retrying — name every knob that disables it.
+        const sslHint = readPlaintextServiceSslHint({
+          output: failureTranscript,
+          service: plan.service,
+        });
+        // N169: a Killed wrapper that built the workspace graph first hides
+        // what consumed the memory behind the bare "Killed" line.
+        const killedBuildSummary = failureEvidence.killed
+          ? readKilledCommandBuildSummary(failureTranscript)
+          : undefined;
         return failedPreparationValidation({
           attemptedCommand: step.command,
           classification: step.classification,
@@ -3410,11 +3428,13 @@ async function validateResolvedSubmittedCodeRuntime(
           stdout: result.stdout,
           suggestedRepairHints: [
             `Every validation round reprovisions ${plan.service} from an empty state and re-runs the declared commands, so the ${step.kind} command must succeed from an empty database with no manual steps. Repair the command or the files it runs; the service answers exactly at ${sandboxServiceConnectionUrls[plan.service]}.`,
+            ...(sslHint === undefined ? [] : [sslHint]),
             ...(failureEvidence.killed
               ? [
                   "The command was killed at the sandbox's roughly 8 GB memory ceiling. Set a bounded Node heap through envUsed.NODE_OPTIONS (for example --max-old-space-size=6144, leaving headroom for native processes), and prefer a narrower migration or seed target with bounded worker concurrency; envUsed applies to every guarded runtime command.",
                 ]
               : []),
+            ...(killedBuildSummary === undefined ? [] : [killedBuildSummary]),
           ],
         });
       }
