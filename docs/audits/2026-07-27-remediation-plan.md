@@ -9597,3 +9597,28 @@ the watch, no change proposed.
   already reaching every heavy command and the
   managed app. Gates green (lint, typecheck, 1431
   tests, knip).
+
+### M4/M5 landings (2026-08-23)
+
+The wave-17 meta-audit's observability gaps and
+the cross-run amnesia finding landed as code the
+same session (see the meta-agent plan's M4/M5
+section for the design): consultations now emit
+strategist.* pipeline-log events, the round
+ledger mirrors into run artifacts beside the
+advice attempts, spend-bonus-round requires a
+schema-enforced reason that reaches the ledger,
+and the strategist gained cross-run memory — an
+append-only per-repo JSONL log under
+<outputRoot>/strategist-memory/, written as a
+deterministic digest at every run end (outcome,
+failed stage, advice notes and memos) and fed to
+both M1 and M2 consultations as bounded advisory
+history. Every advice kind may now carry a memo
+addressed to future consultations of the same
+repository; memory grants no authority and its
+failures always degrade to "no memory". From
+wave 18 on, the meta-audit reads pipeline-log
+events and the memory log instead of sandbox
+archaeology, and advice earned in one wave can
+finally claim (or forfeit) credit in the next.

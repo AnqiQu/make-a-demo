@@ -408,3 +408,66 @@ Gaps found (M1 follow-ups):
    promoted: a run whose envelope warning is later
    confirmed by a resource-exhaustion failure could
    arm stop eligibility one round earlier.
+
+## M4/M5 (2026-08-23): observability and cross-run memory
+
+Landed together after the third live wave's audit. The audit itself
+motivated both: assessing whether the strategist helps required manual
+artifact archaeology (M4), and the strongest unclaimable win — directus
+passing in wave 17 on exactly the blocker the wave-16 directive
+described — exposed cross-run amnesia (M5). This is NOT M3: M3 (the
+offline diagnostician CLI) remains unimplemented and would automate
+the wave-diagnosis write-up itself.
+
+### M4 (strategist observability)
+
+- Every consultation now emits pipeline-log events:
+  `strategist.repair-advice` (with the advice kind) /
+  `strategist.run-triage` (with the hint count) on success, and
+  `.failed` variants carrying the error. The meta-audit's first
+  question — what did the strategist say and when — is answered from
+  pipeline-log.jsonl.
+- The round ledger the strategist reasoned over is mirrored into the
+  run artifacts (`repair-round-ledger.json` beside the advice
+  attempts) at each consultation, closing the "appears in no run
+  mirror" gap from the first two audits.
+- `spend-bonus-round` now requires a `reason` (schema-enforced), and
+  the reason reaches the ledger's advice record, so the ledger can
+  answer "why did this run get an extra round".
+
+### M5 (cross-run strategist memory)
+
+The M1 open question — within-run only, or prior-run memory — is
+resolved in favor of memory, on wave-15..17 evidence: consultations
+re-derive the same repo diagnoses each wave (calcom's session split,
+outline's seed paths), and correct advice cannot claim credit across
+runs it never reaches.
+
+- Every advice kind may carry an optional bounded `memo` (≤1200
+  chars): a note addressed to the strategist's future consultations
+  on this repository. Memos steer nothing in the current run, are
+  recorded in the round ledger, and are the strategist's only
+  authorship channel into memory — everything else is deterministic.
+- `strategist-memory.ts` owns the seam: an append-only JSONL log per
+  normalized repository identity (`StrategistMemoryStore`), with a
+  file-backed default under `<outputRoot>/strategist-memory/` so
+  consecutive terminal-matrix runs on one machine share history.
+- At run end — every outcome, including deaths before the pipeline
+  proper — deterministic code appends one digest entry: outcome,
+  failed stage, and the advice notes (kind, prose, memo) harvested
+  from the run's own mirrored consultation artifacts. Agents author
+  memos; deterministic code assembles history.
+- At run start the pipeline reads the last 3 entries for the repo and
+  hands them to the harness; both M1 and M2 consultations receive
+  them as `.makeademo/strategist-memory.json` plus a prompt line that
+  frames them as history and the strategist's own earlier judgment,
+  never instructions or current-run facts.
+- Anti-goals inherited unchanged: no authority flows from memory; a
+  store failure in either direction means "no memory", never a failed
+  run; deterministic code never reads memory content.
+
+Follow-ups deliberately not taken: strategist-authored free-text run
+summaries (an extra agent call at run end; the memo channel plus the
+deterministic digest cover the need until evidence says otherwise),
+and surfacing memory to repair agents (memory is the strategist's;
+repair agents get steering through advice, as before).
