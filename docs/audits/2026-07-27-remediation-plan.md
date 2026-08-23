@@ -9948,3 +9948,258 @@ convert first.
 - ghost: startup repair watch continues; the
   admin build still fails at launch with shifting
   subtasks.
+
+## Addendum (2026-08-23, wave-19 — outline's first pass and the first fully-instrumented wave: every fresh landing verified live; three failures expose evidence gaps, not code bugs: N171–N173)
+
+Batch matrix-2026-08-23T16-43-45-054Z, report
+matrix-report-2026-08-23T18-12-11-683Z. Four of
+eleven passed: homer (7.8m), conduit (19.8m —
+back from the wave-18 trap, with two rounds to
+spare), ghostfolio (74.8m — no consultation
+needed), and outline (70.0m — its FIRST pass
+ever: migrations applied against the plaintext
+DATABASE_URL and the Engineering Handbook seed
+completed, the exact frontier N168 named).
+Failures: midday (70.5m), excalidraw (65.9m),
+cyberchef (41.0m — REGRESSED, its first failure
+since wave-12), calcom (84.5m, N165 refusal),
+directus (55.5m), ghost (36.1m), twenty (80.7m).
+The batch launched at 16:43:45Z, seconds after
+the N166–N170 commits (09:42–09:44 PDT) — and
+unlike wave-18's photo-finish, everything landed:
+the new evidence text, the activity watchdog,
+and M4/M5 all appear in run artifacts.
+
+### Every fresh landing verified in production
+
+- N166: the legal-moves text is live —
+  excalidraw's verdicts read "matched 0 elements
+  ... Legal moves: reselect the expectedProof
+  onto a different control, route, or ..." and
+  the run converged from three failing features
+  to one. Conduit, wave-18's five-round
+  ambiguity death, passed in 19.8m.
+- N167: probe evidence now leads with the page's
+  own errors — directus round 2 headlines "App
+  server error: the app's own script ...
+  answered HTTP 500" instead of a downstream
+  proof symptom.
+- N168: outline passed. The prepared runtime
+  carries a plain
+  postgres://...@127.0.0.1:5432/makeademo and
+  the sequelize migrations ran to completion.
+- N169: twenty's migration is no longer the
+  failure — no Killed database:init anywhere in
+  the run. The frontier moved forward into the
+  app build (N173 below).
+- N170: three genuine wedges (cyberchef,
+  directus, ghost) died at the 5-minute
+  inactivity limit instead of the quarter-hour
+  wall — each with the new discriminator
+  attached: cpuBeatCount=5, modelOutputSeen=
+  false, meaning nothing but heartbeats ever
+  crossed the PTY. Zero false kills: every
+  inactivity-killed attempt had seen no model
+  output, so nothing real was lost, and
+  cyberchef's killed attempt retried and passed.
+  Roughly thirty minutes reclaimed across the
+  batch. Ghost also shows the other wedge shape
+  the evidence now names: modelOutputSeen=true
+  with modelSilenceMs=577164 — a model that
+  spoke and then died, correctly left to the
+  wall.
+- M4: strategist.* events are in the pipeline
+  logs (advice kind carried on the event), the
+  round ledger mirrors into run artifacts, and
+  — for the first time — advice adherence is
+  recorded: directus round 4 shows
+  applied=true, outcomeOfAdvice=failure-moved.
+- M5: all eleven runs wrote a correct run-end
+  digest (outcome, failed stage, advice notes
+  with memos). Consultations this wave read
+  EMPTY history — wave-18 predated M5, so there
+  was nothing to feed; wave-20 is memory's first
+  real payoff test, and the memos on file are
+  good: directus ("use the app dependency-graph
+  build command for future runtime
+  preparation") and midday (the bun resolution
+  block) are exactly the lessons those repos
+  keep relearning.
+- M3: diagnose:run produced an honest draft on
+  midday — correct outcome, correct round
+  count, and it flagged both the repeated
+  identical failure and the fidelity chain. It
+  did not find the causal mechanism (the
+  install-command mutation below); the causal
+  layer still needs artifact reading, which is
+  the right division of labor for a
+  deterministic extractor.
+
+### Diagnoses
+
+- midday (70.5m, rounds exhausted): the round-1
+  fidelity repair also mutated the install
+  command — bun install --frozen-lockfile,
+  green through two rounds, became bun install
+  --frozen-lockfile --filter=@midday/dashboard
+  --filter=... — and the filtered install fails
+  resolution for every dependency in the
+  workspace, catalog: references and plain
+  semver alike, inside the open install window
+  (classification "install failure", not
+  "external network required" — the window
+  opened; bun's filtered install simply cannot
+  resolve this catalog workspace). The loop
+  then re-ran the identical failing install
+  twice, and the strategist's two stop advices
+  ended it. Nothing in the evidence named the
+  one fact that mattered: the install command
+  the failure arrived with is not the install
+  command the run had already validated. The
+  ledger records exactly that delta. N171.
+- cyberchef (41.0m, REGRESSED): flow planning
+  burned all three artifact attempts citing
+  hash routes the AppMap never selected
+  (/#op=From%20Base64&input=... against a
+  selected /#recipe=To_Base64(...) route). The
+  rejection names the offending route and
+  nothing else — the planner never saw the
+  legal route list it was deviating from. One
+  wedge kill (recovered on retry) cost nothing.
+  Route-space drift on a hash-param app is
+  variance; three blind attempts is an evidence
+  gap. N172.
+- excalidraw (65.9m, rounds exhausted): the
+  near-miss. Two of three features grounded
+  under the new evidence; the last proof needs
+  a "Dark mode" control that matched 0 elements
+  on /?demo=export, and rounds ran out
+  reselecting it. Watchlist: one control away.
+- directus (55.5m, rounds exhausted): round 1's
+  extensions build died inside rolldown — the
+  headline shows only "at unwrapBindingResult
+  (...rolldown...)", a stack frame with the
+  actual error elided (N173). The strategist's
+  directive (the recursive filtered graph
+  build) was applied and moved the failure —
+  build green, dev server then failed to bind,
+  then a TS2307 against the built package — and
+  rounds exhausted mid-arc. The memo now in
+  memory is precisely wave-13/14's lesson;
+  wave-20 tests whether it shortcuts the early
+  rounds.
+- ghost (36.1m): three repo-preparation
+  attempts, three identical rung-contract
+  violations (embedded-config declaring
+  migrationCommand/seedCommand). The evidence
+  already names the legal moves ("Remove the
+  commands or move the service to
+  provisioned-service") — this is agent
+  non-compliance with correct evidence, one
+  stage earlier than wave-18. No new item;
+  memory now carries the arc.
+- calcom (84.5m, N165 refusal): the standing
+  converging loop, again one round short —
+  fastest cycle 6.9 minutes against 6.0
+  remaining. The refusal is honest; the memo
+  layer is what should compound here.
+- twenty (80.7m): progress — install, corepack,
+  and migration all cleared for the first time.
+  The new frontier is the app build failing
+  inside rolldown, and the evidence shows a
+  stack frame ("at unwrapBindingResult") atop a
+  flood of PLUGIN_TIMINGS warnings with the
+  real error nowhere in the excerpt. N173.
+
+### N171 (High, bugfix) — a mutated lifecycle command is the prime suspect in its own failure
+
+When a lifecycle command (install, build, start,
+migration) fails validation and the round ledger
+shows the same command succeeded in an earlier
+round in a different form, the deterministic
+failure evidence must lead with the delta: name
+the previously-validated form, name the mutation,
+and instruct the repair to revert it or justify
+it. Midday's loop had the complete story in its
+own ledger — unfiltered install green twice,
+filtered install fatal three times — and never
+said it; the repair retried the mutation
+verbatim and the strategist stopped a run whose
+fix was a one-line revert. Seam: repair-evidence
+assembly, which already receives the round
+ledger; comparison is by lifecycle field, not
+string diffing.
+
+### N172 (Medium, bugfix) — artifact route references must be rejected WITH the legal route list
+
+When FlowSpec (or any staged artifact) cites a
+route outside the AppMap's selected set, the
+rejection must enumerate the selected routes the
+artifact may cite. Cyberchef's planner invented
+three hash-parameter variants and was told only
+"unknown route" each time — on an app whose
+whole route space is hash-encoded recipe state,
+the legal list IS the repair. Same evidence
+pattern as N166, applied at the flow-planning
+contract seam.
+
+### N173 (High, bugfix) — build-failure evidence must surface the error, not the stack frame
+
+Two repos this wave produced build failures whose
+evidence headline is "at unwrapBindingResult
+(...rolldown...)" — the first stack frame of
+rolldown's error translation layer — while the
+actual error text was drowned by elision or
+warning floods (twenty's excerpt is entirely
+PLUGIN_TIMINGS noise; directus round 1's real
+rolldown error never appears). The
+command-failure evidence extractor must prefer
+error-shaped lines (error:, ERROR, Error:,
+panicked, exit reasons) over stack frames and
+must not let repeated warning classes crowd the
+excerpt window. This is N148's headline
+philosophy applied to the build-output seam:
+a repair agent cannot fix what the evidence
+never shows it.
+
+### Meta-orchestrator audit (fifth live wave, first instrumented)
+
+Six repair consultations plus two triages, all
+visible in pipeline logs for the first time.
+Accuracy held: directus's directive was applied
+and measurably moved the failure (the first
+adherence record in the ledger); midday's two
+stops were correct given the evidence the
+strategist saw — though N171 would have given it
+the revert instead of the stop, which is the
+sharper lesson: strategist quality is bounded by
+evidence quality. Twenty and calcom drew their
+usual triage envelope warnings. The M3 CLI's
+draft, the mirrored ledgers, and the memory
+digests together replaced sandbox archaeology
+for this diagnosis — the meta-layer is now
+instrumented end to end. Open question carried
+forward: script-repair families still sit
+outside the consultation gate.
+
+### Watchlist (updated)
+
+- wave-20 is the memory payoff test: directus
+  and midday carry memos that name their exact
+  recurring fixes; ghostfolio and conduit carry
+  passing history. If consultations with memory
+  in hand repeat wave-19's early rounds anyway,
+  the feed-forward framing needs work.
+- excalidraw: one control reselection from
+  passing.
+- cyberchef: N172's route list should make
+  wave-20's flow planning one-attempt.
+- calcom: fastest cycle 6.9m, gap 6.0m — the
+  N165 arithmetic says one saved round flips
+  it; N171 and memory both aim at exactly that.
+- twenty: N173 must surface the rolldown error
+  before anyone can say whether the build
+  frontier is repairable inside the envelope.
+- ghost: rung compliance with correct evidence —
+  watch whether memory's record of three
+  identical violations changes round one.
