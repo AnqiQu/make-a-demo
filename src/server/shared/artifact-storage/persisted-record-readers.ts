@@ -45,3 +45,16 @@ export function readBoolean(
   }
   return value;
 }
+
+export function readPositiveNumber(
+  record: Record<string, unknown>,
+  key: string,
+  parentPath?: string,
+): number {
+  const path = childPath(parentPath, key);
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${path} must be a positive number`);
+  }
+  return value;
+}

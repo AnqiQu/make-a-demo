@@ -1,3 +1,9 @@
+import {
+  assertRecord,
+  readNonEmptyString,
+  readPositiveNumber,
+} from "../../shared/artifact-storage/persisted-record-readers";
+
 export type SupportingDocumentUpload = {
   artifactId: string;
   fileName: string;
@@ -56,36 +62,4 @@ export function normalizeSupportingDocument(input: {
     sourceArtifactId: input.source.artifactId,
     sourceFileName: input.source.fileName,
   };
-}
-
-function assertRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} must be an object`);
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function readNonEmptyString(
-  record: Record<string, unknown>,
-  key: string,
-): string {
-  const value = record[key];
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${key} must be a non-empty string`);
-  }
-
-  return value;
-}
-
-function readPositiveNumber(
-  record: Record<string, unknown>,
-  key: string,
-): number {
-  const value = record[key];
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`${key} must be a positive number`);
-  }
-
-  return value;
 }
