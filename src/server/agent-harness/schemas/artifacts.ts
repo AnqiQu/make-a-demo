@@ -9,6 +9,7 @@ import {
   readBoolean,
   readNonEmptyString,
 } from "../../shared/artifact-storage/persisted-record-readers";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 
 export const DEMO_SCRIPT_OUTPUT_PATH = "/workspace/.makeademo/demo-script.json";
 export const browserRuntimeScriptNames = [
@@ -22,7 +23,7 @@ export type BrowserRuntimeScriptName =
   (typeof browserRuntimeScriptNames)[number];
 
 export type PackageManager = "bun" | "npm" | "pnpm" | "unknown" | "yarn";
-type HarnessStageStatus =
+export type HarnessStageStatus =
   | "failed"
   | "passed"
   | "pending"
@@ -854,7 +855,7 @@ function assertValidPreparationManifestFields(
     try {
       validate();
     } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
+      errors.push(readErrorMessage(error));
     }
   }
   if (errors.length > 0) {
@@ -1107,7 +1108,7 @@ function captureValidationError<T>(
   try {
     return validate();
   } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
+    errors.push(readErrorMessage(error));
     return undefined;
   }
 }

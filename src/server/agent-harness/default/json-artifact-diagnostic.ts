@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { type ParseError, parse, printParseErrorCode } from "jsonc-parser";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 
 export type JsonSyntaxDiagnostic = {
   byteLength: number;
@@ -30,8 +31,7 @@ export function diagnoseJsonSyntax(
   const lastLineBreak = beforeError.lastIndexOf("\n");
   const line = beforeError.split("\n").length;
   const column = offset - lastLineBreak;
-  const nativeMessage =
-    nativeError instanceof Error ? nativeError.message : String(nativeError);
+  const nativeMessage = readErrorMessage(nativeError);
   const parserMessage =
     firstError === undefined
       ? "Invalid JSON"

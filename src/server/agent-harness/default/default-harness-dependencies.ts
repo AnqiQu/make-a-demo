@@ -30,6 +30,7 @@ import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-lo
 import { withCpuLivenessHeartbeat } from "../../shared/shell/cpu-liveness";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import { stripAnsi, stripAnsiFileProgram } from "../../shared/text/strip-ansi";
 import {
   hasAuthWallRouteShape,
@@ -548,7 +549,7 @@ export async function createDefaultAgentHarnessDependencies(
           url,
         });
         await options.logger?.warn({
-          error: readUnknownErrorMessage(error),
+          error: readErrorMessage(error),
           event: "external-resource.hydration.failed",
           reason,
           stage,
@@ -747,7 +748,7 @@ export async function createDefaultAgentHarnessDependencies(
         );
       } catch (error) {
         await options.logger?.warn({
-          error: readUnknownErrorMessage(error),
+          error: readErrorMessage(error),
           event: "external-resource.runtime-attempts.unavailable",
         });
       }
@@ -1309,7 +1310,7 @@ export async function createDefaultAgentHarnessDependencies(
       } catch (error) {
         await options.logger?.error({
           durationMs: Date.now() - patchStartedAt,
-          error: readUnknownErrorMessage(error),
+          error: readErrorMessage(error),
           event: "preparation.diff.patch.failed",
           timeoutMs: preparationDiffCommandTimeoutMs,
         });
@@ -5903,14 +5904,10 @@ async function readPreparationWorkspaceDiff(
 }
 
 function createPreparationDiffOperationError(error: unknown): Error {
-  const detail = readUnknownErrorMessage(error);
+  const detail = readErrorMessage(error);
   return new Error(`Preparation workspace patch capture failed: ${detail}`, {
     cause: error,
   });
-}
-
-function readUnknownErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 // `git status` cannot rank changed files by relevance, so the parse probe
@@ -6022,7 +6019,7 @@ async function writeWorkspaceText(
     await workspace.writeTextFile(path, contents);
   } catch (error) {
     throw new Error(
-      `Failed to write workspace artifact ${path} through filesystem transfer (${Buffer.byteLength(contents)} bytes): ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to write workspace artifact ${path} through filesystem transfer (${Buffer.byteLength(contents)} bytes): ${readErrorMessage(error)}`,
       { cause: error },
     );
   }
@@ -6169,9 +6166,7 @@ async function tryReadPreparationManifest(
     return {
       candidate: json.value,
       candidateFingerprint: json.candidateFingerprint,
-      error: `Invalid PreparationManifest in ${path}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      error: `Invalid PreparationManifest in ${path}: ${readErrorMessage(error)}`,
       failureClassification: "invalid-schema",
       ok: false,
     };
@@ -6210,7 +6205,7 @@ async function persistExplorationEvidence(input: {
     });
   } catch (error) {
     await input.logger?.warn({
-      error: readUnknownErrorMessage(error),
+      error: readErrorMessage(error),
       event: "exploration.evidence.unavailable",
     });
   }

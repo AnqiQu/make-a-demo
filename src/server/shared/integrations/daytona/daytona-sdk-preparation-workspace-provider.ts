@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, posix } from "node:path";
+import { readErrorMessage } from "../../../shared/text/read-error-message";
 
 import { Daytona } from "@daytona/sdk";
 
@@ -1433,7 +1434,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       });
     } catch (error) {
       throw new Error(
-        `Daytona agent artifact filesystem transfer failed for ${path} (${payloadBytes} bytes): ${error instanceof Error ? error.message : String(error)}`,
+        `Daytona agent artifact filesystem transfer failed for ${path} (${payloadBytes} bytes): ${readErrorMessage(error)}`,
         { cause: error },
       );
     } finally {

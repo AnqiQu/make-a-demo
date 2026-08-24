@@ -3,6 +3,7 @@ import {
   type BrowserAction,
   readBrowserActions,
 } from "../../pipeline/06-footage-capture/browser-action-plan";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import { readLastErrorCauseLine } from "../app-explorer/stderr-error-signal";
 import type {
   CaptureLocatorFailure,
@@ -1472,10 +1473,6 @@ function attachSecondaryError(
   } catch {
     // Preserve the primary pipeline error even when it is non-extensible.
   }
-}
-
-function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function readFailedOpenCodeSessionId(error: unknown): string | undefined {

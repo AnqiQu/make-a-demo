@@ -1,3 +1,4 @@
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import { createPrismaEnginePrefetchCommand } from "./prisma-engine-prefetch";
 
 export type DependencyInstallDecision =
@@ -135,7 +136,7 @@ async function resealNetwork(
       await closeNetwork();
       return undefined;
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return readErrorMessage(error);
     }
   }
 }
