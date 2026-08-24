@@ -1,4 +1,5 @@
 import { posix } from "node:path";
+import { optionalString } from "../../shared/records/optional-string";
 import {
   isEnvironmentFileName,
   normalizeRepoPath,
@@ -965,13 +966,4 @@ function readJsonObject(
   }
 
   return undefined;
-}
-
-function optionalString<K extends string>(
-  key: K,
-  value: string | undefined,
-): Partial<Record<K, string>> {
-  return value === undefined || value.trim().length === 0
-    ? {}
-    : ({ [key]: value } as Partial<Record<K, string>>);
 }
