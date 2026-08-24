@@ -10292,6 +10292,201 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(hints).not.toContain("vendor");
   });
 
+  it("fails preflight before installing when package.json pins a floating packageManager selector", async () => {
+    // N175 (homer, wave-20): corepack resolves "pnpm@10" against the
+    // registry at install time, so its failure wore a network costume for
+    // five repair rounds. The deterministic layer must say what the
+    // strategist said — pin the exact version — before any install runs.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.includes('"packageManager"')) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: `/workspace/repo/package.json\n${JSON.stringify({
+              name: "homer",
+              packageManager: "pnpm@10",
+            })}`,
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "pnpm install --frozen-lockfile",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "runtime-configuration error",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain('"packageManager": "pnpm@10"');
+    expect(report.logsSummary).toContain("/workspace/repo/package.json");
+    expect(report.logsSummary).toMatch(/exact/i);
+    expect(report.logsSummary).not.toMatch(/external network|unreachable/i);
+    expect(commands.some((command) => command.includes("pnpm install"))).toBe(
+      false,
+    );
+  });
+
+  it("leaves a floating selector alone when no lifecycle command invokes that manager", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes('"packageManager"')) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: `/workspace/repo/package.json\n${JSON.stringify({
+              packageManager: "pnpm@10",
+            })}`,
+          };
+        }
+        if (command.includes("install")) {
+          return {
+            exitCode: 1,
+            stderr: "error: lockfile had changes, but lockfile is frozen",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    // The bun-only lifecycle never routes through the corepack shim, so
+    // the selector gate must not spend a repair round on it; the install's
+    // own failure stays the evidence.
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).not.toContain("packageManager");
+  });
+
+  it("names the floating packageManager pin when corepack cannot resolve it, instead of blaming the network", async () => {
+    // Homer's shape: the network token below is what routed this to the
+    // unreachable-host classifier and "external network required".
+    const corepackFailure = [
+      "! Corepack is about to download https://registry.npmjs.org/pnpm",
+      'Internal Error: Error when performing the request to "https://registry.npmjs.org/pnpm"; for troubleshooting help, see https://github.com/nodejs/corepack',
+      "Error: connect ETIMEDOUT 104.16.27.34:443",
+    ].join("\n");
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes('"packageManager"')) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: `/workspace/repo/package.json\n${JSON.stringify({
+              packageManager: "pnpm@10",
+            })}`,
+          };
+        }
+        if (command.includes("install")) {
+          return { exitCode: 1, stderr: corepackFailure, stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    // The bun install command keeps the selector gate quiet; the corepack
+    // failure surfaces through a script inside the install.
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain('"pnpm@10"');
+    expect(report.logsSummary).toContain("/workspace/repo/package.json");
+    expect(report.logsSummary).not.toContain("external network");
+    expect(report.suggestedRepairHints.join(" ")).toMatch(
+      /packageManager.*exact|exact.*packageManager/i,
+    );
+  });
+
+  it("keeps blaming the network when corepack fails on an exactly pinned manager", async () => {
+    const corepackFailure = [
+      'Internal Error: Error when performing the request to "https://registry.npmjs.org/pnpm/-/pnpm-10.12.1.tgz"; for troubleshooting help, see https://github.com/nodejs/corepack',
+      "Error: connect ETIMEDOUT 104.16.27.34:443",
+    ].join("\n");
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes('"packageManager"')) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: `/workspace/repo/package.json\n${JSON.stringify({
+              packageManager: "pnpm@10.12.1",
+            })}`,
+          };
+        }
+        if (command.includes("install")) {
+          return { exitCode: 1, stderr: corepackFailure, stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    // An exact pin that still cannot download is a genuine network failure,
+    // not a selector problem.
+    expect(report).toMatchObject({
+      failureClassification: "external network required",
+      status: "failed",
+    });
+  });
+
   it("bounds install and build commands with explicit timeouts", async () => {
     const timeouts: Array<{ command: string; timeoutMs: number | undefined }> =
       [];

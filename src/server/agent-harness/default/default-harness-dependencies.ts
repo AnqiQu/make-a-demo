@@ -85,6 +85,10 @@ import {
 import type { StrategistRunMemoryEntry } from "../repair/strategist-memory";
 import { createFeatureVerificationGuide } from "../repo-preparation/feature-verification-guide";
 import {
+  commandsInvokePackageManager,
+  readFloatingPackageManagerSelector,
+} from "../repo-preparation/package-manager-selector";
+import {
   type FidelityCandidate,
   readPatchSectionText,
 } from "../repo-preparation/preparation-fidelity";
@@ -2826,6 +2830,42 @@ async function validateResolvedSubmittedCodeRuntime(
   let lifecycleInstallCommand: string | undefined;
   if (input.installDependencies !== false) {
     const installCommand = manifestInstallCommand;
+    // N175: a floating packageManager selector (homer's "pnpm@10") makes
+    // corepack resolve the tag against the registry on every invocation,
+    // so its failures wear a network costume. Read the declaration corepack
+    // itself would use, and when a lifecycle command routes through that
+    // manager, fail deterministically before the install spends a round
+    // discovering it. The declaration also disambiguates a corepack death
+    // in the failure branch below.
+    const floatingPackageManager = await readWorkspaceFloatingPackageManager(
+      input.workspace,
+      installDirectory,
+    );
+    if (
+      floatingPackageManager !== undefined &&
+      commandsInvokePackageManager(
+        [
+          manifestInstallCommand,
+          manifest.buildCommandUsed,
+          manifest.startCommandUsed,
+          ...(manifest.dataStrategy ?? []).flatMap((entry) => [
+            entry.migrationCommand,
+            entry.seedCommand,
+          ]),
+        ],
+        floatingPackageManager.manager,
+      )
+    ) {
+      return failedPreparationValidation({
+        classification: "runtime-configuration error",
+        logsSummary: `The prepared repository pins a floating package manager: ${floatingPackageManager.packageJsonPath} declares "packageManager": "${floatingPackageManager.selector}". Corepack resolves a floating selector against the npm registry every time ${floatingPackageManager.manager} runs, so lifecycle commands fail with a network-shaped error before ${floatingPackageManager.manager} starts and before any dependency is resolved. Pin the exact ${floatingPackageManager.manager} version the lockfile was written with (an exact <name>@<major.minor.patch> value); do not switch package managers and do not chase registry connectivity.`,
+        manifest,
+        stage,
+        suggestedRepairHints: [
+          `Edit ${floatingPackageManager.packageJsonPath} and set "packageManager" to an exact ${floatingPackageManager.manager}@<major.minor.patch> version; "${floatingPackageManager.selector}" is a floating selector corepack cannot materialize deterministically.`,
+        ],
+      });
+    }
     // The attempts that most need headroom are the failing ones: a failed
     // install leaves its partial cache behind and never reaches the
     // success-path prune, so the next attempt refetches into a full overlay
@@ -3023,6 +3063,29 @@ async function validateResolvedSubmittedCodeRuntime(
       };
     }
     if (result.status === "failed") {
+      // N175: a corepack death while materializing a floating selector must
+      // never be classified as a dependency network failure — the failing
+      // fetch happens before the package manager even runs.
+      if (
+        floatingPackageManager !== undefined &&
+        isCorepackSelectorResolutionFailure(
+          `${result.stderr}\n${result.stdout}`,
+        )
+      ) {
+        return failedPreparationValidation({
+          attemptedCommand: result.executedCommand,
+          classification: "install failure",
+          exitCode: result.exitCode,
+          logsSummary: `Corepack could not materialize the package manager: ${floatingPackageManager.packageJsonPath} declares the floating selector "${floatingPackageManager.selector}", which corepack resolves against the registry every time ${floatingPackageManager.manager} runs — this install died in that resolution step, before ${floatingPackageManager.manager} ran and before any dependency was fetched. This is not a dependency network problem; do not chase lockfile tarball hosts. ${legibleFailureExcerpt(result)}`,
+          manifest,
+          stage,
+          stderr: result.stderr,
+          stdout: result.stdout,
+          suggestedRepairHints: [
+            `Edit ${floatingPackageManager.packageJsonPath} and pin "packageManager" to the exact ${floatingPackageManager.manager} version the lockfile was written with (<name>@<major.minor.patch>); a floating selector like "${floatingPackageManager.selector}" cannot be materialized offline or against an unreachable registry.`,
+          ],
+        });
+      }
       const unreachable = readUnreachableDependencyHost(result);
       if (unreachable !== undefined) {
         return failedPreparationValidation({
@@ -6470,6 +6533,59 @@ function failedPreparationValidation(input: {
       : { suggestedRepairHints: input.suggestedRepairHints }),
     urlChecked: input.manifest.baseUrl,
   });
+}
+
+/**
+ * Finds the packageManager declaration corepack would honor for commands
+ * run in `installDirectory` — the closest package.json at or above it that
+ * carries the field, bounded at the repo root, exactly corepack's own
+ * lookup — and returns it only when the selector is floating (N175).
+ * Undefined on any read or parse trouble: this gate reports repo state it
+ * can prove, and everything else stays with the real lifecycle's evidence.
+ */
+async function readWorkspaceFloatingPackageManager(
+  workspace: AgentHarnessWorkspace,
+  installDirectory: string,
+): Promise<
+  { manager: string; packageJsonPath: string; selector: string } | undefined
+> {
+  const command = `d=${shellQuote(installDirectory)}; i=0; while [ "$i" -lt 12 ]; do i=$((i+1)); if [ -f "$d/package.json" ] && grep -q '"packageManager"' "$d/package.json"; then printf '%s\\n' "$d/package.json"; cat "$d/package.json"; break; fi; [ "$d" = ${shellQuote(workspaceRepoDirectory)} ] && break; d="\${d%/*}"; done; true`;
+  try {
+    const result = await executeSubmitted(workspace, command);
+    if (result.exitCode !== 0) {
+      return undefined;
+    }
+    const newlineIndex = result.stdout.indexOf("\n");
+    if (newlineIndex === -1) {
+      return undefined;
+    }
+    const packageJsonPath = result.stdout.slice(0, newlineIndex).trim();
+    const floating = readFloatingPackageManagerSelector(
+      result.stdout.slice(newlineIndex + 1),
+    );
+    return floating === undefined
+      ? undefined
+      : { ...floating, packageJsonPath };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when a failed install's output shows corepack itself dying while
+ * fetching or resolving the packageManager toolchain, as opposed to the
+ * package manager failing on dependencies: corepack's request errors name
+ * corepack (banner, stack paths, troubleshooting link), while pnpm/yarn/npm
+ * dependency fetch errors never do.
+ */
+function isCorepackSelectorResolutionFailure(output: string): boolean {
+  return (
+    /\bcorepack\b/i.test(output) &&
+    // Corepack's own request error quotes the URL ("request to \"https://…"),
+    // which the generic download-failure shapes do not match.
+    (/error when performing the request\b/i.test(output) ||
+      isLifecycleDownloadFailure(output))
+  );
 }
 
 /**
