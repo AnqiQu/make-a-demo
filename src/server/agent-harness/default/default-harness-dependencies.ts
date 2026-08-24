@@ -535,7 +535,7 @@ export async function createDefaultAgentHarnessDependencies(
         }
         const attempt = attemptsByUrl.get(url);
         externalResourceHydrationOutcomes.push({
-          error: readUnknownErrorMessage(error),
+          error: readErrorMessage(error),
           outcome: reason,
           pass,
           phase: attempt?.phase ?? "browser",
@@ -663,6 +663,14 @@ export async function createDefaultAgentHarnessDependencies(
       });
     const readUncachedAttempts = (report: ValidationReport) =>
       readUncachedExternalResourceAttempts(report.blockedNetworkAttempts);
+    // A failed build reports the backend-resolved command, not the
+    // agent-authored manifest spelling, so the rebuild decision below must
+    // compare against the same resolution the validator applies.
+    const resolvedBuildCommand = resolvePreparationRuntime({
+      preparationManifest: input.preparationManifest,
+      repoProfile: input.repoProfile,
+      ...(input.runPlan === undefined ? {} : { runPlan: input.runPlan }),
+    }).preparationManifest.buildCommandUsed;
 
     let buildApp = true;
     let initialRun = true;
@@ -682,7 +690,7 @@ export async function createDefaultAgentHarnessDependencies(
       );
       buildApp =
         report.attemptedCommand !== undefined &&
-        report.attemptedCommand === input.preparationManifest.buildCommandUsed;
+        report.attemptedCommand === resolvedBuildCommand;
       if (hydration.addedResources > 0) continue;
       const remainingAttempts = readUncachedAttempts(report);
       return remainingAttempts.length === 0

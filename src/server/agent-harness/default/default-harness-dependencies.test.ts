@@ -9770,6 +9770,92 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("rebuilds offline when the failing build command was backend-resolved", async () => {
+    // The manifest declares `bun run build:app`, but runtime resolution pins
+    // the selected workspace's own `bun run build`, so the first pass's
+    // build failure reports the resolved spelling. The rebuild decision must
+    // compare against the resolved command — comparing against the
+    // agent-authored spelling silently skips the offline rebuild.
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-resolved-build-hydration-"),
+    );
+    const assetUrl = "https://fonts.example.com/resolved.woff2";
+    let buildRuns = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("bun run build")) {
+          buildRuns += 1;
+          return buildRuns === 1
+            ? {
+                exitCode: 1,
+                stderr: `${runtimeNetworkMarker}{"direction":"outbound","hasCredentials":false,"host":"fonts.example.com","method":"GET","phase":"runtime","resourceType":"font","url":"${assetUrl}"}`,
+                stdout: "",
+              }
+            : { exitCode: 0, stderr: "", stdout: "built" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return { running: true, stderr: "", stdout: "ready" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode("font"),
+        contentType: "font/woff2",
+        headers: {},
+        status: 200,
+      }),
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const base = preparationManifest();
+      const report = await harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...base,
+          appDir: "apps/web",
+          buildCommandUsed: "bun run build:app",
+          productContext: {
+            ...base.productContext,
+            featureInventory: base.productContext.featureInventory.map(
+              (feature) => ({
+                ...feature,
+                sourcePaths: ["apps/web/src/App.tsx"],
+              }),
+            ),
+          },
+        },
+        repoProfile: {
+          ...repoProfile(),
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              isWorkspace: true,
+              name: "@acme/web",
+              ports: [3000],
+              scripts: {
+                build: "vite build",
+                "build:app": "vite build --mode app",
+                preview: "vite preview",
+              },
+            },
+          ],
+        },
+        runPlan: runPlan(),
+        workspace,
+      });
+
+      expect(report).toMatchObject({ status: "passed" });
+      expect(buildRuns).toBe(2);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
   it("pins the app's Node DNS order to IPv4 so a localhost bind stays reachable", async () => {
     // Node 24 orders localhost as ::1 first, so a dev server that binds
     // localhost (Vite's default) never listens on 127.0.0.1 and every
