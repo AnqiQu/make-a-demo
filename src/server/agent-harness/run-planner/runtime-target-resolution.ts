@@ -309,7 +309,7 @@ function isWorkspaceGraphBuildCommand(
     return true;
   }
   return (
-    /(?:^|\s)pnpm\s+(?=[^\n]*(?:-r|--recursive)(?:\s|$))(?=[^\n]*(?:run\s+)?(?:build|prepare)(?:\s|$))/.test(
+    /(?:^|\s)pnpm\s+(?=[^\n]*(?:-r|--recursive)(?:\s|$))(?=[^\n]*(?:run\s+)?\b(?:build|prepare)(?:\s|$))/.test(
       resolvedSurfaces,
     ) ||
     /(?:^|\s)(?:npx\s+)?turbo\s+(?:run\s+)?(?:build|prepare)(?:\s|$)/.test(
