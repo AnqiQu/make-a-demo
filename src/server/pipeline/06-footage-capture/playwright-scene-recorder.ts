@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
@@ -11,6 +10,7 @@ import type {
   AgentHarnessWorkspaceHandle,
 } from "../../agent-harness/daytona/workspace.interface";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
+import { runCollectedCommand } from "../../shared/shell/run-collected-command";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import {
   CAPTURE_COMMAND_TIMEOUT_MS,
@@ -398,7 +398,7 @@ async function trimSceneClipWithFfmpeg(input: {
   startMs: number;
 }): Promise<{ durationSeconds: number }> {
   const durationSeconds = input.durationMs / 1000;
-  const result = await runCommand("ffmpeg", [
+  const result = await runCollectedCommand("ffmpeg", [
     "-y",
     "-i",
     input.rawTakePath,
@@ -432,7 +432,7 @@ async function trimSceneClipWithFfmpeg(input: {
 }
 
 async function probeVideoDurationSeconds(videoPath: string): Promise<number> {
-  const result = await runCommand("ffprobe", [
+  const result = await runCollectedCommand("ffprobe", [
     "-v",
     "error",
     "-show_entries",
@@ -480,31 +480,6 @@ function formatSceneFailure(
   return [summary, ...(details.length > 0 ? [details] : []), logsNote].join(
     "\n",
   );
-}
-
-async function runCommand(command: string, args: string[]) {
-  return await new Promise<{
-    exitCode: number | null;
-    stderr: string;
-    stdout: string;
-  }>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (exitCode) => {
-      resolve({ exitCode, stderr, stdout });
-    });
-  });
 }
 
 async function findSingleRemoteVideo(input: {
