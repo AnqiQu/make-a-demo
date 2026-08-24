@@ -305,7 +305,8 @@ export function createOfflineLifecycleCommand(input: {
     : manager === "npm" || manager === "pnpm"
       ? `${offline}${manager} run --if-present postinstall`
       : manager === "yarn" || manager === "bun"
-        ? `${manager === "yarn" && isBerry ? offline : ""}${manager} run postinstall`
+        ? // `offline` is already empty for classic yarn and bun.
+          `${offline}${manager} run postinstall`
         : undefined;
   const parts = [rebuild, postinstall].filter(
     (part): part is string => part !== undefined,
