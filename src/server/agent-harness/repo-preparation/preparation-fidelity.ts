@@ -8,7 +8,10 @@ import type {
   ValidationReport,
 } from "../schemas/artifacts";
 import { analyzeDemoGateUsage } from "./demo-gate-analysis";
-import type { PreparationWorkspaceDiff } from "./preparation-workspace-diff";
+import {
+  type PreparationWorkspaceDiff,
+  toRepoRelativePath,
+} from "./preparation-workspace-diff";
 
 const dependencyConfigurationNames = new Set([
   ".npmrc",
@@ -1350,8 +1353,4 @@ function isFrameworkConfigPath(path: string) {
     /^tsconfig[^/]*\.json$/i.test(name) ||
     name === ".env.example"
   );
-}
-
-function toRepoRelativePath(path: string) {
-  return path.replace(/^\/workspace\/repo\//, "").replace(/^\.\//, "");
 }
