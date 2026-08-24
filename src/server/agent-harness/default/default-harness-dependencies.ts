@@ -2481,16 +2481,12 @@ function hasOnlyPtyBootstrapOutput(result: {
   stderr: string;
   stdout: string;
 }): boolean {
-  return (
-    `${result.stderr}\n${result.stdout}`
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal ANSI escapes requires matching the ESC byte
-      .replaceAll(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
-      .split(/\r\n|\n|\r/)
-      .every((line) => {
-        const trimmed = line.trim();
-        return trimmed.length === 0 || ptyBootstrapLinePattern.test(trimmed);
-      })
-  );
+  return stripAnsi(`${result.stderr}\n${result.stdout}`)
+    .split(/\r\n|\n|\r/)
+    .every((line) => {
+      const trimmed = line.trim();
+      return trimmed.length === 0 || ptyBootstrapLinePattern.test(trimmed);
+    });
 }
 
 // Timeouts keep their own kill semantics; only a plain nonzero exit that
