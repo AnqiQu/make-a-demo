@@ -8490,6 +8490,91 @@ describe("createDefaultAgentHarnessDependencies", () => {
     ).toBe(true);
   });
 
+  it("stops counting heartbeats as agent activity once model silence passes the ten-minute bound", async () => {
+    // N174 (calcom, wave-20): after the first model output every heartbeat
+    // counted as activity again, so spoke-then-wedged attempts ran 19.8 and
+    // 8.4 minutes of model silence to their walls. The observer's grace
+    // window is sized so the 5-minute inactivity watchdog, firing one
+    // window after transport stops counting, lands the kill at ten minutes
+    // of model silence.
+    const observations: boolean[] = [];
+    let nowMs = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command.includes("cat") && command.includes("repair-advice.json")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({ kind: "continue" }),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(runInput) {
+          const filter = runInput.activityFilter;
+          if (filter !== undefined) {
+            observations.push(filter("[makeademo:alive] cpu 1\r\n"));
+            observations.push(filter('{"type":"session.created"}\r\n'));
+            nowMs = 5 * 60_000;
+            observations.push(filter("[makeademo:alive] cpu 2\r\n"));
+            nowMs = 5 * 60_000 + 1;
+            observations.push(filter("[makeademo:alive] cpu 3\r\n"));
+            nowMs = 6 * 60_000;
+            observations.push(filter('{"type":"part.updated"}\r\n'));
+          }
+          return { exitCode: 0, stderr: "", stdout: "strategy written" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: repoProfile(),
+    });
+
+    // The observer reads Date.now at attempt start, so the clock must be
+    // faked before the consultation launches the attempt.
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      await harness.dependencies.adviseRepairStrategy?.({
+        budgets: { bonusRounds: 0, fingerprintAttempts: 1, totalAttempts: 2 },
+        failureReport: {
+          ...validationReport("preparation-preflight", "failed"),
+          failureClassification: "start failure",
+        },
+        preparationManifest: preparationManifest(),
+        roundLedger: { rounds: [] },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(observations).toEqual([
+      // A beat before the model speaks never counts (N170).
+      false,
+      // The model's own output always counts.
+      true,
+      // A beat at five minutes of silence still counts: the grace window
+      // covers real thinking pauses and long silent tool calls.
+      true,
+      // Past the grace window a beat stops counting, so the watchdog's
+      // five-minute clock runs out at ten minutes of model silence.
+      false,
+      // The model speaking again revives the attempt.
+      true,
+    ]);
+  });
+
   it("feeds prior-run strategist memory to consultations", async () => {
     const workspaceWrites = new Map<string, string>();
     const memory = [

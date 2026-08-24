@@ -21,11 +21,15 @@ type ModelActivitySnapshot = {
  * `observe` is shaped for the workspace `activityFilter` seam: it consumes
  * one streamed chunk and returns whether the watchdog should count it as
  * activity. Implementations must never count CPU liveness beats or PTY
- * bootstrap echo before the first model output, must count everything once
- * the model has spoken (exactly the pre-N170 semantics), and must fail
- * open — an ambiguous chunk may earn an extra touch, never a starved one.
- * Agent-liveness beats count as model output by design: the plugin only
- * beats when OpenCode's event bus delivers model events.
+ * bootstrap echo before the first model output. Once the model has spoken,
+ * every chunk counts — except that with `postSpeechTransportGraceMs` set,
+ * a transport-only chunk counts only while the model's silence is within
+ * the grace window (N174: heartbeats fed two spoke-then-wedged calcom
+ * attempts to their walls); the model's own output always counts and
+ * reopens the window. Implementations must fail open — an ambiguous chunk
+ * may earn an extra touch, never a starved one. Agent-liveness beats count
+ * as model output by design: the plugin only beats when OpenCode's event
+ * bus delivers model events.
  */
 export type ModelActivityObserver = {
   observe: (chunk: string) => boolean;
@@ -48,6 +52,15 @@ const maxBufferedLineLength = 64 * 1024;
 
 export function createModelActivityObserver(options?: {
   now?: () => number;
+  /**
+   * After the model's first output, a transport-only chunk (beats, echo)
+   * counts as activity only while the model's silence is within this
+   * window. Unset keeps the pre-N174 semantics: every post-speech chunk
+   * counts. Callers size it so the inactivity watchdog, firing one window
+   * after transport stops counting, lands the kill at the intended
+   * model-silence bound.
+   */
+  postSpeechTransportGraceMs?: number;
 }): ModelActivityObserver {
   const now = options?.now ?? Date.now;
   let buffered = "";
@@ -56,20 +69,21 @@ export function createModelActivityObserver(options?: {
   let lastModelOutputAtMs: number | undefined;
   let modelOutputSeen = false;
 
-  const classifyLine = (line: string): void => {
+  const classifyLine = (line: string): boolean => {
     const trimmed = line.trim();
     if (trimmed.length === 0) {
-      return;
+      return false;
     }
     if (cpuBeatLinePattern.test(trimmed)) {
       cpuBeatCount += 1;
-      return;
+      return false;
     }
     if (shellEchoLinePattern.test(trimmed)) {
-      return;
+      return false;
     }
     modelOutputSeen = true;
     lastModelOutputAtMs = now();
+    return true;
   };
 
   return {
@@ -77,12 +91,13 @@ export function createModelActivityObserver(options?: {
       const text = chunk.replaceAll(ansiEscapePattern, "");
       const segments = (buffered + text).split(/\r\n|\n|\r/);
       buffered = segments.pop() ?? "";
+      let modelSpokeInChunk = false;
       for (const line of segments) {
         if (discardingOversizedTransportLine) {
           discardingOversizedTransportLine = false;
           continue;
         }
-        classifyLine(line);
+        modelSpokeInChunk = classifyLine(line) || modelSpokeInChunk;
       }
       if (discardingOversizedTransportLine) {
         buffered = "";
@@ -93,11 +108,22 @@ export function createModelActivityObserver(options?: {
         if (shellEchoLinePattern.test(buffered.trim())) {
           discardingOversizedTransportLine = true;
         } else {
-          classifyLine(buffered);
+          modelSpokeInChunk = classifyLine(buffered) || modelSpokeInChunk;
         }
         buffered = "";
       }
-      return modelOutputSeen;
+      if (!modelOutputSeen) {
+        return false;
+      }
+      if (modelSpokeInChunk) {
+        return true;
+      }
+      const graceMs = options?.postSpeechTransportGraceMs;
+      return (
+        graceMs === undefined ||
+        lastModelOutputAtMs === undefined ||
+        now() - lastModelOutputAtMs <= graceMs
+      );
     },
     snapshot(): ModelActivitySnapshot {
       return { cpuBeatCount, lastModelOutputAtMs, modelOutputSeen };

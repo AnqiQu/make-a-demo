@@ -89,6 +89,66 @@ describe("createModelActivityObserver", () => {
     });
   });
 
+  it("stops counting transport once model silence outlasts the grace window", () => {
+    // N174 (calcom, wave-20): after the first model output every heartbeat
+    // counted as activity again, so two spoke-then-wedged attempts ran 19.8
+    // and 8.4 minutes of model silence to their walls. With a grace window,
+    // transport keeps the attempt alive only while the model's silence is
+    // recent; past it, only the model's own output counts.
+    let nowMs = 0;
+    const observer = createModelActivityObserver({
+      now: () => nowMs,
+      postSpeechTransportGraceMs: 5 * 60_000,
+    });
+
+    expect(observer.observe("[makeademo:alive] cpu 1\r\n")).toBe(false);
+    expect(observer.observe('{"type":"session.created"}\r\n')).toBe(true);
+    nowMs = 5 * 60_000;
+    expect(observer.observe("[makeademo:alive] cpu 2\r\n")).toBe(true);
+    nowMs = 5 * 60_000 + 1;
+    expect(observer.observe("[makeademo:alive] cpu 3\r\n")).toBe(false);
+  });
+
+  it("revives transport counting when the model speaks after a long silence", () => {
+    let nowMs = 0;
+    const observer = createModelActivityObserver({
+      now: () => nowMs,
+      postSpeechTransportGraceMs: 5 * 60_000,
+    });
+
+    observer.observe('{"type":"session.created"}\r\n');
+    nowMs = 20 * 60_000;
+    expect(observer.observe("[makeademo:alive] cpu 1\r\n")).toBe(false);
+    expect(observer.observe('{"type":"message.part.updated"}\r\n')).toBe(true);
+    nowMs = 21 * 60_000;
+    expect(observer.observe("[makeademo:alive] cpu 2\r\n")).toBe(true);
+  });
+
+  it("counts a chunk that carries model output alongside stale transport", () => {
+    let nowMs = 0;
+    const observer = createModelActivityObserver({
+      now: () => nowMs,
+      postSpeechTransportGraceMs: 5 * 60_000,
+    });
+
+    observer.observe('{"type":"session.created"}\r\n');
+    nowMs = 30 * 60_000;
+    expect(
+      observer.observe(
+        '[makeademo:alive] cpu 9\r\n{"type":"message.part.updated"}\r\n',
+      ),
+    ).toBe(true);
+  });
+
+  it("counts every post-speech chunk when no grace window is configured", () => {
+    let nowMs = 0;
+    const observer = createModelActivityObserver({ now: () => nowMs });
+
+    observer.observe('{"type":"session.created"}\r\n');
+    nowMs = 60 * 60_000;
+    expect(observer.observe("[makeademo:alive] cpu 1\r\n")).toBe(true);
+  });
+
   it("fails open when a single line outgrows the buffer without a newline", () => {
     const observer = createModelActivityObserver();
 

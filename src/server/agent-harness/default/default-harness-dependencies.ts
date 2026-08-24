@@ -236,6 +236,12 @@ const misplacedPreparationManifestPath =
   "/workspace/repo/.makeademo/preparation-manifest.json";
 const openCodeConfigDirectory = "/tmp/makeademo/opencode";
 const openCodeInactivityTimeoutMs = 5 * 60_000;
+// N174: once the model has spoken, sustained model silence past this bound
+// kills the attempt even while heartbeats keep the stream busy. Twice the
+// pre-speech limit, because thinking pauses and long silent tool calls are
+// real (calcom's 19.8-minute silence ran to its wall; visibly working
+// attempts stay untouched).
+const openCodeModelSilenceKillMs = 10 * 60_000;
 const fidelityAdjudicationTimeoutMs = 10 * 60_000;
 const repairStrategyTimeoutMs = 3 * 60_000;
 const runTriageTimeoutMs = 3 * 60_000;
@@ -2343,7 +2349,22 @@ async function runLoggedOpenCode(input: {
   // N170: one observer per attempt separates the model's own output from
   // harness transport, so a launch that never speaks stops feeding the
   // inactivity watchdog and its termination log names the wedge shape.
-  const activityObserver = createModelActivityObserver();
+  // N174: after the model speaks, transport keeps the watchdog fed only
+  // within the grace window. The watchdog fires one inactivity window
+  // after transport stops counting, so the grace is sized to land the
+  // kill at the model-silence bound (with a 5-minute watchdog: beats
+  // count through minute 5 of silence, the kill lands at minute 10).
+  const inactivityTimeoutMs = input.input.inactivityTimeoutMs;
+  const activityObserver = createModelActivityObserver(
+    inactivityTimeoutMs === undefined
+      ? undefined
+      : {
+          postSpeechTransportGraceMs: Math.max(
+            0,
+            openCodeModelSilenceKillMs - inactivityTimeoutMs,
+          ),
+        },
+  );
   const activityEvidence = () => {
     const snapshot = activityObserver.snapshot();
     return {
