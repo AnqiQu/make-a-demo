@@ -1343,6 +1343,11 @@ describe("runAgentHarnessPipeline", () => {
       "explore:3",
       "capture:2",
     ]);
+    // The failed regrounding report must be visible in the stage ledger,
+    // not recorded as a passed stage just because exploreApp returned.
+    expect(
+      result.pipelineRunManifest.stageStatuses["locator-regrounding"],
+    ).toBe("failed");
   });
 
   it("stops a capture/static locator ping-pong with a combined diagnosis", async () => {

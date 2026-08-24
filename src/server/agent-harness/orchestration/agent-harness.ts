@@ -1184,6 +1184,7 @@ export async function runAgentHarnessPipeline(
             retryCount: captureRepairAttempts,
           });
           validationReports.push(regroundingValidation);
+          stageStatuses["locator-regrounding"] = regroundingValidation.status;
           await Promise.all([
             writeArtifact(
               dependencies,
