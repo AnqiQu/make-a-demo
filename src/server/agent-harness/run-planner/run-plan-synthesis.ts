@@ -1,3 +1,4 @@
+import { optionalString } from "../../shared/records/optional-string";
 import {
   type BrowserRuntimeScriptName,
   type RepoBrowserRuntimeCandidate,
@@ -10,6 +11,8 @@ import {
   createInstallCommand,
   createRunScriptCommand,
   isDevServerScriptBody,
+  isTaskRunnerTargetScript,
+  readCandidatePorts,
   readScriptPort,
 } from "./package-commands";
 import { readFrameworkDefaultPort } from "./runtime-target-resolution";
@@ -68,21 +71,26 @@ export function synthesizeRunPlan(
     target === undefined || startScript === undefined
       ? undefined
       : target.scripts[startScript];
+  // Port evidence is scoped to the selected start script (the same rule
+  // runtime-target-resolution documents): a port in a sibling script — a
+  // static `serve`, a storybook — says nothing about where this start
+  // command binds.
   const port =
-    (startScriptBody === undefined
+    (startScript === undefined || startScriptBody === undefined
       ? undefined
-      : readScriptPort(startScriptBody)) ??
-    target?.ports[0] ??
-    (target === undefined
-      ? undefined
-      : readFrameworkDefaultPort(Object.values(target.scripts).join("\n"))) ??
+      : (readScriptPort(startScriptBody) ??
+        readCandidatePorts({ [startScript]: startScriptBody })[0] ??
+        readFrameworkDefaultPort(startScriptBody))) ??
     repoProfile.candidatePorts[0] ??
     3000;
   const packageManager = target?.packageManager ?? repoProfile.packageManager;
   const startCommand =
     (startScript === undefined
       ? repoProfile.candidateStartCommands[0]
-      : createRunScriptCommand(packageManager, startScript)) ??
+      : startScriptBody !== undefined &&
+          isTaskRunnerTargetScript(startScriptBody)
+        ? `npx ${startScriptBody}`
+        : createRunScriptCommand(packageManager, startScript)) ??
     fallbackStartCommand(packageManager, port);
   const startsDevServer =
     startScriptBody === undefined
@@ -212,13 +220,4 @@ function fallbackStartCommand(
 ) {
   const runner = packageManager === "unknown" ? "npm" : packageManager;
   return `${runner} start -- --host 127.0.0.1 --port ${port}`;
-}
-
-function optionalString<K extends string>(
-  key: K,
-  value: string | undefined,
-): Partial<Record<K, string>> {
-  return value === undefined || value.trim().length === 0
-    ? {}
-    : ({ [key]: value } as Partial<Record<K, string>>);
 }

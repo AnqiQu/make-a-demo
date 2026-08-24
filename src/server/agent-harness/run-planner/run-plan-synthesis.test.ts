@@ -153,6 +153,95 @@ describe("synthesizeRunPlan", () => {
     expect(runPlan).not.toHaveProperty("buildCommand");
   });
 
+  it("scopes port evidence to the selected start script, never sibling scripts", () => {
+    const runPlan = synthesizeRunPlan({
+      authHints: [],
+      browserRuntimeCandidates: [
+        {
+          dir: "apps/web",
+          evidencePaths: ["apps/web/package.json", "apps/web/src/app/page.tsx"],
+          frameworks: ["next", "react"],
+          installDir: ".",
+          isWorkspace: true,
+          name: "@acme/web",
+          packageManager: "npm",
+          // The profiler unions ports across every runtime script, so the
+          // static preview server's 5000 lands here even though `next dev`
+          // binds the framework default.
+          ports: [5000],
+          scripts: { dev: "next dev", preview: "serve -l 5000 out" },
+        },
+      ],
+      candidateAppDirs: [".", "apps/web"],
+      candidateBuildCommands: [],
+      candidateInstallCommands: ["npm ci --no-audit"],
+      candidatePorts: [],
+      candidateStartCommands: [],
+      confidence: { assumptions: [], overall: 0.9 },
+      detectedFrameworks: ["next", "react"],
+      dockerHints: [],
+      envExamples: [],
+      externalServiceHints: [],
+      lockfiles: ["package-lock.json"],
+      packageManager: "npm",
+      packageScripts: {},
+      repoUrl: "https://github.com/example/app",
+      requiredEnvHints: [],
+      rootDir: "/workspace",
+      securityWarnings: [],
+      unsupportedReasons: [],
+      workspacePackages: [],
+      workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+    });
+
+    expect(runPlan.allowedPorts).toEqual([3000]);
+    expect(runPlan.expectedLocalUrl).toBe("http://127.0.0.1:3000");
+  });
+
+  it("invokes a task-runner start target through npx, not a package script", () => {
+    const runPlan = synthesizeRunPlan({
+      authHints: [],
+      browserRuntimeCandidates: [
+        {
+          dir: "apps/site",
+          evidencePaths: ["apps/site/package.json", "apps/site/src/main.tsx"],
+          frameworks: ["react"],
+          installDir: ".",
+          isWorkspace: true,
+          name: "acme-site",
+          packageManager: "npm",
+          ports: [4200],
+          // Synthesized from project.json by the profiler: no package.json
+          // script entry exists, so `npm run serve` cannot execute it.
+          scripts: { serve: "nx run acme-site:serve --port=4200" },
+        },
+      ],
+      candidateAppDirs: [".", "apps/site"],
+      candidateBuildCommands: [],
+      candidateInstallCommands: ["npm ci --no-audit"],
+      candidatePorts: [],
+      candidateStartCommands: [],
+      confidence: { assumptions: [], overall: 0.9 },
+      detectedFrameworks: ["react"],
+      dockerHints: [],
+      envExamples: [],
+      externalServiceHints: [],
+      lockfiles: ["package-lock.json"],
+      packageManager: "npm",
+      packageScripts: {},
+      repoUrl: "https://github.com/example/app",
+      requiredEnvHints: [],
+      rootDir: "/workspace",
+      securityWarnings: [],
+      unsupportedReasons: [],
+      workspacePackages: [],
+      workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+    });
+
+    expect(runPlan.startCommand).toBe("npx nx run acme-site:serve --port=4200");
+    expect(runPlan.allowedPorts).toEqual([4200]);
+  });
+
   it("locks a single browser workspace instead of the monorepo orchestrator", () => {
     const runPlan = synthesizeRunPlan({
       authHints: [],
