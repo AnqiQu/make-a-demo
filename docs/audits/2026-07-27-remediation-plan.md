@@ -10425,3 +10425,214 @@ invisible locally (N176).
 - ghost: koenig-lexical is the last failing
   admin-build task; watch whether the repair
   finds the prebuilt-assets path.
+
+## Addendum (2026-08-24, wave-21 — one wedged upload starved four runs' setup through the shared transfer limiter; the harness budget held, the queue was invisible: N177–N178)
+
+Batch matrix-2026-08-24T00-14-47-293Z, report
+matrix-report-2026-08-24T02-14-49-275Z. Four of
+eleven passed: homer (9.4m — recovered, clean
+pnpm install, no selector recurrence), conduit
+(7.4m, its fastest ever), excalidraw (20.5m, its
+fastest ever), ghostfolio (105.9m wall clock but
+a full pass — see below). Failures: midday
+(42.2m, REGRESSED), cyberchef (48.1m, REGRESSED,
+infra), calcom (92.1m, ceiling), directus
+(82.2m, N165 refusal), ghost (97.0m), outline
+(113.7m), twenty (94.0m).
+
+### The problem: a wedged transfer held the batch's only queue
+
+The headline numbers look like a slow batch;
+they are one broken sandbox. Cyberchef's archive
+upload hung against its submitted-code sandbox
+from 00:20 to 01:06 — five attempt windows of
+8–10 minutes each, an N161 wedged-target
+recreation (which fired correctly), and a second
+hang against the recreated target, then an
+honest fail-fast. All of it ran INSIDE the
+batch's shared bulk-transfer limiter lease. Four
+heavyweight runs queued behind it: twenty's log
+shows pipeline.started 00:22:05 and
+repo.clone.started 01:08:10 — forty-six silent
+minutes before its first byte of work — and
+outline, ghost, and ghostfolio show the same
+45–47-minute pre-harness gap (wave-20: every
+run's was under one minute). Two mitigations
+held: the harness deadline starts at harness
+start, so no queued run lost repair budget to
+the queue (ghostfolio passed at 105.9m wall
+clock with its full 90 minutes intact), and the
+limiter did protect the uplink for the runs
+that had it. What failed is that a transfer
+KNOWN to be retrying against a wedged target
+kept its lease for the entire retry-and-
+recreate arc, and that the queue is invisible —
+no event marks a run as waiting for a transfer
+slot, so the delay reads as silence. N177.
+Wave-7's uplink starvation was every run
+competing; wave-21's is one run monopolizing —
+the limiter fixed the first and created the
+second.
+
+### What wave-21 proved
+
+- N174 fired true: calcom's spoke-then-wedged
+  attempt (modelOutputSeen=true,
+  modelSilenceMs=563,149) was killed at roughly
+  nine minutes instead of running a 20-minute
+  wall — wave-20's identical shape cost twice
+  that. Calcom still died at the ceiling, but
+  the tax is shrinking wave over wave.
+- N176 live: every run's log opens with
+  strategist.memory-feed naming the entry count
+  ("will read 2 prior-run memory entries") —
+  this wave's audit needed no replay.
+- N161 validated again on real infra: the
+  wedged upload target was recreated once, the
+  recreation hung too, and the run failed fast
+  with the full arc in evidence instead of
+  hanging for hours.
+- Homer recovered (9.4m pass) with a clean
+  pinned install; no floating-selector
+  recurrence, so N175's flag saw no live
+  exercise yet.
+
+### Diagnoses
+
+- midday (42.2m, REGRESSED): the filtered
+  install returned — but declared from ROUND
+  ONE this time (bun install --frozen-lockfile
+  --filter=@midday/dashboard...), so N171's
+  within-run comparison had no green baseline
+  to diff against and fired zero times. Five
+  rounds of identical "install failure"
+  followed. The knowledge that midday's
+  wave-20 pass used the unfiltered install
+  exists only in the run digest's outcome
+  line — the digest does not carry the passing
+  lifecycle, so neither evidence nor strategist
+  could say "last pass used X". N178. (The
+  degraded sandbox — 58 fs.write-text retries —
+  may have colored the failure texts, but the
+  filtered install is deterministically broken
+  on this catalog workspace per wave-19.)
+- cyberchef (48.1m, REGRESSED): pure infra —
+  the wedged-upload arc above. Nothing
+  repo-level; wave-20's first-attempt FlowSpec
+  stands as the repo's real state.
+- calcom (92.1m, ceiling): the loop keeps
+  converging and keeps being taxed; one
+  nine-minute kill this wave (down from forty
+  wasted minutes in wave-20). The remaining
+  gap is round count, not any single stall.
+- directus (82.2m, N165 refusal at 9.2m
+  remaining vs 12.4m fastest cycle): honest
+  refusal, deep run. Cycles are slowing
+  (12.4m fastest vs 5.2m in calcom's loop) —
+  directus's repair rounds carry heavy
+  builds.
+- twenty (94.0m): the identical yarn-run-build
+  loop, third consecutive wave — rounds 1–3
+  declared build='yarn run build' and failed
+  "unbuilt workspace dependency"
+  (twenty-shared this time). The graph-build
+  memo was IN the memory fed to this run's
+  triage, and the triage produced good
+  strategy hints (dev-serve over the 8-GiB
+  build, no backend provisioning) that do not
+  carry the memo's lesson — round-one
+  preparation only hears the triage, so the
+  lesson died in synthesis. The M2 prompt
+  should ask the triage to reconcile its
+  hints against memory's failure notes
+  explicitly; folded into N178's cross-run
+  evidence rather than a separate item, since
+  the passing-lifecycle record is the same
+  missing substrate.
+- ghost (97.0m; 46 queued minutes, harness
+  50.3m): the start command now exits 0
+  without ever listening on 2368 — same
+  admin-build frontier, new wrinkle (the
+  lifecycle completes instead of serving).
+- outline (113.7m; 45 queued minutes, harness
+  68.2m): identical seed-versus-proof drift as
+  wave-20 ("# Release checklist" absent from
+  the seeded document). Two waves of the same
+  drift after a clean pass; the digest carries
+  outline's passing shape once N178 lands.
+
+### N177 (High, infra) — a wedged transfer may not hold the batch's queue, and waiting must be visible
+
+Two changes at the bulk-transfer limiter seam:
+(1) a transfer that enters its retry path
+releases the lease between attempt windows and
+re-acquires before the next attempt, so a
+wedged target costs its own run the retry time
+but never serializes the batch behind it —
+the N161 recreate-and-retry arc especially must
+not run inside a held lease; (2) acquiring a
+lease that is not immediately available emits a
+queue event (and a completion event with the
+waited duration), so a 46-minute silent gap
+reads as "queued behind N transfers" in the
+run's own log. The harness-deadline insulation
+that saved ghostfolio stays exactly as is.
+
+### N178 (High, bugfix) — the run digest must remember the lifecycle that passed
+
+Extend the strategist run-end digest with the
+resolved lifecycle of a passing run (install,
+build, start commands, appDir) and surface it
+in two places: (1) deterministic round-one
+evidence — when a lifecycle command fails
+validation and the last passing digest for
+this repository used a different form of the
+same command, say so, N171-style ("the last
+passing run installed with X; this run
+declares Y"); (2) the M2 triage prompt — ask
+it to reconcile its preparation hints against
+memory's recorded failures and passing
+lifecycle, so a lesson like twenty's
+graph-build memo survives synthesis into
+round-one hints. Midday's wave-21 regression
+is the regression fixture: five rounds blind
+to a fact one JSONL line away.
+
+### Meta-orchestrator audit (seventh live wave)
+
+Memory-feed events made this the first audit
+with zero replay archaeology. The layer's
+limits are now the findings: memory reached
+every consultation, but round-one preparation
+hears only the triage, and the triage's
+synthesis dropped the one memo that mattered
+(twenty); the digest lacks the passing
+lifecycle that would have saved midday
+outright (N178 covers both). Strategist
+consultations were sparse and honest;
+directus's refusal arithmetic and calcom's
+shrinking stall tax both trace to landed
+N-items doing their jobs. The system's
+bottleneck has moved decisively from evidence
+quality inside a round to knowledge transport
+BETWEEN runs and INTO round one.
+
+### Watchlist (updated)
+
+- cyberchef: infra victim; expect a normal pass
+  on rerun. If uploads wedge again on the same
+  snapshot, suspect the snapshot, not the
+  batch.
+- midday: N178's round-one evidence is its
+  item; the memo already names the trap.
+- twenty: N178's triage reconciliation is its
+  item; the memo already names the fix.
+- calcom: watch the ceiling; every landed tax
+  cut has moved it closer.
+- outline: same drift twice; N178 gives the
+  digest its passing shape to cite.
+- ghost: exit-0-without-listening is a new
+  evidence question — the readiness failure
+  should say the lifecycle ENDED rather than
+  quote a connection refusal, if the process
+  exit is already in hand.
