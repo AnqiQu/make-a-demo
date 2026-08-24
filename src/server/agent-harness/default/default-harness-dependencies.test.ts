@@ -3992,6 +3992,46 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(runs).toBe(2);
   });
 
+  it("classifies a zero-output agent exit as infrastructure when the bootstrap echo carries an OSC title", async () => {
+    // Shells routinely retitle the terminal with an OSC sequence
+    // (ESC ] 0 ; title BEL) before the prompt. Those bytes are transport
+    // noise like any CSI escape — a nonzero exit behind them is still a
+    // launch failure, never an artifact-quality failure.
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      agentLaunchRetryDelayMs: 1,
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: `\u001b]0;MakeADemo Sandbox\u0007${ptyBootstrapNoise()}`,
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const error: unknown = await harness.dependencies
+      .prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect(isAgentHarnessInfrastructureError(error)).toBe(true);
+    expect(runs).toBe(2);
+  });
+
   it("classifies a zero-output agent exit as infrastructure under heredoc-transport bootstrap noise", async () => {
     // The sealed PTY transport ships the command as a heredoc script, so
     // bootstrap echo can carry script-body text on continuation prompts
@@ -9963,6 +10003,92 @@ describe("createDefaultAgentHarnessDependencies", () => {
       ).toBeLessThan(
         commands.findIndex((command) => command.includes("bun run build:app")),
       );
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rebuilds offline when the failing build command was backend-resolved", async () => {
+    // The manifest declares `bun run build:app`, but runtime resolution pins
+    // the selected workspace's own `bun run build`, so the first pass's
+    // build failure reports the resolved spelling. The rebuild decision must
+    // compare against the resolved command — comparing against the
+    // agent-authored spelling silently skips the offline rebuild.
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-resolved-build-hydration-"),
+    );
+    const assetUrl = "https://fonts.example.com/resolved.woff2";
+    let buildRuns = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("bun run build")) {
+          buildRuns += 1;
+          return buildRuns === 1
+            ? {
+                exitCode: 1,
+                stderr: `${runtimeNetworkMarker}{"direction":"outbound","hasCredentials":false,"host":"fonts.example.com","method":"GET","phase":"runtime","resourceType":"font","url":"${assetUrl}"}`,
+                stdout: "",
+              }
+            : { exitCode: 0, stderr: "", stdout: "built" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return { running: true, stderr: "", stdout: "ready" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode("font"),
+        contentType: "font/woff2",
+        headers: {},
+        status: 200,
+      }),
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const base = preparationManifest();
+      const report = await harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...base,
+          appDir: "apps/web",
+          buildCommandUsed: "bun run build:app",
+          productContext: {
+            ...base.productContext,
+            featureInventory: base.productContext.featureInventory.map(
+              (feature) => ({
+                ...feature,
+                sourcePaths: ["apps/web/src/App.tsx"],
+              }),
+            ),
+          },
+        },
+        repoProfile: {
+          ...repoProfile(),
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              isWorkspace: true,
+              name: "@acme/web",
+              ports: [3000],
+              scripts: {
+                build: "vite build",
+                "build:app": "vite build --mode app",
+                preview: "vite preview",
+              },
+            },
+          ],
+        },
+        runPlan: runPlan(),
+        workspace,
+      });
+
+      expect(report).toMatchObject({ status: "passed" });
+      expect(buildRuns).toBe(2);
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
     }

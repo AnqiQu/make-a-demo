@@ -30,6 +30,7 @@ import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-lo
 import { withCpuLivenessHeartbeat } from "../../shared/shell/cpu-liveness";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import { stripAnsi, stripAnsiFileProgram } from "../../shared/text/strip-ansi";
 import {
   hasAuthWallRouteShape,
@@ -93,11 +94,11 @@ import {
   readPatchSectionText,
 } from "../repo-preparation/preparation-fidelity";
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
+import { toRepoRelativePath } from "../repo-preparation/preparation-workspace-diff";
 import {
   assertPreparedFeatureInventory,
-  countNormalizedFeatures,
   normalizeFeature,
-  readFeatureCountDifference,
+  readFeatureCoverageViolation,
 } from "../repo-preparation/prepared-feature-inventory";
 import { synthesizeRunPlan } from "../run-planner/run-plan-synthesis";
 import {
@@ -545,7 +546,7 @@ export async function createDefaultAgentHarnessDependencies(
         }
         const attempt = attemptsByUrl.get(url);
         externalResourceHydrationOutcomes.push({
-          error: readUnknownErrorMessage(error),
+          error: readErrorMessage(error),
           outcome: reason,
           pass,
           phase: attempt?.phase ?? "browser",
@@ -558,7 +559,7 @@ export async function createDefaultAgentHarnessDependencies(
           url,
         });
         await options.logger?.warn({
-          error: readUnknownErrorMessage(error),
+          error: readErrorMessage(error),
           event: "external-resource.hydration.failed",
           reason,
           stage,
@@ -673,6 +674,14 @@ export async function createDefaultAgentHarnessDependencies(
       });
     const readUncachedAttempts = (report: ValidationReport) =>
       readUncachedExternalResourceAttempts(report.blockedNetworkAttempts);
+    // A failed build reports the backend-resolved command, not the
+    // agent-authored manifest spelling, so the rebuild decision below must
+    // compare against the same resolution the validator applies.
+    const resolvedBuildCommand = resolvePreparationRuntime({
+      preparationManifest: input.preparationManifest,
+      repoProfile: input.repoProfile,
+      ...(input.runPlan === undefined ? {} : { runPlan: input.runPlan }),
+    }).preparationManifest.buildCommandUsed;
 
     let buildApp = true;
     let initialRun = true;
@@ -692,7 +701,7 @@ export async function createDefaultAgentHarnessDependencies(
       );
       buildApp =
         report.attemptedCommand !== undefined &&
-        report.attemptedCommand === input.preparationManifest.buildCommandUsed;
+        report.attemptedCommand === resolvedBuildCommand;
       if (hydration.addedResources > 0) continue;
       const remainingAttempts = readUncachedAttempts(report);
       return remainingAttempts.length === 0
@@ -749,7 +758,7 @@ export async function createDefaultAgentHarnessDependencies(
         );
       } catch (error) {
         await options.logger?.warn({
-          error: readUnknownErrorMessage(error),
+          error: readErrorMessage(error),
           event: "external-resource.runtime-attempts.unavailable",
         });
       }
@@ -1329,7 +1338,7 @@ export async function createDefaultAgentHarnessDependencies(
       } catch (error) {
         await options.logger?.error({
           durationMs: Date.now() - patchStartedAt,
-          error: readUnknownErrorMessage(error),
+          error: readErrorMessage(error),
           event: "preparation.diff.patch.failed",
           timeoutMs: preparationDiffCommandTimeoutMs,
         });
@@ -1344,9 +1353,7 @@ export async function createDefaultAgentHarnessDependencies(
     },
     async captureWorkspaceDiff({ workspace }) {
       return findScriptWritingContentChanges({
-        after: await readWorkspaceContentSnapshot(workspace, {
-          includeMakeADemoArtifacts: false,
-        }),
+        after: await readWorkspaceContentSnapshot(workspace),
         before: scriptWritingBaseline,
       });
     },
@@ -1505,25 +1512,12 @@ export async function createDefaultAgentHarnessDependencies(
       // against an assert-free catalog burns attempts on an impossible task.
       // The wall is exploration/catalog quality; fail there before the first
       // agent attempt.
-      const groundableFeatureIds = readGroundableFeatureIds(
-        preparationManifest.productContext.featureInventory.map(
-          (feature) => feature.id,
-        ),
-        {
-          actionCatalog,
-          allowedAuthWallFeatureIds: new Set(
-            preparationManifest.productContext.featureInventory
-              .filter((feature) =>
-                isExplicitAuthenticationFeature(
-                  feature,
-                  demoBrief.keyProductFeatures ?? [],
-                ),
-              )
-              .map(({ id }) => id),
-          ),
-          authWallRoutes: new Set(appMap.loginOrAuthWalls),
-        },
-      );
+      const { groundableFeatureIds } = readManifestGroundability({
+        actionCatalog,
+        authWallRoutes: new Set(appMap.loginOrAuthWalls),
+        demoBrief,
+        preparationManifest,
+      });
       if (groundableFeatureIds.length === 0) {
         throw new Error(
           "Flow Planning cannot start: no prepared feature has a tagged visible assertion in the ActionCatalog outside login/auth walls, so no valid FlowSpec exists. Repair App Exploration or the ActionCatalog so at least one feature carries assert evidence.",
@@ -1994,7 +1988,7 @@ export async function createDefaultAgentHarnessDependencies(
       repoProfile,
       workspace,
     }) {
-      await writeScriptContracts(workspace, trustedStaticImageAssetIds);
+      await writeScriptContracts(workspace);
       await writeWorkspaceJson(
         workspace,
         artifactPaths.actionCatalog,
@@ -2019,9 +2013,7 @@ export async function createDefaultAgentHarnessDependencies(
           : artifactPaths.staticScriptContract,
         failureReport,
       );
-      scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace, {
-        includeMakeADemoArtifacts: false,
-      });
+      scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace);
       const demoScript = await runAgentArtifactStage({
         artifactPath: DEMO_SCRIPT_OUTPUT_PATH,
         displayName: () => "Script Repair",
@@ -2293,7 +2285,7 @@ export async function createDefaultAgentHarnessDependencies(
       repoProfile,
       workspace,
     }) {
-      await writeScriptContracts(workspace, trustedStaticImageAssetIds);
+      await writeScriptContracts(workspace);
       await writeWorkspaceJson(
         workspace,
         artifactPaths.actionCatalog,
@@ -2312,9 +2304,7 @@ export async function createDefaultAgentHarnessDependencies(
         artifactPaths.repoProfile,
         repoProfile,
       );
-      scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace, {
-        includeMakeADemoArtifacts: false,
-      });
+      scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace);
       const demoScript = await runAgentArtifactStage({
         artifactPath: DEMO_SCRIPT_OUTPUT_PATH,
         displayName: (attempt) =>
@@ -2515,16 +2505,12 @@ function hasOnlyPtyBootstrapOutput(result: {
   stderr: string;
   stdout: string;
 }): boolean {
-  return (
-    `${result.stderr}\n${result.stdout}`
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal ANSI escapes requires matching the ESC byte
-      .replaceAll(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
-      .split(/\r\n|\n|\r/)
-      .every((line) => {
-        const trimmed = line.trim();
-        return trimmed.length === 0 || ptyBootstrapLinePattern.test(trimmed);
-      })
-  );
+  return stripAnsi(`${result.stderr}\n${result.stdout}`)
+    .split(/\r\n|\n|\r/)
+    .every((line) => {
+      const trimmed = line.trim();
+      return trimmed.length === 0 || ptyBootstrapLinePattern.test(trimmed);
+    });
 }
 
 // Timeouts keep their own kill semantics; only a plain nonzero exit that
@@ -3533,15 +3519,12 @@ async function validateResolvedSubmittedCodeRuntime(
           attemptedCommand: step.command,
           classification: step.classification,
           exitCode: result.exitCode,
-          logsSummary: `${
-            failureEvidence.killed
-              ? `The declared ${plan.service} ${step.kind} command was Killed against the freshly provisioned service`
-              : `The declared ${plan.service} ${step.kind} command failed against the freshly provisioned service`
-          }: ${failureEvidence.causeLine}${
-            failureEvidence.excerpt.length === 0
-              ? ""
-              : `\nCommand output:\n${failureEvidence.excerpt}`
-          }`,
+          logsSummary: formatCommandFailureSummary(
+            `The declared ${plan.service} ${step.kind} command ${
+              failureEvidence.killed ? "was Killed" : "failed"
+            } against the freshly provisioned service`,
+            failureEvidence,
+          ),
           manifest,
           stage,
           stderr: result.stderr,
@@ -3597,7 +3580,7 @@ async function validateResolvedSubmittedCodeRuntime(
         stdout: buildResult.stdout,
       });
       const buildDiskPressure = readDiskPressureEvidence(
-        `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`,
+        buildOutput,
         buildFailureEvidence.excerpt,
       );
       const buildHints = [
@@ -3864,7 +3847,7 @@ function inspectUnbuiltWorkspacePackages(
   )) {
     const rawPath = match[1];
     if (rawPath === undefined) continue;
-    const path = rawPath.replace(/^\/workspace\/repo\//, "");
+    const path = toRepoRelativePath(rawPath);
     if (path.startsWith("/") || path.includes("node_modules/")) continue;
     missingAssetPaths.push(path);
     for (const [name, workspacePackage] of packagesByName) {
@@ -4121,11 +4104,7 @@ function readMissingBuildOutputEntry(input: {
 }
 
 function normalizeSubmittedRepoPath(value: string): string | undefined {
-  const unprefixed = value
-    .trim()
-    .replace(/^file:\/\//, "")
-    .replace(/^\/workspace\/repo\//, "")
-    .replace(/^\.\//, "");
+  const unprefixed = toRepoRelativePath(value.trim().replace(/^file:\/\//, ""));
   if (
     unprefixed.length === 0 ||
     unprefixed.startsWith("/") ||
@@ -4341,9 +4320,7 @@ function readReconciledLockfilePaths(input: {
   installDirectory: string;
   lockfiles: string[];
 }): string[] {
-  const manager = /^(?:corepack\s+)?(bun|npm|pnpm|yarn)\b/.exec(
-    input.installCommand.trim(),
-  )?.[1];
+  const manager = parseInstallCommand(input.installCommand).packageManager;
   const expectedNames: Record<string, string[]> = {
     bun: ["bun.lock", "bun.lockb"],
     npm: ["package-lock.json"],
@@ -5391,6 +5368,47 @@ function isReadinessProbeExecutionFailure(
   );
 }
 
+/**
+ * The one manifest-level groundability read shared by Flow Planning's start
+ * gate and the FlowSpec validator: inventory-ordered groundable feature ids
+ * plus the explicit-authentication feature ids whose auth-wall evidence
+ * stays admissible. Both gates must agree or a plannable feature can be
+ * rejected at validation (and vice versa).
+ */
+function readManifestGroundability(input: {
+  actionCatalog: ActionCatalog;
+  authWallRoutes: ReadonlySet<string>;
+  demoBrief: { keyProductFeatures?: string[] };
+  preparationManifest: PreparationManifest;
+}): {
+  explicitAuthenticationFeatureIds: Set<string>;
+  groundableFeatureIds: string[];
+} {
+  const featureInventory =
+    input.preparationManifest.productContext.featureInventory;
+  const explicitAuthenticationFeatureIds = new Set(
+    featureInventory
+      .filter((feature) =>
+        isExplicitAuthenticationFeature(
+          feature,
+          input.demoBrief.keyProductFeatures ?? [],
+        ),
+      )
+      .map(({ id }) => id),
+  );
+  return {
+    explicitAuthenticationFeatureIds,
+    groundableFeatureIds: readGroundableFeatureIds(
+      featureInventory.map((feature) => feature.id),
+      {
+        actionCatalog: input.actionCatalog,
+        allowedAuthWallFeatureIds: explicitAuthenticationFeatureIds,
+        authWallRoutes: input.authWallRoutes,
+      },
+    ),
+  };
+}
+
 function assertFlowSpecGrounded(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
@@ -5426,22 +5444,17 @@ function assertFlowSpecGrounded(input: {
     ]),
   );
   const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
-  const explicitAuthenticationFeatureIds = new Set(
-    input.preparationManifest.productContext.featureInventory
-      .filter((feature) =>
-        isExplicitAuthenticationFeature(feature, requestedFeatures),
-      )
-      .map(({ id }) => id),
-  );
+  const { explicitAuthenticationFeatureIds, groundableFeatureIds } =
+    readManifestGroundability({
+      actionCatalog: input.actionCatalog,
+      authWallRoutes,
+      demoBrief: input.demoBrief,
+      preparationManifest: input.preparationManifest,
+    });
   const inventoryIds =
     input.preparationManifest.productContext.featureInventory.map(
       (feature) => feature.id,
     );
-  const groundableFeatureIds = readGroundableFeatureIds(inventoryIds, {
-    actionCatalog: input.actionCatalog,
-    allowedAuthWallFeatureIds: explicitAuthenticationFeatureIds,
-    authWallRoutes,
-  });
   const groundableSet = new Set(groundableFeatureIds);
   const expectedFeatureCount = Math.min(3, groundableFeatureIds.length);
   const isAuthDegradedForFeature = (
@@ -5819,23 +5832,14 @@ function assertExactRequestedFeatureCoverage(
   requestedFeatures: string[],
   coveredFeatures: string[],
 ): void {
-  const requested = countNormalizedFeatures(requestedFeatures);
-  const covered = countNormalizedFeatures(coveredFeatures);
-  const missing = readFeatureCountDifference(requested, covered);
-  const unexpected = readFeatureCountDifference(covered, requested);
-  if (missing.length === 0 && unexpected.length === 0) {
-    return;
-  }
-
-  throw new Error(
-    [
-      "FlowSpec must cover every requested demo feature exactly once.",
-      ...(missing.length === 0 ? [] : [`Missing: ${missing.join(", ")}.`]),
-      ...(unexpected.length === 0
-        ? []
-        : [`Unexpected: ${unexpected.join(", ")}.`]),
-    ].join(" "),
+  const coverageViolation = readFeatureCoverageViolation(
+    requestedFeatures,
+    coveredFeatures,
+    "FlowSpec must cover every requested demo feature exactly once.",
   );
+  if (coverageViolation !== undefined) {
+    throw new Error(coverageViolation);
+  }
 }
 
 function wait(delayMs: number): Promise<void> {
@@ -5844,7 +5848,6 @@ function wait(delayMs: number): Promise<void> {
 
 async function readWorkspaceContentSnapshot(
   workspace: AgentHarnessWorkspace,
-  options: { includeMakeADemoArtifacts?: boolean } = {},
 ): Promise<ScriptWritingContentSnapshot> {
   const result = await workspace.execute(
     `bash -lc ${shellQuote(
@@ -5859,11 +5862,6 @@ async function readWorkspaceContentSnapshot(
         "}",
         `cd ${shellQuote(workspaceRepoDirectory)}`,
         'git ls-files -co -z -x node_modules -x .opencode -x .pnpm-store -x .yarn -x .npm -x .bun -x .turbo -x .cache | while IFS= read -r -d "" relative; do fingerprint_file "$PWD/$relative"; done',
-        ...(options.includeMakeADemoArtifacts === false
-          ? []
-          : [
-              `if test -d ${shellQuote(makeADemoDirectory)}; then find ${shellQuote(makeADemoDirectory)} \\( -type f -o -type l \\) -print0 | sort -z | while IFS= read -r -d "" path; do fingerprint_file "$path"; done; fi`,
-            ]),
       ].join("\n"),
     )}`,
     { timeoutMs: preparationDiffCommandTimeoutMs },
@@ -5890,8 +5888,7 @@ async function readWorkspaceContentSnapshot(
     if (
       path === undefined ||
       fingerprint === undefined ||
-      (!path.startsWith(`${workspaceRepoDirectory}/`) &&
-        !path.startsWith(`${makeADemoDirectory}/`))
+      !path.startsWith(`${workspaceRepoDirectory}/`)
     ) {
       throw new Error(
         "Script Writing workspace fingerprint output was unsafe.",
@@ -5997,14 +5994,10 @@ async function readPreparationWorkspaceDiff(
 }
 
 function createPreparationDiffOperationError(error: unknown): Error {
-  const detail = readUnknownErrorMessage(error);
+  const detail = readErrorMessage(error);
   return new Error(`Preparation workspace patch capture failed: ${detail}`, {
     cause: error,
   });
-}
-
-function readUnknownErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 // `git status` cannot rank changed files by relevance, so the parse probe
@@ -6116,7 +6109,7 @@ async function writeWorkspaceText(
     await workspace.writeTextFile(path, contents);
   } catch (error) {
     throw new Error(
-      `Failed to write workspace artifact ${path} through filesystem transfer (${Buffer.byteLength(contents)} bytes): ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to write workspace artifact ${path} through filesystem transfer (${Buffer.byteLength(contents)} bytes): ${readErrorMessage(error)}`,
       { cause: error },
     );
   }
@@ -6124,7 +6117,6 @@ async function writeWorkspaceText(
 
 async function writeScriptContracts(
   workspace: AgentHarnessWorkspace,
-  trustedStaticImageAssetIds: readonly string[],
 ): Promise<void> {
   await writeWorkspaceJson(
     workspace,
@@ -6263,9 +6255,7 @@ async function tryReadPreparationManifest(
     return {
       candidate: json.value,
       candidateFingerprint: json.candidateFingerprint,
-      error: `Invalid PreparationManifest in ${path}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      error: `Invalid PreparationManifest in ${path}: ${readErrorMessage(error)}`,
       failureClassification: "invalid-schema",
       ok: false,
     };
@@ -6304,7 +6294,7 @@ async function persistExplorationEvidence(input: {
     });
   } catch (error) {
     await input.logger?.warn({
-      error: readUnknownErrorMessage(error),
+      error: readErrorMessage(error),
       event: "exploration.evidence.unavailable",
     });
   }
@@ -6633,10 +6623,6 @@ function readUnreachableDependencyHost(result: {
   } catch {
     return undefined;
   }
-}
-
-function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

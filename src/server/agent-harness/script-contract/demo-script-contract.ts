@@ -17,6 +17,7 @@ import {
   demoScriptLimits,
   parseDemoScript,
 } from "../../pipeline/06-footage-capture/demo-script.schema";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import {
   type ActionCatalog,
   DEMO_SCRIPT_OUTPUT_PATH,
@@ -504,7 +505,7 @@ export function validateDemoScriptCandidateContract(input: {
       browserObservations: [],
       consoleErrors: [],
       failureClassification: "script contract failure",
-      logsSummary: error instanceof Error ? error.message : String(error),
+      logsSummary: readErrorMessage(error),
       networkAttempts: [],
       pageErrors: [],
       retryCount: 0,

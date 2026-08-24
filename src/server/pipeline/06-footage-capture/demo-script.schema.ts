@@ -1,4 +1,10 @@
 import {
+  assertRecord,
+  readBoolean,
+  readNonEmptyString,
+  readPositiveNumber,
+} from "../../shared/artifact-storage/persisted-record-readers";
+import {
   type BrowserAction,
   compileBrowserActionPlan,
   readBrowserActions,
@@ -656,59 +662,6 @@ function assertOnlyKeys(
       throw new Error(`${path} contains unsupported property ${key}`);
     }
   }
-}
-
-function assertRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} must be an object`);
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function readNonEmptyString(
-  record: Record<string, unknown>,
-  key: string,
-  parentPath?: string,
-) {
-  const path = parentPath ? `${parentPath}.${key}` : key;
-  const value = record[key];
-
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${path} must be a non-empty string`);
-  }
-
-  return value;
-}
-
-function readPositiveNumber(
-  record: Record<string, unknown>,
-  key: string,
-  parentPath?: string,
-) {
-  const path = parentPath ? `${parentPath}.${key}` : key;
-  const value = record[key];
-
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`${path} must be a positive number`);
-  }
-
-  return value;
-}
-
-function readBoolean(
-  record: Record<string, unknown>,
-  key: string,
-  parentPath?: string,
-) {
-  const path = parentPath ? `${parentPath}.${key}` : key;
-  const value = record[key];
-
-  if (typeof value !== "boolean") {
-    throw new Error(`${path} must be a boolean`);
-  }
-
-  return value;
 }
 
 function readApprovedFontFamily(

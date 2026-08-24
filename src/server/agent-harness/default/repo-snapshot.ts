@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir, readlink, rm, stat } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { createGunzip } from "node:zlib";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import {
   containsPrivateKeyMaterial,
   isCredentialRegistryConfig,
@@ -108,24 +109,18 @@ const contentInspectionExcludedDirectoryNames = new Set([
 ]);
 const privateKeyScanTailLength = 128;
 const privateKeySentinel = "-----BEGIN PRIVATE KEY-----";
+// Only names not already admitted by isEnvironmentFileName or a readable
+// extension belong here: lockfiles, workspace config, and the compose files
+// that carry the data-service declarations servicesRequired detection reads
+// (N122).
 const readableFileNames = new Set([
-  ".env",
-  ".env.example",
-  "astro.config.mjs",
   "bun.lock",
-  // Compose files carry the data-service declarations servicesRequired
-  // detection reads (N122).
   "compose.yaml",
   "compose.yml",
   "docker-compose.yaml",
   "docker-compose.yml",
-  "package-lock.json",
-  "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
-  "project.json",
-  "vite.config.js",
-  "vite.config.ts",
   "yarn.lock",
 ]);
 const readableExtensions = new Set([
@@ -199,7 +194,7 @@ export async function readGithubRepoSnapshot(
       // git's whole stderr, whose trailing fatal: line names the real cause
       // (calcom and ghostfolio's mid-transfer exit-128s, 2026-08-13T23-23).
       await input.log("repo.clone.failed", {
-        error: error instanceof Error ? error.message : String(error),
+        error: readErrorMessage(error),
       });
       throw error;
     }

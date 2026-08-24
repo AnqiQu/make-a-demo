@@ -1,3 +1,4 @@
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import type { DependencyInstallCommandResult } from "../tools/dependency-install-gate";
 
 export type AgentHarnessWorkspaceCommandResult = DependencyInstallCommandResult;
@@ -139,7 +140,7 @@ export class AgentHarnessSandboxUnavailableError extends Error {
   readonly sandboxId: string;
 
   constructor(sandboxId: string, cause: unknown) {
-    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    const causeMessage = readErrorMessage(cause);
     super(
       `Daytona sandbox ${sandboxId} remained unavailable after restart: ${causeMessage}`,
       { cause },

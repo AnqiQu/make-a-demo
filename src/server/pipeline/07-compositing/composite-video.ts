@@ -14,6 +14,7 @@ import {
   assertRecord,
   readBoolean,
   readNonEmptyString,
+  readPositiveNumber,
 } from "../../shared/artifact-storage/persisted-record-readers";
 import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
 import { createDemoScriptDigest } from "../06-footage-capture/demo-script-identity";
@@ -691,21 +692,6 @@ function readSha256Digest(
   if (!/^sha256:[a-f0-9]{64}$/.test(value)) {
     throw new Error(`${parentPath}.${key} must be a SHA-256 digest`);
   }
-  return value;
-}
-
-function readPositiveNumber(
-  record: Record<string, unknown>,
-  key: string,
-  parentPath?: string,
-) {
-  const path = parentPath ? `${parentPath}.${key}` : key;
-  const value = record[key];
-
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`${path} must be a positive number`);
-  }
-
   return value;
 }
 

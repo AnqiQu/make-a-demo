@@ -1,3 +1,4 @@
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import { readStderrErrorSignal } from "../app-explorer/stderr-error-signal";
 import type { FeatureVerdict, ValidationReport } from "../schemas/artifacts";
 
@@ -55,17 +56,15 @@ export function createPreparationFallbackArtifact(input: {
       break;
     }
   }
-  const failedReports =
-    latestFailedReport === undefined ? [] : [latestFailedReport];
   const blockers =
-    failedReports.length === 0
+    latestFailedReport === undefined
       ? [
           {
             suggestedRepairHints: [],
             summary: readErrorMessage(input.error),
           },
         ]
-      : failedReports.map((report) => {
+      : [latestFailedReport].map((report) => {
           const stderrErrorSignal = readStderrErrorSignal(
             report.stderrExcerpts.join("\n"),
           );
@@ -138,8 +137,4 @@ export function createPreparationFallbackArtifact(input: {
     runId: input.runId,
     schemaVersion: PREPARATION_FALLBACK_SCHEMA_VERSION,
   };
-}
-
-function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

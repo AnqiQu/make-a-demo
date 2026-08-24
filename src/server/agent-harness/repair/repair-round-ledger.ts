@@ -1,3 +1,4 @@
+import { toRepoRelativePath } from "../repo-preparation/preparation-workspace-diff";
 import type { RepairAdvice } from "../schemas/repair-advice.schema";
 
 type RepairLifecycle = {
@@ -119,9 +120,7 @@ function readCausalHeadline(logsSummary: string): string {
 
 function readTopLevelDirs(paths: readonly string[]): string[] {
   const directories = paths.map((path) => {
-    const relativePath = path
-      .replace(/^\/workspace\/repo\/?/, "")
-      .replace(/^\.\//, "");
+    const relativePath = toRepoRelativePath(path);
     const segments = relativePath
       .split("/")
       .filter((segment) => segment !== "");

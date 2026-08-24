@@ -348,16 +348,8 @@ async function runObservedCommand(
   });
   try {
     const result = await run();
-    const durationMs = Date.now() - startedAt;
     await emitValidationEventBestEffort(input, {
-      durationMs,
-      event: `capture-path-validation.${operation}.completed`,
-      exitCode: result.exitCode,
-      level: result.exitCode === 0 ? "info" : "error",
-      operation,
-    });
-    await emitValidationEventBestEffort(input, {
-      durationMs,
+      durationMs: Date.now() - startedAt,
       event: `capture-path-validation.${operation}.${result.exitCode === 0 ? "succeeded" : "failed"}`,
       exitCode: result.exitCode,
       level: result.exitCode === 0 ? "info" : "error",

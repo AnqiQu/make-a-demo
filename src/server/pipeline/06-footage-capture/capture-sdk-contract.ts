@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { runCollectedCommand } from "../../shared/shell/run-collected-command";
 import { CAPTURE_SDK_CONTRACT_VERSION } from "./capture-contract-versions";
 import type { DemoScript } from "./demo-script.schema";
 
@@ -75,48 +75,27 @@ export async function validateDemoScriptCaptureSdkTypes(input: {
 }
 
 async function runTypeScriptCheck(input: { cwd: string; scriptPath: string }) {
-  return await new Promise<{
-    exitCode: number | null;
-    stderr: string;
-    stdout: string;
-  }>((resolve, reject) => {
-    const child = spawn(
-      "bunx",
-      [
-        "tsc",
-        "--noEmit",
-        "--pretty",
-        "false",
-        "--target",
-        "ES2022",
-        "--module",
-        "ESNext",
-        "--moduleResolution",
-        "Bundler",
-        "--strict",
-        "--skipLibCheck",
-        "--lib",
-        "ES2022,DOM,DOM.Iterable",
-        input.scriptPath,
-      ],
-      { cwd: input.cwd, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (exitCode) => {
-      resolve({ exitCode, stderr, stdout });
-    });
-  });
+  return await runCollectedCommand(
+    "bunx",
+    [
+      "tsc",
+      "--noEmit",
+      "--pretty",
+      "false",
+      "--target",
+      "ES2022",
+      "--module",
+      "ESNext",
+      "--moduleResolution",
+      "Bundler",
+      "--strict",
+      "--skipLibCheck",
+      "--lib",
+      "ES2022,DOM,DOM.Iterable",
+      input.scriptPath,
+    ],
+    { cwd: input.cwd },
+  );
 }
 
 function runtimeSource() {

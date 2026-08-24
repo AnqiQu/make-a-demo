@@ -11,3 +11,13 @@ export type PreparationWorkspaceDiff = {
   patchSha256: `sha256:${string}`;
   sourceCommitSha: string;
 };
+
+/**
+ * Normalizes one workspace diff path to its repo-relative form: the sandbox
+ * `/workspace/repo` prefix and any leading `./` are stripped. Every consumer
+ * comparing diff paths against screened-repository paths must use this key so
+ * one spelling cannot pass a check another spelling fails.
+ */
+export function toRepoRelativePath(path: string): string {
+  return path.replace(/^\/workspace\/repo(?:\/|$)/, "").replace(/^\.\//, "");
+}

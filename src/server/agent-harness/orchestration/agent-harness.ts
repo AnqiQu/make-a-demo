@@ -3,6 +3,8 @@ import {
   type BrowserAction,
   readBrowserActions,
 } from "../../pipeline/06-footage-capture/browser-action-plan";
+import { optionalString } from "../../shared/records/optional-string";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import { readLastErrorCauseLine } from "../app-explorer/stderr-error-signal";
 import type {
   CaptureLocatorFailure,
@@ -37,7 +39,10 @@ import {
   readPreparationFidelityCandidates,
   reconcileFidelityAdjudication,
 } from "../repo-preparation/preparation-fidelity";
-import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
+import {
+  type PreparationWorkspaceDiff,
+  toRepoRelativePath,
+} from "../repo-preparation/preparation-workspace-diff";
 import { assertPreparedFeatureInventory } from "../repo-preparation/prepared-feature-inventory";
 import { profileRepo } from "../repo-profiler/repo-profiler";
 import type { SecretQuarantineManifest } from "../repo-security/secret-quarantine";
@@ -55,6 +60,7 @@ import {
   type FeatureVerdict,
   type FidelityAdjudicationVerdict,
   type FlowSpec,
+  type HarnessStageStatus,
   type PipelineRunManifest,
   type PreparationManifest,
   type RepoProfile,
@@ -408,14 +414,7 @@ export async function runAgentHarnessPipeline(
   // timeout with the accumulated stage evidence, never a many-hour hang.
   const jobDeadlineMs = options.jobDeadlineMs ?? 90 * 60_000;
   const jobDeadlineAtMs = Date.now() + jobDeadlineMs;
-  const stageStatuses: Record<
-    string,
-    | PipelineRunManifest["finalStatus"]
-    | "passed"
-    | "pending"
-    | "running"
-    | "skipped"
-  > = {};
+  const stageStatuses: Record<string, HarnessStageStatus> = {};
   const stageTimings: PipelineRunManifest["stageTimings"] = [];
   const assertJobWithinDeadline = (options?: {
     beforeRepairCycle?: boolean;
@@ -471,11 +470,11 @@ export async function runAgentHarnessPipeline(
       return preparationWorkspaceDiff;
     };
 
-  const security = runStage(
+  const security = await runAsyncStage(
     "static-repo-security-screen",
     stageStatuses,
     stageTimings,
-    () =>
+    async () =>
       screenStaticRepoSecurity({
         files: input.files,
         ...(input.secretQuarantineManifest === undefined
@@ -711,6 +710,37 @@ export async function runAgentHarnessPipeline(
     let actionCatalog: ActionCatalog;
     let flowSpec: FlowSpec;
     let scriptCandidate: ScriptCandidate;
+    // One script-repair round, shared by every phase that routes a failure
+    // to Script Repair: deadline check, repair, phase-attempt bookkeeping,
+    // and the persisted candidate artifact.
+    const runScriptRepairRound = async (
+      failureReport: ValidationReport,
+      phase: string,
+      scriptRepairAttempts: number,
+    ): Promise<void> => {
+      assertJobWithinDeadline({ beforeRepairCycle: true });
+      scriptCandidate = await repairScriptCandidate({
+        actionCatalog,
+        appMap,
+        dependencies,
+        failureReport,
+        flowSpec,
+        preparationManifest,
+        repoProfile,
+        scriptCandidate,
+        scriptRepairAttempts,
+        scriptRepairLimit,
+        stageStatuses,
+        stageTimings,
+        workspace: requireWorkspace(workspace),
+      });
+      scriptRepairAttemptsByPhase[phase] = scriptRepairAttempts + 1;
+      await writeArtifact(
+        dependencies,
+        artifactPaths.scriptCandidate,
+        scriptCandidate,
+      );
+    };
     // Re-plans the flow against the current catalog and app map after a
     // grounding change, persisting the replanned FlowSpec artifact.
     const replanFlow = async () => {
@@ -913,28 +943,10 @@ export async function runAgentHarnessPipeline(
             locatorAlternation = undefined;
           }
           pendingCaptureLocatorFailure = undefined;
-          assertJobWithinDeadline({ beforeRepairCycle: true });
-          scriptCandidate = await repairScriptCandidate({
-            actionCatalog,
-            appMap,
-            dependencies,
-            failureReport: staticContractValidation,
-            flowSpec,
-            preparationManifest,
-            repoProfile,
-            scriptCandidate,
-            scriptRepairAttempts: staticRepairAttempts,
-            scriptRepairLimit,
-            stageStatuses,
-            stageTimings,
-            workspace: requireWorkspace(workspace),
-          });
-          scriptRepairAttemptsByPhase["static-script-contract-validation"] =
-            staticRepairAttempts + 1;
-          await writeArtifact(
-            dependencies,
-            artifactPaths.scriptCandidate,
-            scriptCandidate,
+          await runScriptRepairRound(
+            staticContractValidation,
+            "static-script-contract-validation",
+            staticRepairAttempts,
           );
           continue;
         }
@@ -1043,28 +1055,10 @@ export async function runAgentHarnessPipeline(
             continue pipelineAttempt;
           }
 
-          assertJobWithinDeadline({ beforeRepairCycle: true });
-          scriptCandidate = await repairScriptCandidate({
-            actionCatalog,
-            appMap,
-            dependencies,
-            failureReport: footageCaptureValidation,
-            flowSpec,
-            preparationManifest,
-            repoProfile,
-            scriptCandidate,
-            scriptRepairAttempts: footageRepairAttempts,
-            scriptRepairLimit,
-            stageStatuses,
-            stageTimings,
-            workspace: requireWorkspace(workspace),
-          });
-          scriptRepairAttemptsByPhase["footage-capture"] =
-            footageRepairAttempts + 1;
-          await writeArtifact(
-            dependencies,
-            artifactPaths.scriptCandidate,
-            scriptCandidate,
+          await runScriptRepairRound(
+            footageCaptureValidation,
+            "footage-capture",
+            footageRepairAttempts,
           );
           continue;
         }
@@ -1184,6 +1178,7 @@ export async function runAgentHarnessPipeline(
             retryCount: captureRepairAttempts,
           });
           validationReports.push(regroundingValidation);
+          stageStatuses["locator-regrounding"] = regroundingValidation.status;
           await Promise.all([
             writeArtifact(
               dependencies,
@@ -1233,28 +1228,10 @@ export async function runAgentHarnessPipeline(
           await replanFlow();
         }
 
-        assertJobWithinDeadline({ beforeRepairCycle: true });
-        scriptCandidate = await repairScriptCandidate({
-          actionCatalog,
-          appMap,
-          dependencies,
-          failureReport: capturePathValidation,
-          flowSpec,
-          preparationManifest,
-          repoProfile,
-          scriptCandidate,
-          scriptRepairAttempts: captureRepairAttempts,
-          scriptRepairLimit,
-          stageStatuses,
-          stageTimings,
-          workspace: requireWorkspace(workspace),
-        });
-        scriptRepairAttemptsByPhase["capture-path-validation"] =
-          captureRepairAttempts + 1;
-        await writeArtifact(
-          dependencies,
-          artifactPaths.scriptCandidate,
-          scriptCandidate,
+        await runScriptRepairRound(
+          capturePathValidation,
+          "capture-path-validation",
+          captureRepairAttempts,
         );
       }
 
@@ -1422,7 +1399,7 @@ export async function runAgentHarnessPipeline(
 }
 
 function readPreparationFailedStage(
-  stageStatuses: Record<string, string>,
+  stageStatuses: Record<string, HarnessStageStatus>,
   validationReports: ValidationReport[],
 ): string | undefined {
   for (let index = validationReports.length - 1; index >= 0; index -= 1) {
@@ -1473,10 +1450,6 @@ function attachSecondaryError(
   }
 }
 
-function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function readFailedOpenCodeSessionId(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
@@ -1492,7 +1465,7 @@ async function runValidationStage(
   dependencies: AgentHarnessPipelineDependencies,
   path: string,
   validationReports: ValidationReport[],
-  stageStatuses: Record<string, string>,
+  stageStatuses: Record<string, HarnessStageStatus>,
   stageTimings: PipelineRunManifest["stageTimings"],
   callback: () => Promise<ValidationReport>,
   validationAttemptCounts: Record<string, number>,
@@ -1547,7 +1520,7 @@ async function repairScriptCandidate(input: {
   scriptCandidate: ScriptCandidate;
   scriptRepairAttempts: number;
   scriptRepairLimit: number;
-  stageStatuses: Record<string, string>;
+  stageStatuses: Record<string, HarnessStageStatus>;
   stageTimings: PipelineRunManifest["stageTimings"];
   workspace: AgentHarnessWorkspace;
 }): Promise<ScriptCandidate> {
@@ -1646,7 +1619,7 @@ async function ensureValidPreparation(input: {
   repoPreparationRepairLimit: number;
   repoProfile: RepoProfile;
   runPlan: RunPlan;
-  stageStatuses: Record<string, string>;
+  stageStatuses: Record<string, HarnessStageStatus>;
   stageTimings: PipelineRunManifest["stageTimings"];
   validationReports: ValidationReport[];
   validationAttemptCounts: Record<string, number>;
@@ -2184,22 +2157,6 @@ async function ensureValidPreparation(input: {
         };
       }
     }
-    if (preparationValidation.status === "passed") {
-      if (chargedLedgerRound !== undefined) {
-        recordCompletedRepairRound({
-          nextReport: preparationValidation,
-          preparationRepairBudget: input.preparationRepairBudget,
-          repairRoundSources: input.repairRoundSources,
-          round: chargedLedgerRound,
-        });
-        chargedLedgerRound = undefined;
-      }
-      return {
-        acceptedPreparation,
-        preparationManifest,
-        preparationValidation,
-      };
-    }
     if (chargedLedgerRound !== undefined) {
       recordCompletedRepairRound({
         nextReport: preparationValidation,
@@ -2208,6 +2165,13 @@ async function ensureValidPreparation(input: {
         round: chargedLedgerRound,
       });
       chargedLedgerRound = undefined;
+    }
+    if (preparationValidation.status === "passed") {
+      return {
+        acceptedPreparation,
+        preparationManifest,
+        preparationValidation,
+      };
     }
     // The reuse note travels as a hint, never in logsSummary: the failure
     // fingerprint normalizes the summary, and a round-varying prefix would
@@ -2281,7 +2245,7 @@ function appendRepairRejection(
   // Lockfiles are excluded: the backend regenerates them and repairs must not
   // touch them.
   const preservedFiles = vetoedChangedPaths
-    .map((path) => path.replace(/^\/workspace\/repo\//, ""))
+    .map(toRepoRelativePath)
     .filter(
       (path) =>
         !isPackageManagerLockfilePath(path) &&
@@ -2353,7 +2317,7 @@ async function repairPreparationManifest(input: {
   repoPreparationRepairLimit: number;
   repoProfile: RepoProfile;
   runPlan: RunPlan;
-  stageStatuses: Record<string, string>;
+  stageStatuses: Record<string, HarnessStageStatus>;
   stageTimings: PipelineRunManifest["stageTimings"];
   strategyDirective?: string;
   totalRepairAttempts: number;
@@ -2686,10 +2650,10 @@ function readFailingCatalogActionId(
         typeof scene === "object" &&
         scene !== null &&
         Array.isArray((scene as { actions?: unknown }).actions)
-          ? ((scene as { actions: unknown[] }).actions.filter(
+          ? (scene as { actions: unknown[] }).actions.filter(
               (action): action is Record<string, unknown> =>
                 typeof action === "object" && action !== null,
-            ) ?? [])
+            )
           : [],
       )
     : [];
@@ -2821,10 +2785,7 @@ function readDiffTouchedFeatureIds(input: {
   previousManifest: PreparationManifest | undefined;
 }): string[] {
   const normalizePath = (path: string) =>
-    path
-      .replace(/^\/workspace\/repo\//, "")
-      .replace(/^\.\//, "")
-      .replace(/\/+$/, "");
+    toRepoRelativePath(path).replace(/\/+$/, "");
   const changedPaths = input.changedPaths
     .map(normalizePath)
     .filter((path) => path.length > 0);
@@ -3031,39 +2992,9 @@ export function readFastestCompletedRepairCycleMs(
   return fastest;
 }
 
-function runStage<T>(
-  stage: string,
-  stageStatuses: Record<string, string>,
-  stageTimings: PipelineRunManifest["stageTimings"],
-  callback: () => T,
-): T {
-  const startedAt = new Date().toISOString();
-  stageStatuses[stage] = "running";
-  try {
-    const result = callback();
-    stageStatuses[stage] = "passed";
-    stageTimings.push({
-      durationMs: Math.max(0, Date.now() - Date.parse(startedAt)),
-      finishedAt: new Date().toISOString(),
-      stage,
-      startedAt,
-    });
-    return result;
-  } catch (error) {
-    stageStatuses[stage] = "failed";
-    stageTimings.push({
-      durationMs: Math.max(0, Date.now() - Date.parse(startedAt)),
-      finishedAt: new Date().toISOString(),
-      stage,
-      startedAt,
-    });
-    throw error;
-  }
-}
-
 async function runAsyncStage<T>(
   stage: string,
-  stageStatuses: Record<string, string>,
+  stageStatuses: Record<string, HarnessStageStatus>,
   stageTimings: PipelineRunManifest["stageTimings"],
   callback: () => Promise<T>,
 ): Promise<T> {
@@ -3072,22 +3003,17 @@ async function runAsyncStage<T>(
   try {
     const result = await callback();
     stageStatuses[stage] = "passed";
-    stageTimings.push({
-      durationMs: Math.max(0, Date.now() - Date.parse(startedAt)),
-      finishedAt: new Date().toISOString(),
-      stage,
-      startedAt,
-    });
     return result;
   } catch (error) {
     stageStatuses[stage] = "failed";
+    throw error;
+  } finally {
     stageTimings.push({
       durationMs: Math.max(0, Date.now() - Date.parse(startedAt)),
       finishedAt: new Date().toISOString(),
       stage,
       startedAt,
     });
-    throw error;
   }
 }
 
@@ -3105,7 +3031,7 @@ async function persistRunManifest(input: {
   envelopeFitWarning?: string;
   input: AgentHarnessPipelineInput;
   opencodeSessionIds: string[];
-  stageStatuses: Record<string, string>;
+  stageStatuses: Record<string, HarnessStageStatus>;
   stageTimings: PipelineRunManifest["stageTimings"];
   status: PipelineRunManifest["finalStatus"];
   unsupportedOrFailureReason?: string;
@@ -3186,13 +3112,4 @@ async function activatePinnedNodeLine(
   } catch {
     // Audit logging is best-effort; the swap itself already succeeded.
   }
-}
-
-function optionalString<K extends string>(
-  key: K,
-  value: string | undefined,
-): Partial<Record<K, string>> {
-  return value === undefined || value.trim().length === 0
-    ? {}
-    : ({ [key]: value } as Partial<Record<K, string>>);
 }

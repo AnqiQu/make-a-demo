@@ -1,3 +1,5 @@
+import { assertRecord } from "../../../shared/artifact-storage/persisted-record-readers";
+
 export type DemoBrief = {
   audience?: string;
   demoLengthSeconds?: number;
@@ -53,14 +55,6 @@ export function readDemoBriefSchema(value: unknown): DemoBrief {
     ...(preferredAppDir === undefined ? {} : { preferredAppDir }),
     ...(productSummary === undefined ? {} : { productSummary }),
   };
-}
-
-function assertRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} must be an object`);
-  }
-
-  return value as Record<string, unknown>;
 }
 
 function readStringArray(

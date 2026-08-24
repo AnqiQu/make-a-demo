@@ -16,6 +16,7 @@ import {
   createPipelineEventLogger,
   createPrettyPipelineLogSink,
 } from "../../shared/logging/pipeline-event-logger";
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
 import {
   type AgentHarnessPipelineDependencies,
@@ -373,7 +374,7 @@ export async function runDefaultDemoPipeline(
     primaryFailure = error;
     try {
       await logger.error({
-        error: error instanceof Error ? error.message : String(error),
+        error: readErrorMessage(error),
         event: "pipeline.failed",
       });
       await logger.flush();
@@ -480,7 +481,7 @@ async function persistSandboxLogs(
     await logger.flush();
   } catch (error) {
     await logger.warn({
-      error: error instanceof Error ? error.message : String(error),
+      error: readErrorMessage(error),
       event: "sandbox.logs.persistence.failed",
     });
     await logger.flush();

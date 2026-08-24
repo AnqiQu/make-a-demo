@@ -1,3 +1,4 @@
+import { readErrorMessage } from "../../shared/text/read-error-message";
 import { createPrismaEnginePrefetchCommand } from "./prisma-engine-prefetch";
 
 export type DependencyInstallDecision =
@@ -135,7 +136,7 @@ async function resealNetwork(
       await closeNetwork();
       return undefined;
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return readErrorMessage(error);
     }
   }
 }
@@ -304,7 +305,8 @@ export function createOfflineLifecycleCommand(input: {
     : manager === "npm" || manager === "pnpm"
       ? `${offline}${manager} run --if-present postinstall`
       : manager === "yarn" || manager === "bun"
-        ? `${manager === "yarn" && isBerry ? offline : ""}${manager} run postinstall`
+        ? // `offline` is already empty for classic yarn and bun.
+          `${offline}${manager} run postinstall`
         : undefined;
   const parts = [rebuild, postinstall].filter(
     (part): part is string => part !== undefined,

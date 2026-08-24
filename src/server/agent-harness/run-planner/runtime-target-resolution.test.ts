@@ -1290,6 +1290,36 @@ describe("resolveRuntimeTarget", () => {
     }
   });
 
+  it("does not honor an escalated pnpm command whose script merely ends in build", () => {
+    const repoProfile = profile({
+      candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+      lockfiles: ["pnpm-lock.yaml"],
+      packageManager: "pnpm",
+      workspacePackages: [
+        {
+          dir: "apps/dashboard",
+          name: "@acme/dashboard",
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+      ],
+    });
+    for (const command of [
+      "pnpm --recursive run rebuild",
+      "pnpm -r exec prebuild",
+    ]) {
+      const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+      preparationManifest.buildCommandUsed = command;
+      expect(
+        resolvePreparationRuntime({
+          honorWorkspaceGraphBuild: true,
+          preparationManifest,
+          repoProfile,
+        }).preparationManifest,
+      ).not.toHaveProperty("buildCommandUsed");
+    }
+  });
+
   it("prefers the resolved build command over an agent-set one when resolution finds a build", () => {
     const preparationManifest = manifest("apps/web/src/page.tsx");
     preparationManifest.buildCommandUsed = "pnpm --filter=@acme/ui run build";
@@ -1431,6 +1461,25 @@ describe("resolveRuntimeTarget", () => {
         repoProfile: profile({ candidateAppDirs: [".", "apps/web"] }),
       }),
     ).toContain("working directory");
+  });
+
+  it("rejects the equals spelling of command-level working directory flags", () => {
+    for (const startCommandUsed of [
+      "yarn --cwd=apps/web dev",
+      "npm --prefix=apps/web run dev",
+      "pnpm --dir=apps/web dev",
+    ]) {
+      const preparationManifest = manifest("src/page.tsx");
+      preparationManifest.appDir = "apps/web";
+      preparationManifest.startCommandUsed = startCommandUsed;
+
+      expect(
+        findRuntimeConfigurationIssue({
+          preparationManifest,
+          repoProfile: profile({ candidateAppDirs: [".", "apps/web"] }),
+        }),
+      ).toContain("working directory");
+    }
   });
 
   it("rejects package scripts absent from the selected package", () => {
