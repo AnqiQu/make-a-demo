@@ -1,4 +1,5 @@
 import { posix } from "node:path";
+import { escapeRegExp } from "../../shared/text/escape-regexp";
 import {
   type PreparationManifest,
   type RepoProfile,
@@ -90,15 +91,17 @@ export function findRuntimeConfigurationIssue(input: {
       continue;
     }
     const scriptName = readScriptName(command);
-    const scripts = runtimeScripts;
-    if (scriptName !== undefined && scripts?.[scriptName] === undefined) {
+    if (
+      scriptName !== undefined &&
+      runtimeScripts?.[scriptName] === undefined
+    ) {
       return `Runtime script "${scriptName}" is not defined for ${input.preparationManifest.appDir}.`;
     }
     // The command may name a workspace directly, or run a script whose body
     // fans out through the task runner; scan both surfaces for a selector
     // that targets a package the repository does not contain.
     const scriptBody =
-      scriptName === undefined ? undefined : scripts?.[scriptName];
+      scriptName === undefined ? undefined : runtimeScripts?.[scriptName];
     const absentPackage = readAbsentWorkspacePackage(
       [command, scriptBody]
         .filter((value): value is string => value !== undefined)
@@ -248,11 +251,7 @@ function readHonoredAgentBuildCommand(
     ),
   );
   const scriptName = readScriptName(agentBuildCommand);
-  const scripts =
-    targetDir === "."
-      ? repoProfile.packageScripts
-      : repoProfile.workspacePackages?.find(({ dir }) => dir === targetDir)
-          ?.scripts;
+  const scripts = readRuntimeScripts(targetDir, repoProfile);
   const surfaces = [
     agentBuildCommand,
     scriptName === undefined ? undefined : scripts?.[scriptName],
@@ -945,10 +944,9 @@ function readAbsentWorkspacePackage(
  * not claim a script targeting `@a/web-admin`.
  */
 function referencesPackageName(command: string, name: string): boolean {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<![@/A-Za-z0-9._-])${escaped}(?![A-Za-z0-9._-])`).test(
-    command,
-  );
+  return new RegExp(
+    `(?<![@/A-Za-z0-9._-])${escapeRegExp(name)}(?![A-Za-z0-9._-])`,
+  ).test(command);
 }
 
 function findInstallDirectory(
