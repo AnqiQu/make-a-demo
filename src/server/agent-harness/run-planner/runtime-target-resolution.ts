@@ -55,7 +55,7 @@ export function findRuntimeConfigurationIssue(input: {
   ].filter((command): command is string => command !== undefined);
   if (
     commands.some((command) =>
-      /^(?:(?:bun|yarn)\b.*\s--cwd|npm\b.*\s--prefix|pnpm\b.*\s(?:--dir|-C))\s+\S+/.test(
+      /^(?:(?:bun|yarn)\b.*\s--cwd|npm\b.*\s--prefix|pnpm\b.*\s(?:--dir|-C))(?:=|\s+)\S+/.test(
         command.trim(),
       ),
     )

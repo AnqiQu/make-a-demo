@@ -1433,6 +1433,25 @@ describe("resolveRuntimeTarget", () => {
     ).toContain("working directory");
   });
 
+  it("rejects the equals spelling of command-level working directory flags", () => {
+    for (const startCommandUsed of [
+      "yarn --cwd=apps/web dev",
+      "npm --prefix=apps/web run dev",
+      "pnpm --dir=apps/web dev",
+    ]) {
+      const preparationManifest = manifest("src/page.tsx");
+      preparationManifest.appDir = "apps/web";
+      preparationManifest.startCommandUsed = startCommandUsed;
+
+      expect(
+        findRuntimeConfigurationIssue({
+          preparationManifest,
+          repoProfile: profile({ candidateAppDirs: [".", "apps/web"] }),
+        }),
+      ).toContain("working directory");
+    }
+  });
+
   it("rejects package scripts absent from the selected package", () => {
     const preparationManifest = manifest("src/page.tsx");
     preparationManifest.startCommandUsed = "bun run missing";
