@@ -11,27 +11,13 @@
  * must never rewrite them, because only the agent knows its fixture slugs.
  */
 export function findRoutePlaceholder(path: string): string | undefined {
-  let url: URL;
-  try {
-    url = new URL(path, "http://makeademo.invalid");
-  } catch {
-    return undefined;
-  }
-  const hashPath = url.hash.split("?")[0] ?? "";
-  for (const routePart of [url.pathname, hashPath]) {
-    for (const rawSegment of routePart.split("/")) {
-      const segment = decodeSegment(rawSegment);
-      if (segment.length === 0) continue;
-      if (
-        segment.startsWith(":") ||
-        segment.includes("*") ||
-        /[[\]{}]/.test(segment)
-      ) {
-        return segment;
-      }
-    }
-  }
-  return undefined;
+  return findPathSegment(
+    path,
+    (segment) =>
+      segment.startsWith(":") ||
+      segment.includes("*") ||
+      /[[\]{}]/.test(segment),
+  );
 }
 
 /**
@@ -47,6 +33,21 @@ export function findRoutePlaceholder(path: string): string | undefined {
  * there.
  */
 export function findMissingValueSegment(path: string): string | undefined {
+  return findPathSegment(
+    path,
+    (segment) => segment === "undefined" || segment === "null",
+  );
+}
+
+/**
+ * Walks the decoded segments of a path's URL pathname and hash-router path
+ * (query strings ignored) and returns the first segment the predicate flags,
+ * or undefined when the path cannot parse or no segment matches.
+ */
+function findPathSegment(
+  path: string,
+  flagsSegment: (segment: string) => boolean,
+): string | undefined {
   let url: URL;
   try {
     url = new URL(path, "http://makeademo.invalid");
@@ -57,7 +58,8 @@ export function findMissingValueSegment(path: string): string | undefined {
   for (const routePart of [url.pathname, hashPath]) {
     for (const rawSegment of routePart.split("/")) {
       const segment = decodeSegment(rawSegment);
-      if (segment === "undefined" || segment === "null") {
+      if (segment.length === 0) continue;
+      if (flagsSegment(segment)) {
         return segment;
       }
     }
