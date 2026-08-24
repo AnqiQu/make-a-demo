@@ -140,20 +140,13 @@ export function assertPreparedFeatureInventory(input: {
       );
     }
   }
-  const requested = countNormalizedFeatures(requestedFeatures);
-  const prepared = countNormalizedFeatures(preparedRequestedFeatures);
-  const missing = readFeatureCountDifference(requested, prepared);
-  const unexpected = readFeatureCountDifference(prepared, requested);
-  if (missing.length > 0 || unexpected.length > 0) {
-    throw new Error(
-      [
-        "PreparationManifest must prepare every requested demo feature exactly once.",
-        ...(missing.length === 0 ? [] : [`Missing: ${missing.join(", ")}.`]),
-        ...(unexpected.length === 0
-          ? []
-          : [`Unexpected: ${unexpected.join(", ")}.`]),
-      ].join(" "),
-    );
+  const coverageViolation = readFeatureCoverageViolation(
+    requestedFeatures,
+    preparedRequestedFeatures,
+    "PreparationManifest must prepare every requested demo feature exactly once.",
+  );
+  if (coverageViolation !== undefined) {
+    throw new Error(coverageViolation);
   }
   // N107: the declaration is required for maker-requested features, checked
   // only after the feature set itself is right — prepare the right
@@ -443,10 +436,35 @@ function collectUnknownSourcePaths(
   );
 }
 
+/**
+ * Formats the exactly-once feature-coverage violation for a stage, or
+ * undefined when every requested feature is covered exactly once. Every
+ * stage that enforces coverage must build its message here so missing and
+ * unexpected features always read the same way to repair agents.
+ */
+export function readFeatureCoverageViolation(
+  requestedFeatures: string[],
+  coveredFeatures: string[],
+  leadSentence: string,
+): string | undefined {
+  const requested = countNormalizedFeatures(requestedFeatures);
+  const covered = countNormalizedFeatures(coveredFeatures);
+  const missing = readFeatureCountDifference(requested, covered);
+  const unexpected = readFeatureCountDifference(covered, requested);
+  if (missing.length === 0 && unexpected.length === 0) {
+    return undefined;
+  }
+  return [
+    leadSentence,
+    ...(missing.length === 0 ? [] : [`Missing: ${missing.join(", ")}.`]),
+    ...(unexpected.length === 0
+      ? []
+      : [`Unexpected: ${unexpected.join(", ")}.`]),
+  ].join(" ");
+}
+
 /** Counts maker-requested features by their normalized comparison key. */
-export function countNormalizedFeatures(
-  features: string[],
-): Map<string, number> {
+function countNormalizedFeatures(features: string[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const feature of features) {
     const normalized = normalizeFeature(feature);
@@ -465,7 +483,7 @@ export function normalizeFeature(feature: string): string {
 }
 
 /** Lists features counted more times on the left than the right, repeated per missing count. */
-export function readFeatureCountDifference(
+function readFeatureCountDifference(
   left: Map<string, number>,
   right: Map<string, number>,
 ): string[] {
