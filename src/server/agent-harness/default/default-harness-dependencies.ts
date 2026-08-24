@@ -1030,6 +1030,24 @@ export async function createDefaultAgentHarnessDependencies(
   // strategist always reads the same history the pipeline was launched
   // with; an empty history writes nothing and prompts nothing.
   const strategistMemory = options.strategistMemory ?? [];
+  // N176: whether memory reached this run must be answerable from the run
+  // record alone — the sandbox copy dies with the sandbox. The mirror and
+  // the entry-count event are audit-only and must never fail the harness.
+  try {
+    if (strategistMemory.length > 0) {
+      await options.artifactStore.writeJson(
+        artifactPaths.strategistMemory,
+        strategistMemory,
+      );
+    }
+    await options.logger?.info({
+      entryCount: strategistMemory.length,
+      event: "strategist.memory-feed",
+      message: `Strategist consultations will read ${strategistMemory.length} prior-run memory entr${strategistMemory.length === 1 ? "y" : "ies"}.`,
+    });
+  } catch {
+    // Observability must never displace harness creation.
+  }
   const writeStrategistMemoryArtifact = async (
     workspace: AgentHarnessWorkspace,
   ) => {

@@ -8667,6 +8667,119 @@ describe("createDefaultAgentHarnessDependencies", () => {
     ).toEqual(memory);
   });
 
+  it("mirrors the memory feed into the run record at harness creation", async () => {
+    // N176 (wave-20): whether consultations received prior-run memory was
+    // unknowable from local artifacts — the feed was written only into the
+    // sandbox, so verifying M5 required replaying the store read.
+    const artifactWrites: Array<{ path: string; value: unknown }> = [];
+    const logLines: string[] = [];
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          write(line) {
+            logLines.push(line);
+          },
+        },
+      ],
+    });
+    const memory = [
+      {
+        adviceNotes: [{ kind: "directive", text: "Pin the pnpm version." }],
+        outcome: "failed" as const,
+        recordedAt: "2026-08-22T04:00:00.000Z",
+        runId: "matrix-prior",
+      },
+    ];
+
+    await createDefaultAgentHarnessDependencies({
+      artifactStore: {
+        async writeJson(path, value) {
+          artifactWrites.push({ path, value });
+        },
+      },
+      logger,
+      openCodeRunner: {
+        async run() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      strategistMemory: memory,
+      workspaceProvider: {
+        async create() {
+          return {
+            async destroy() {},
+            id: "workspace",
+            workspace: createFakeAgentHarnessWorkspace(),
+          };
+        },
+      },
+    });
+
+    expect(artifactWrites).toContainEqual({
+      path: "/workspace/.makeademo/strategist-memory.json",
+      value: memory,
+    });
+    expect(
+      logLines.some(
+        (line) =>
+          line.includes('"strategist.memory-feed"') &&
+          line.includes('"entryCount":1'),
+      ),
+    ).toBe(true);
+  });
+
+  it("logs an empty memory feed without mirroring an empty artifact", async () => {
+    const artifactWrites: Array<{ path: string; value: unknown }> = [];
+    const logLines: string[] = [];
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          write(line) {
+            logLines.push(line);
+          },
+        },
+      ],
+    });
+
+    await createDefaultAgentHarnessDependencies({
+      artifactStore: {
+        async writeJson(path, value) {
+          artifactWrites.push({ path, value });
+        },
+      },
+      logger,
+      openCodeRunner: {
+        async run() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return {
+            async destroy() {},
+            id: "workspace",
+            workspace: createFakeAgentHarnessWorkspace(),
+          };
+        },
+      },
+    });
+
+    expect(
+      artifactWrites.filter(({ path }) => path.includes("strategist-memory")),
+    ).toHaveLength(0);
+    expect(
+      logLines.some(
+        (line) =>
+          line.includes('"strategist.memory-feed"') &&
+          line.includes('"entryCount":0'),
+      ),
+    ).toBe(true);
+  });
+
   it("fails open when repair strategy writes schema-invalid advice", async () => {
     const scenario = await runRepairStrategyScenario({
       artifact: { kind: "directive" },
