@@ -10715,7 +10715,7 @@ launch — no photo-finish caveats this wave.
   does not say what IS defined. N181. (Its
   wave-19–21 passes predate the lifecycle
   field, so round-one citation had nothing to
-  cite; N179's backfill covers this too.)
+  cite; its next pass re-records it via N178.)
 - directus (45.1m): the extensions arc with
   N173's evidence improvement visible — the
   failure now reads "Failed to resolve entry
@@ -10736,8 +10736,10 @@ launch — no photo-finish caveats this wave.
   as designed. Outline's problem is not any
   one failure; it is preparation variance
   re-rolling the strategy dice every wave.
-  N179's backfilled passing lifecycle gives
-  round one its wave-19 shape to hold onto.
+  its next pass re-records its lifecycle via
+  N178, and until then N179's failure-moved
+  fragments accrue — organically, per the
+  refined spec below.
 - ghost (72.8m): the demo-gate bootstrap again
   exits 1 (pnpm --filter ghost-admin run
   build), nothing listens on 2368 — and for the
@@ -10748,11 +10750,11 @@ launch — no photo-finish caveats this wave.
   the process exit in hand is the fact. N180,
   promoted from two waves on the watchlist.
 
-### N179 (High, bugfix) — known-good lifecycle fragments must survive runs that never passed
+### N179 (High, bugfix) — known-good lifecycle fragments must survive runs that never passed (refined 2026-08-25 per review — no backfill)
 
-Two extensions to the N178 substrate: (1) when
-a run ends without passing, its digest records
-the last lifecycle whose declaration MOVED the
+One extension to the N178 substrate: when a run
+ends without passing, its digest records the
+last lifecycle whose declaration MOVED the
 failure (the adherence ledger already marks
 failure-moved rounds) as a known-good fragment,
 distinct from a passing lifecycle; round-one
@@ -10761,13 +10763,25 @@ the same way ("the closest this repository has
 come used X — declare it or justify departing")
 — twenty's round-4 nx build would then be
 round-1 material in every future run instead of
-a round-4 rediscovery and a round-5 loss. (2) a
-one-time backfill: reconstruct passing
-lifecycles for repos whose passes predate the
-lifecycle field (ghostfolio, outline, conduit's
-earlier passes) from the archived run
-directories' preparation manifests, so coverage
-does not wait on re-passes.
+a round-4 rediscovery and a round-5 loss.
+
+Refined per review (2026-08-25): the spec
+originally included a one-time backfill script
+reconstructing pre-N178 passing lifecycles from
+archived run directories. REJECTED as
+overfitting — memory must accrue only through
+the code path every repository exercises
+organically: a repository the product has never
+seen starts cold, and the acceptance matrix
+must measure exactly that product (cold start
+plus organic accrual), not matrix repos with
+operator-curated history no real repository
+would ever receive. The gap self-heals through
+general mechanisms alone: any future pass
+records its lifecycle via N178's existing
+digest write, and runs that keep failing accrue
+failure-moved fragments via this item — one
+wave later than a backfill, and honestly.
 
 ### N180 (Medium, bugfix) — a dead process outranks a refused connection
 
@@ -10820,11 +10834,11 @@ attempt at that seam.
   while fixing an unrelated class).
 - calcom: watch the seed-grounding loop; its
   startup era is over.
-- ghostfolio: N181's script list plus N179's
-  backfill; expect recovery.
-- outline: four arcs in four waves — after
-  N179's backfill, judge whether round one
-  holds the wave-19 shape.
+- ghostfolio: N181's script list; its next pass
+  rebuilds its lifecycle record organically.
+- outline: four arcs in four waves — once any
+  pass re-records its lifecycle via N178, judge
+  whether round one holds that shape.
 - directus: the entry-map mismatch is the
   frontier; the digest note now carries it.
 - ghost: N180 will finally show the repair
