@@ -202,6 +202,18 @@ export type AgentHarnessWorkspaceUploadFile = {
   sourcePath: string;
 };
 
+/**
+ * Transfer coordination for one bulk upload. When `acquireTransferSlot` is
+ * supplied, implementations must acquire it before every upload attempt
+ * and invoke the resolved release as soon as that attempt settles, so a
+ * retrying transfer waits its turn per attempt instead of holding a shared
+ * batch slot through backoff waits and target recreation (N177). Uploads
+ * without it are uncoordinated and transfer immediately.
+ */
+export type AgentHarnessWorkspaceUploadOptions = {
+  acquireTransferSlot?: () => Promise<() => void>;
+};
+
 export type AgentHarnessWorkspaceDownloadFile = {
   destinationPath: string;
   sourcePath: string;
@@ -330,7 +342,10 @@ export interface AgentHarnessWorkspace {
    * submitted-code sandbox or transporting the contents as a shell argument.
    */
   writeTextFile(path: string, contents: string): Promise<void>;
-  uploadFiles(files: AgentHarnessWorkspaceUploadFile[]): Promise<void>;
+  uploadFiles(
+    files: AgentHarnessWorkspaceUploadFile[],
+    options?: AgentHarnessWorkspaceUploadOptions,
+  ): Promise<void>;
   /**
    * Uploads runtime inputs only to the submitted-code trust boundary.
    * Implementations must not copy these files into an agent sandbox.

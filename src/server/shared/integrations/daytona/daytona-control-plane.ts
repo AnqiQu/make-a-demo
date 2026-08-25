@@ -71,6 +71,16 @@ function readHttpStatusCode(error: unknown): number | undefined {
 
 type DaytonaControlPlaneRunOptions = {
   /**
+   * Acquired before each attempt and released the moment the attempt
+   * settles, so backoff waits and wedged-target recreation never hold a
+   * shared transfer slot between attempt windows (N177: one wedged
+   * upload's retry-and-recreate arc held the batch's only bulk-transfer
+   * lease for ~46 minutes and starved four runs' setup). The resolved
+   * function releases the slot; releases are per-acquisition and the
+   * envelope calls each exactly once.
+   */
+  acquireTransferSlot?: () => Promise<() => void>;
+  /**
    * Per-attempt bound on how long a single control-plane call may stay
    * unsettled before the envelope abandons it as transport loss and lets
    * the transient ladder re-issue it. A backstop against calls that hang
@@ -281,6 +291,11 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
       let lastHungSandboxId: string | undefined;
       let wedgeRemedySpent = false;
       for (let attemptNumber = 1; ; attemptNumber += 1) {
+        // The slot is leased per attempt window and released at the top of
+        // the failure path, never in a finally: a finally would run after
+        // the catch block's recreation and backoff wait, holding the slot
+        // through exactly the gaps N177 exists to free.
+        const releaseTransferSlot = await options.acquireTransferSlot?.();
         const attemptAttribution = readAttribution();
         await logBestEffort(
           "info",
@@ -292,12 +307,15 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
           `Daytona ${operation} attempt ${attemptNumber}.`,
         );
         try {
-          return await runAttemptWithTimeout(
+          const result = await runAttemptWithTimeout(
             attempt,
             operation,
             attemptTimeoutMs,
           );
+          releaseTransferSlot?.();
+          return result;
         } catch (error) {
+          releaseTransferSlot?.();
           const attemptTimedOut =
             (error as { name?: unknown } | null)?.name ===
             attemptTimeoutErrorName;

@@ -184,7 +184,10 @@ import {
   readRuntimeNetworkAttempts,
   runtimeNetworkGuardPath,
 } from "../validation/runtime-network-guard";
-import type { BulkTransferLimiter } from "./bulk-transfer-limiter";
+import {
+  type BulkTransferLimiter,
+  createTransferSlotAcquirer,
+} from "./bulk-transfer-limiter";
 import {
   type JsonSyntaxDiagnostic,
   diagnoseJsonSyntax,
@@ -511,6 +514,7 @@ export async function createDefaultAgentHarnessDependencies(
       ...(options.bulkTransferLimiter === undefined
         ? {}
         : { bulkTransferLimiter: options.bulkTransferLimiter }),
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       repoProfile,
       sourceArchive: options.repoSourceArchive,
       workspace,
@@ -2652,6 +2656,7 @@ async function createDaytonaWorkspaceProvider(input: {
 
 async function materializeScreenedRepo(input: {
   bulkTransferLimiter?: BulkTransferLimiter;
+  logger?: PipelineEventLogger;
   repoProfile: RepoProfile;
   sourceArchive: RepoSourceArchive | undefined;
   workspace: AgentHarnessWorkspace;
@@ -2675,18 +2680,25 @@ async function materializeScreenedRepo(input: {
   }
   const remoteArchivePath = `${makeADemoDirectory}/screened-repo.tar.gz`;
   const sourceArchivePath = input.sourceArchive.path;
-  // The limiter holds the lock for exactly the uplink-bound upload; the
-  // sandbox-side extraction below costs the shared uplink nothing.
-  const uploadArchive = () =>
-    input.workspace.uploadFiles([
+  // N177: the batch slot is leased per upload attempt inside the transfer
+  // envelope, so retry backoffs and wedged-target recreation never hold
+  // the queue; the sandbox-side extraction below costs the shared uplink
+  // nothing and runs unleased.
+  await input.workspace.uploadFiles(
+    [
       {
         destinationPath: remoteArchivePath,
         sourcePath: sourceArchivePath,
       },
-    ]);
-  await (input.bulkTransferLimiter === undefined
-    ? uploadArchive()
-    : input.bulkTransferLimiter.run(uploadArchive));
+    ],
+    {
+      acquireTransferSlot: createTransferSlotAcquirer({
+        limiter: input.bulkTransferLimiter,
+        ...(input.logger === undefined ? {} : { logger: input.logger }),
+        transfer: "screened-archive-upload",
+      }),
+    },
+  );
   const result = await input.workspace.execute(
     `sh -lc ${shellQuote(
       [

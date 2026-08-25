@@ -19,6 +19,7 @@ import type {
   AgentHarnessWorkspaceLogEntry,
   AgentHarnessWorkspaceProvider,
   AgentHarnessWorkspaceUploadFile,
+  AgentHarnessWorkspaceUploadOptions,
   SubmittedCodeSandboxClass,
 } from "../../../agent-harness/daytona/workspace.interface";
 import {
@@ -1119,6 +1120,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
    * their own infrastructure-family wrapping and error contracts.
    */
   private runTransferThroughEnvelope<T>(input: {
+    acquireTransferSlot?: () => Promise<() => void>;
     attempt: () => Promise<T>;
     attemptTimeoutMs?: number;
     onTargetWedged?: (error: unknown) => Promise<boolean> | boolean;
@@ -1127,6 +1129,9 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     sandboxId: string | (() => string | undefined);
   }): Promise<T> {
     return this.controlPlane.run(input.operation, input.attempt, {
+      ...(input.acquireTransferSlot === undefined
+        ? {}
+        : { acquireTransferSlot: input.acquireTransferSlot }),
       ...(input.attemptTimeoutMs === undefined
         ? {}
         : { attemptTimeoutMs: input.attemptTimeoutMs }),
@@ -1322,7 +1327,10 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
   }
 
-  async uploadFiles(files: AgentHarnessWorkspaceUploadFile[]): Promise<void> {
+  async uploadFiles(
+    files: AgentHarnessWorkspaceUploadFile[],
+    options?: AgentHarnessWorkspaceUploadOptions,
+  ): Promise<void> {
     const uploadedFiles = files.map((file) => ({
       destination: file.destinationPath,
       source: file.sourcePath,
@@ -1330,7 +1338,12 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const attemptTimeoutMs = await readUploadAttemptTimeoutMs(
       files.map((file) => file.sourcePath),
     );
+    const transferSlot =
+      options?.acquireTransferSlot === undefined
+        ? {}
+        : { acquireTransferSlot: options.acquireTransferSlot };
     await this.runTransferThroughEnvelope({
+      ...transferSlot,
       attempt: () => this.sandbox.fs.uploadFiles(uploadedFiles),
       ...(attemptTimeoutMs === undefined ? {} : { attemptTimeoutMs }),
       operation: "fs.upload",
@@ -1338,6 +1351,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     });
     if (this.submittedCodeSandbox !== undefined) {
       await this.runTransferThroughEnvelope({
+        ...transferSlot,
         attempt: () =>
           this.requireSubmittedCodeSandbox().fs.uploadFiles(uploadedFiles),
         ...(attemptTimeoutMs === undefined ? {} : { attemptTimeoutMs }),

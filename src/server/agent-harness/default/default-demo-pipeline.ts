@@ -34,7 +34,10 @@ import {
   type ValidationReport,
   readValidationReport,
 } from "../schemas/artifacts";
-import type { BulkTransferLimiter } from "./bulk-transfer-limiter";
+import {
+  type BulkTransferLimiter,
+  createTransferSlotAcquirer,
+} from "./bulk-transfer-limiter";
 import {
   type DefaultHarnessDependencies,
   createDefaultAgentHarnessDependencies,
@@ -159,10 +162,18 @@ export async function runDefaultDemoPipeline(
       ? undefined
       : (options.installationTokenProvider ??
         createGitHubAppIntegrationFromEnv());
-  const bulkTransferLimiter: BulkTransferLimiter =
-    options.bulkTransferLimiter ?? { run: (task) => task() };
-  const repoSnapshot = await bulkTransferLimiter.run(() =>
-    (options.readRepoSnapshot ?? readGithubRepoSnapshot)(
+  // N177: acquiring the batch's transfer slot logs any queued wait into
+  // this run's own log, so a multi-minute pre-clone gap reads as "queued
+  // behind N transfers" instead of silence. The clone-and-archive read is
+  // a single attempt, so it holds the slot for its whole transfer.
+  const releaseSnapshotTransferSlot = await createTransferSlotAcquirer({
+    limiter: options.bulkTransferLimiter,
+    logger,
+    transfer: "repo-snapshot",
+  })();
+  let repoSnapshot: RepoSnapshot;
+  try {
+    repoSnapshot = await (options.readRepoSnapshot ?? readGithubRepoSnapshot)(
       {
         ...(input.githubInstallationId === undefined
           ? {}
@@ -178,8 +189,10 @@ export async function runDefaultDemoPipeline(
               installationTokenProvider,
             }),
       },
-    ),
-  );
+    );
+  } finally {
+    releaseSnapshotTransferSlot();
+  }
   await writeRepoSnapshotSummary(runDirectory, repoSnapshot);
 
   const artifactStore = new LocalJsonArtifactStore(artifactDirectory, log);

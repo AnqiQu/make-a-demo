@@ -508,6 +508,47 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     }
   });
 
+  it("leases the caller's transfer slot for each sandbox's upload envelope", async () => {
+    // N177: a limited upload must acquire the batch's transfer slot per
+    // attempt inside the retry envelope — for the agent and submitted-code
+    // sandbox transfers alike — so retries queue instead of holding.
+    const calls: unknown[] = [];
+    const runOptions: Array<{ operation: string; options: unknown }> = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      controlPlane: {
+        async run(operation, attempt, options) {
+          runOptions.push({ operation, options });
+          return attempt();
+        },
+      },
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+    const acquireTransferSlot = async () => () => {};
+
+    await handle.workspace.uploadFiles(
+      [
+        {
+          destinationPath: "/workspace/.makeademo/screened-repo.tar.gz",
+          sourcePath: "/tmp/repo/screened-repo.tar.gz",
+        },
+      ],
+      { acquireTransferSlot },
+    );
+
+    const uploads = runOptions.filter(
+      ({ operation }) => operation === "fs.upload",
+    );
+    expect(uploads).toHaveLength(2);
+    for (const upload of uploads) {
+      expect(
+        (upload.options as { acquireTransferSlot?: unknown })
+          .acquireTransferSlot,
+      ).toBe(acquireTransferSlot);
+    }
+  });
+
   it("uploads workspace artifacts to the Daytona workspace", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({

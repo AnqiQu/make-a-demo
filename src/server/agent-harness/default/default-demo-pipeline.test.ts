@@ -114,13 +114,14 @@ describe("runDefaultDemoPipeline", () => {
         },
         {
           bulkTransferLimiter: {
-            async run(task) {
+            acquire() {
               events.push("limiter acquired");
-              try {
-                return await task();
-              } finally {
-                events.push("limiter released");
-              }
+              return {
+                lease: Promise.resolve(() => {
+                  events.push("limiter released");
+                }),
+                queuedBehind: 0,
+              };
             },
           },
           async createHarnessDependencies() {
@@ -150,6 +151,98 @@ describe("runDefaultDemoPipeline", () => {
       "snapshot read",
       "limiter released",
     ]);
+  });
+
+  it("releases the transfer slot when the snapshot read fails", async () => {
+    // One dead clone must never wedge the batch behind an unreleased slot.
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-dead-clone-"));
+    let released = false;
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: [],
+          repoUrl: "https://github.com/acme/dead-clone",
+        },
+        {
+          bulkTransferLimiter: {
+            acquire: () => ({
+              lease: Promise.resolve(() => {
+                released = true;
+              }),
+              queuedBehind: 0,
+            }),
+          },
+          outputRoot,
+          async readRepoSnapshot() {
+            throw new Error("clone died mid-transfer");
+          },
+          runId: "dead-clone",
+        },
+      ),
+    ).rejects.toThrow("clone died mid-transfer");
+
+    expect(released).toBe(true);
+  });
+
+  it("logs the queued wait when the snapshot read waits behind the batch's transfers", async () => {
+    // N177 (wave-21): four runs waited 45+ minutes for the batch transfer
+    // slot before their first byte of work, and nothing in their logs said
+    // so. The wait must read as "queued behind N transfers" in the run's
+    // own pipeline log.
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-queued-"));
+    const sourceArchive = {
+      commitSha: "abc123def456",
+      path: join(outputRoot, "screened-repo.tar.gz"),
+      sha256: "archive-sha256",
+      sizeBytes: 2,
+    };
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: [],
+          repoUrl: "https://github.com/acme/queued-clone",
+        },
+        {
+          bulkTransferLimiter: {
+            acquire: () => ({
+              lease: Promise.resolve(() => {}),
+              queuedBehind: 3,
+            }),
+          },
+          async createHarnessDependencies() {
+            throw new Error("dependency handoff observed");
+          },
+          outputRoot,
+          async readRepoSnapshot() {
+            return {
+              commitSha: sourceArchive.commitSha,
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 2 },
+              secretQuarantineManifest: {
+                entries: [],
+                version: "2026-07-15",
+              },
+              sourceArchive,
+            };
+          },
+          runId: "queued-clone",
+        },
+      ),
+    ).rejects.toThrow("dependency handoff observed");
+
+    const logText = await readFile(
+      join(outputRoot, "queued-clone", "pipeline-log.jsonl"),
+      "utf8",
+    );
+    expect(logText).toContain('"event":"transfer.queue.waiting"');
+    expect(logText).toContain('"queuedBehind":3');
+    expect(logText).toContain('"transfer":"repo-snapshot"');
+    expect(logText).toContain('"event":"transfer.queue.acquired"');
+    expect(logText).toContain('"waitedMs"');
   });
 
   it("feeds strategist memory into the harness and records the run back into it", async () => {
@@ -236,6 +329,7 @@ describe("runDefaultDemoPipeline", () => {
         sourcePath: join(outputRoot, "architecture.png"),
       },
     };
+
     const workspaceHandle = {
       async destroy() {
         calls.push("workspace.destroy");
@@ -405,9 +499,10 @@ describe("runDefaultDemoPipeline", () => {
           scriptRepairs: 1,
         },
         staticImageAssets,
+
         async runHarnessPipeline(input, dependencies, harnessOptions) {
           calls.push(`harness:${input.repoUrl}:${input.runId}`);
-          expect(harnessOptions).toEqual({
+expect(harnessOptions).toEqual({
             captureAcceptedScript: expect.any(Function),
             destroyWorkspaceOnCompletion: false,
             jobDeadlineMs: 90 * 60_000,
@@ -604,6 +699,19 @@ describe("runDefaultDemoPipeline", () => {
         sha256: "screened-repo-sha256",
       },
     });
+    expect(appendedDigests).toEqual([
+      {
+        entry: expect.objectContaining({
+          lifecycle: {
+            appDir: ".",
+            installCommandUsed: "bun install",
+            startCommandUsed: "bun run dev",
+          },
+          outcome: "passed",
+        }),
+        repoUrl: "https://github.com/acme/calendar",
+      },
+    ]);
   });
 
   it("completes a synthetic-only Demo without requiring browser recording", async () => {

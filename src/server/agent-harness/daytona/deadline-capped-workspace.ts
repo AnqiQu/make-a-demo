@@ -87,7 +87,7 @@ export function createDeadlineCappedWorkspace(
     startSubmittedCodeApp: (input) => workspace.startSubmittedCodeApp(input),
     stopSubmittedCodeApp: () => workspace.stopSubmittedCodeApp(),
     syncSubmittedCodeWorkspace: () => workspace.syncSubmittedCodeWorkspace(),
-    uploadFiles: (files) => workspace.uploadFiles(files),
+    uploadFiles: (files, options) => workspace.uploadFiles(files, options),
     uploadSubmittedCodeFiles: (files) =>
       workspace.uploadSubmittedCodeFiles(files),
     writeSandboxLog: (entry) => workspace.writeSandboxLog(entry),

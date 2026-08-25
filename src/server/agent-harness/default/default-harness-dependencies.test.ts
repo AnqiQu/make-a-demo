@@ -3371,11 +3371,13 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(repairPrompt).toContain("console-tail");
   });
 
-  it("serializes the screened-archive upload through the shared bulk-transfer limiter", async () => {
+  it("leases the batch transfer slot around the screened-archive upload, not the extraction", async () => {
     // The archive upload shares the batch uplink with every other entry's
     // clone and upload (twenty's 294MB transfer starved calcom and
-    // ghostfolio's clones, 2026-08-13T23-23); the batch's limiter must hold
-    // the lock for exactly the upload, not the sandbox-side extraction.
+    // ghostfolio's clones, 2026-08-13T23-23). N177: the workspace receives
+    // a per-attempt slot acquirer instead of running inside a held lease,
+    // so the transfer envelope can release between retry windows; the
+    // sandbox-side extraction stays outside any lease.
     const events: string[] = [];
     const manifest = preparationManifest();
     let manifestWritten = false;
@@ -3393,27 +3395,30 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async uploadFiles(files) {
+      async uploadFiles(files, options) {
         if (
           files.some(
             ({ destinationPath }) =>
               destinationPath === "/workspace/.makeademo/screened-repo.tar.gz",
           )
         ) {
+          const release = await options?.acquireTransferSlot?.();
           events.push("archive uploaded");
+          release?.();
         }
       },
     });
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
       bulkTransferLimiter: {
-        async run(task) {
+        acquire() {
           events.push("limiter acquired");
-          try {
-            return await task();
-          } finally {
-            events.push("limiter released");
-          }
+          return {
+            lease: Promise.resolve(() => {
+              events.push("limiter released");
+            }),
+            queuedBehind: 0,
+          };
         },
       },
       openCodeRunner: {

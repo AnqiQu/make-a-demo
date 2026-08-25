@@ -463,6 +463,118 @@ describe("createDaytonaControlPlaneEnvelope", () => {
     });
   });
 
+  it("leases the transfer slot per attempt so retry waits run unleased", async () => {
+    // N177 (cyberchef, wave-21): the whole retry arc ran inside one held
+    // bulk-transfer lease, serializing four runs' setup behind a wedged
+    // upload. The envelope may hold the slot only while an attempt runs.
+    const sequence: string[] = [];
+    const envelope = createDaytonaControlPlaneEnvelope({
+      logger: {
+        error: async () => {},
+        info: async () => {},
+        warn: async () => {},
+      },
+      random: () => 0.5,
+      wait: async () => {
+        sequence.push("ladder wait");
+      },
+    });
+    let attempts = 0;
+
+    const result = await envelope.run(
+      "fs.upload",
+      () => {
+        attempts += 1;
+        sequence.push(`attempt ${attempts}`);
+        return attempts === 1
+          ? Promise.reject(transient502())
+          : Promise.resolve("uploaded");
+      },
+      {
+        acquireTransferSlot: async () => {
+          sequence.push("slot acquired");
+          return () => {
+            sequence.push("slot released");
+          };
+        },
+        ladderMs: [1_000],
+      },
+    );
+
+    expect(result).toBe("uploaded");
+    expect(sequence).toEqual([
+      "slot acquired",
+      "attempt 1",
+      "slot released",
+      "ladder wait",
+      "slot acquired",
+      "attempt 2",
+      "slot released",
+    ]);
+  });
+
+  it("recreates a wedged target while the transfer slot is released", async () => {
+    // The N161 recreate-and-retry arc especially must not run inside a
+    // held lease: recreation is control-plane work, not uplink work.
+    const sequence: string[] = [];
+    const envelope = createDaytonaControlPlaneEnvelope({
+      logger: {
+        error: async () => {},
+        info: async () => {},
+        warn: async () => {},
+      },
+      random: () => 0.5,
+      wait: async () => {
+        sequence.push("ladder wait");
+      },
+    });
+    let attempts = 0;
+    let sandboxId = "submitted_wedged";
+
+    const result = await envelope.run(
+      "fs.upload",
+      () => {
+        attempts += 1;
+        sequence.push(`attempt ${attempts}`);
+        return sandboxId === "submitted_wedged"
+          ? new Promise<string>(() => {})
+          : Promise.resolve("uploaded");
+      },
+      {
+        acquireTransferSlot: async () => {
+          sequence.push("slot acquired");
+          return () => {
+            sequence.push("slot released");
+          };
+        },
+        attemptTimeoutMs: 10,
+        ladderMs: [1_000, 2_000],
+        onTargetWedged: async () => {
+          sequence.push("target recreated");
+          sandboxId = "submitted_replacement";
+          return true;
+        },
+        sandboxId: () => sandboxId,
+      },
+    );
+
+    expect(result).toBe("uploaded");
+    expect(sequence).toEqual([
+      "slot acquired",
+      "attempt 1",
+      "slot released",
+      "ladder wait",
+      "slot acquired",
+      "attempt 2",
+      "slot released",
+      "target recreated",
+      "ladder wait",
+      "slot acquired",
+      "attempt 3",
+      "slot released",
+    ]);
+  });
+
   it("does not combine hangs from different sandbox targets", async () => {
     const { envelope, waits } = createRecordingEnvelope();
     let attempts = 0;

@@ -172,7 +172,7 @@ describe("runPipelineMatrix", () => {
         log: () => {},
         runPipeline: async (_input, _runId, batch) => {
           limiters.push(batch.bulkTransferLimiter);
-          await batch.bulkTransferLimiter.run(async () => {});
+          (await batch.bulkTransferLimiter.acquire().lease)();
           return passingPipelineResult();
         },
       },
