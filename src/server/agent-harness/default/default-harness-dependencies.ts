@@ -7289,6 +7289,11 @@ function createRunTriagePrompt(
       `Read ${artifactPaths.repoProfile} for the backend-resolved repository profile. You may also read the repository under /workspace/repo to assess lifecycle weight: workspace-graph breadth, build requirements, service migrations, and seed paths.`,
       `This run's submitted-code sandbox class is ${input.submittedCodeSandboxClass}. The standard class reserves roughly 2 vCPUs and 4 GiB of memory; the heavyweight class is the larger bounded reservation for capacity-classified repositories.`,
       "Advise how Repo Preparation should shape a demo runtime that fits this envelope. Prefer lighter lifecycles: a development server over a production build, the narrowest workspace closure that serves the demo, and fixtures or seeds over service migrations.",
+      ...(memoryEntryCount > 0
+        ? [
+            "Before writing your hints, reconcile each one against the memory file's recorded failures, memos, and any passing run's recorded lifecycle: when a hint would steer preparation into a form memory shows failing, or away from a form memory shows passing, carry that lesson into the hint explicitly instead of dropping it. Round-one preparation hears only your hints, so a memo whose lesson is not in a hint is lost.",
+          ]
+        : []),
       "You may not edit the repository, run lifecycle commands, change the run plan, or fail the run; your advice is purely additive steering.",
       `Write one JSON object of the shape {"preparationStrategyHints":["..."],"envelopeFitWarning":"..."} to ${artifactPaths.runTriageAdvice}. Use at most 8 short hints. envelopeFitWarning is optional; include it only to state a concrete risk that the default lifecycle will not fit the sandbox envelope.`,
       "After writing it, do not call another tool.",

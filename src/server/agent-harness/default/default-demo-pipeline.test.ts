@@ -329,7 +329,14 @@ describe("runDefaultDemoPipeline", () => {
         sourcePath: join(outputRoot, "architecture.png"),
       },
     };
-
+    // N178: the last passing digest's lifecycle reaches the harness input,
+    // and the passing run's own resolved lifecycle lands in its digest.
+    const appendedDigests: unknown[] = [];
+    const priorPassingLifecycle = {
+      appDir: ".",
+      installCommandUsed: "bun install",
+      startCommandUsed: "bun run start",
+    };
     const workspaceHandle = {
       async destroy() {
         calls.push("workspace.destroy");
@@ -499,10 +506,26 @@ describe("runDefaultDemoPipeline", () => {
           scriptRepairs: 1,
         },
         staticImageAssets,
-
+        strategistMemoryStore: {
+          async append(appendInput) {
+            appendedDigests.push(appendInput);
+          },
+          async readRecent() {
+            return [
+              {
+                adviceNotes: [],
+                lifecycle: priorPassingLifecycle,
+                outcome: "passed" as const,
+                recordedAt: "2026-08-23T00:00:00.000Z",
+                runId: "matrix-prior",
+              },
+            ];
+          },
+        },
         async runHarnessPipeline(input, dependencies, harnessOptions) {
           calls.push(`harness:${input.repoUrl}:${input.runId}`);
-expect(harnessOptions).toEqual({
+          expect(input.lastPassingLifecycle).toEqual(priorPassingLifecycle);
+          expect(harnessOptions).toEqual({
             captureAcceptedScript: expect.any(Function),
             destroyWorkspaceOnCompletion: false,
             jobDeadlineMs: 90 * 60_000,

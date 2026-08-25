@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { appendLifecycleCommandMutationEvidence } from "./lifecycle-mutation-evidence";
+import {
+  appendLifecycleCommandMutationEvidence,
+  appendPassingLifecycleDivergenceEvidence,
+} from "./lifecycle-mutation-evidence";
 
 function installFailure(overrides?: {
   failureClassification?: string;
@@ -326,5 +329,93 @@ describe("appendLifecycleCommandMutationEvidence", () => {
       "provisioned-service migration commands postgres: `bun run db:push --force` differs from postgres: `bun run db:migrate`",
     );
     expect(enriched.logsSummary).not.toContain("redis");
+  });
+});
+
+describe("appendPassingLifecycleDivergenceEvidence", () => {
+  it("leads with the last passing form when the failing command diverges from it", () => {
+    // N178 (midday, wave-21): the filtered install was declared from round
+    // one, so the within-run mutation scan had no green baseline — but the
+    // last passing digest knew the unfiltered form, one JSONL line away.
+    const failure = installFailure();
+
+    const enriched = appendPassingLifecycleDivergenceEvidence({
+      failure,
+      lastPassingLifecycle: lifecycle({
+        installCommandUsed: "bun install --frozen-lockfile",
+      }),
+      preparationManifest: lifecycle(),
+    });
+
+    const [headline] = enriched.logsSummary.split("\n");
+    expect(headline).toContain("Cross-run lifecycle divergence");
+    expect(headline).toContain(
+      "install command `bun install --frozen-lockfile --filter=@midday/dashboard...`",
+    );
+    expect(headline).toContain("`bun install --frozen-lockfile`");
+    expect(headline).toContain("last passing run");
+    expect(headline).toMatch(/try|justify/i);
+    expect(enriched.logsSummary).toContain(failure.logsSummary);
+    expect(enriched.suggestedRepairHints).toEqual(["existing hint"]);
+    expect(enriched.failureClassification).toBe("install failure");
+  });
+
+  it("returns the failure unchanged when it matches the last passing form", () => {
+    const failure = installFailure();
+
+    expect(
+      appendPassingLifecycleDivergenceEvidence({
+        failure,
+        lastPassingLifecycle: lifecycle(),
+        preparationManifest: lifecycle(),
+      }),
+    ).toBe(failure);
+  });
+
+  it("returns the failure unchanged when no passing lifecycle is recorded", () => {
+    const failure = installFailure();
+
+    expect(
+      appendPassingLifecycleDivergenceEvidence({
+        failure,
+        lastPassingLifecycle: undefined,
+        preparationManifest: lifecycle(),
+      }),
+    ).toBe(failure);
+  });
+
+  it("returns the failure unchanged when the classification blames no lifecycle command", () => {
+    // "unbuilt workspace dependency" stays with the graph-build
+    // escalation; a cross-run form comparison would contradict it.
+    const failure = installFailure({
+      failureClassification: "unbuilt workspace dependency",
+    });
+
+    expect(
+      appendPassingLifecycleDivergenceEvidence({
+        failure,
+        lastPassingLifecycle: lifecycle({
+          installCommandUsed: "bun install --frozen-lockfile",
+        }),
+        preparationManifest: lifecycle(),
+      }),
+    ).toBe(failure);
+  });
+
+  it("names a missing build command against the passing run's declared build", () => {
+    const failure = installFailure({
+      failureClassification: "build failure",
+      logsSummary: "Build produced no admin bundle.",
+    });
+
+    const enriched = appendPassingLifecycleDivergenceEvidence({
+      failure,
+      lastPassingLifecycle: lifecycle({ buildCommandUsed: "yarn run build" }),
+      preparationManifest: lifecycle(),
+    });
+
+    const [headline] = enriched.logsSummary.split("\n");
+    expect(headline).toContain("build command no declared build command");
+    expect(headline).toContain("`yarn run build`");
   });
 });

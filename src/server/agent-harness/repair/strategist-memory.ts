@@ -13,14 +13,37 @@ export type StrategistMemoryAdviceNote = {
 };
 
 /**
+ * The resolved lifecycle a passing run demonstrated, recorded in the run
+ * digest so later runs can compare their declared commands against a form
+ * proven to work (N178: midday's regression burned five rounds on a
+ * filtered install while the digest's outcome line silently knew the last
+ * pass installed unfiltered). Field names mirror the Preparation Manifest;
+ * data-strategy entries keep only their command surface.
+ */
+export type StrategistMemoryLifecycle = {
+  appDir: string;
+  buildCommandUsed?: string;
+  dataStrategy?: {
+    migrationCommand?: string;
+    rung: string;
+    seedCommand?: string;
+    service: string;
+  }[];
+  installCommandUsed: string;
+  startCommandUsed: string;
+};
+
+/**
  * The durable record of one completed run of a repository. Deterministic
  * code assembles it from the run's own artifacts at run end; the strategist
- * only reads it on later runs. Entries are advisory history — they steer
- * nothing deterministically and grant no authority.
+ * reads it on later runs as advisory history. The one deterministic
+ * consumer is the passing `lifecycle`, which round-one evidence may cite
+ * verbatim as a proven prior form (N178) — it still grants no authority.
  */
 export type StrategistRunMemoryEntry = {
   adviceNotes: StrategistMemoryAdviceNote[];
   finalFailureStage?: string;
+  lifecycle?: StrategistMemoryLifecycle;
   outcome: "passed" | "failed";
   recordedAt: string;
   runId: string;
@@ -102,6 +125,76 @@ function strategistMemoryRepoKey(repoUrl: string): string {
     .replace(/\.git$/, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Reduces a resolved Preparation Manifest to the digest's lifecycle
+ * record: the commands and app directory a passing run demonstrated,
+ * nothing else. Structural on purpose so this module keeps no schema
+ * imports; data-strategy entries are stripped to their command surface.
+ */
+export function toStrategistMemoryLifecycle(manifest: {
+  appDir: string;
+  buildCommandUsed?: string;
+  dataStrategy?: readonly {
+    detail?: string;
+    migrationCommand?: string;
+    rung: string;
+    seedCommand?: string;
+    service: string;
+  }[];
+  installCommandUsed: string;
+  startCommandUsed: string;
+}): StrategistMemoryLifecycle {
+  return {
+    appDir: manifest.appDir,
+    ...(manifest.buildCommandUsed === undefined
+      ? {}
+      : { buildCommandUsed: manifest.buildCommandUsed }),
+    ...(manifest.dataStrategy === undefined
+      ? {}
+      : {
+          dataStrategy: manifest.dataStrategy.map((entry) => ({
+            ...(entry.migrationCommand === undefined
+              ? {}
+              : { migrationCommand: entry.migrationCommand }),
+            rung: entry.rung,
+            ...(entry.seedCommand === undefined
+              ? {}
+              : { seedCommand: entry.seedCommand }),
+            service: entry.service,
+          })),
+        }),
+    installCommandUsed: manifest.installCommandUsed,
+    startCommandUsed: manifest.startCommandUsed,
+  };
+}
+
+/**
+ * Reads the most recent passing run's recorded lifecycle from memory
+ * entries (oldest first, as `readRecent` returns them). Failed runs,
+ * digests that predate the lifecycle field, and malformed persisted
+ * lifecycles are all skipped — undefined means "no proven prior form",
+ * and callers must present nothing rather than something reconstructed.
+ */
+export function readLastPassingLifecycle(
+  entries: readonly StrategistRunMemoryEntry[],
+): StrategistMemoryLifecycle | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.outcome !== "passed") {
+      continue;
+    }
+    const lifecycle = entry.lifecycle;
+    if (
+      typeof lifecycle?.appDir === "string" &&
+      typeof lifecycle.installCommandUsed === "string" &&
+      typeof lifecycle.startCommandUsed === "string"
+    ) {
+      return lifecycle;
+    }
+  }
+  return undefined;
 }
 
 /**

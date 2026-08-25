@@ -28,7 +28,9 @@ import {
   type StrategistRunMemoryEntry,
   createFileStrategistMemoryStore,
   readFailedStage,
+  readLastPassingLifecycle,
   readStrategistAdviceNotes,
+  toStrategistMemoryLifecycle,
 } from "../repair/strategist-memory";
 import {
   type ValidationReport,
@@ -210,6 +212,10 @@ export async function runDefaultDemoPipeline(
   } catch {
     // Unreadable memory means no memory; the run proceeds without history.
   }
+  const lastPassingLifecycle = readLastPassingLifecycle(strategistMemory);
+  // N178: the digest of a passing run remembers its resolved lifecycle, so
+  // later runs can compare a failing command against a proven form.
+  let passingPreparationManifest: AgentHarnessPipelineResult["preparationManifest"];
   // The durable record of this run for the strategist's future
   // consultations: deterministically assembled from the run's own mirrored
   // artifacts, appended for every outcome including failures before the
@@ -231,6 +237,13 @@ export async function runDefaultDemoPipeline(
           ...(failedStage === undefined
             ? {}
             : { finalFailureStage: failedStage }),
+          ...(outcome === "passed" && passingPreparationManifest !== undefined
+            ? {
+                lifecycle: toStrategistMemoryLifecycle(
+                  passingPreparationManifest,
+                ),
+              }
+            : {}),
           outcome,
           recordedAt: new Date().toISOString(),
           runId,
@@ -293,6 +306,7 @@ export async function runDefaultDemoPipeline(
             : { targetUsers: input.targetUsers }),
         },
         files: repoSnapshot.files,
+        ...(lastPassingLifecycle === undefined ? {} : { lastPassingLifecycle }),
         ...(input.normalizedSupportingDocuments === undefined
           ? {}
           : {
@@ -340,6 +354,7 @@ export async function runDefaultDemoPipeline(
       },
     );
     assertHarnessPassed(pipelineResult, logPath);
+    passingPreparationManifest = pipelineResult.preparationManifest;
 
     const scriptPackage = pipelineResult.scriptCandidate?.scriptJsonContent;
     if (scriptPackage === undefined) {

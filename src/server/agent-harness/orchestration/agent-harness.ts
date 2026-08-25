@@ -18,7 +18,10 @@ import {
   type SubmittedCodeSandboxClass,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
-import { appendLifecycleCommandMutationEvidence } from "../repair/lifecycle-mutation-evidence";
+import {
+  appendLifecycleCommandMutationEvidence,
+  appendPassingLifecycleDivergenceEvidence,
+} from "../repair/lifecycle-mutation-evidence";
 import {
   type RepairBudgetSnapshot,
   type RepairRoundLedger,
@@ -31,6 +34,7 @@ import {
   readRepairBudgetDecision,
   repairBudgetExhaustedMessage,
 } from "../repair/repair-router";
+import type { StrategistMemoryLifecycle } from "../repair/strategist-memory";
 import {
   type FidelityCandidate,
   createPreparationFidelityReport,
@@ -101,6 +105,13 @@ export type AgentHarnessPipelineInput = {
     targetUsers?: string;
   };
   files: Array<{ path: string; symlinkTarget?: string; text?: string }>;
+  /**
+   * The resolved lifecycle this repository's last passing run
+   * demonstrated, read from the strategist run digest. Deterministic
+   * round-one evidence cites it when a failing lifecycle command diverges
+   * from the proven form (N178); it steers nothing else.
+   */
+  lastPassingLifecycle?: StrategistMemoryLifecycle;
   normalizedSupportingDocuments?: Array<Record<string, unknown>>;
   repoUrl: string;
   rootDir?: string;
@@ -1734,13 +1745,26 @@ async function ensureValidPreparation(input: {
           repairFailure,
         );
         // Enriched after fingerprinting, and never ledgered: the mutation
-        // prose is prompt-facing evidence (N171), while fingerprints and
-        // ledger headlines must keep comparing raw reports.
-        const steeredFailureReport = appendLifecycleCommandMutationEvidence({
+        // prose is prompt-facing evidence (N171/N178), while fingerprints
+        // and ledger headlines must keep comparing raw reports.
+        const mutationSteeredReport = appendLifecycleCommandMutationEvidence({
           failure: repairFailure,
           preparationManifest,
           repairRounds: input.repairRoundSources,
         });
+        // The within-run mutation delta names the exact round to revert to,
+        // so it outranks the cross-run comparison; the last passing run's
+        // form speaks only while this run's own history is silent (N178:
+        // midday's regression was declared from round one, where no green
+        // baseline exists inside the run).
+        const steeredFailureReport =
+          mutationSteeredReport !== repairFailure
+            ? mutationSteeredReport
+            : appendPassingLifecycleDivergenceEvidence({
+                failure: repairFailure,
+                lastPassingLifecycle: input.input.lastPassingLifecycle,
+                preparationManifest,
+              });
         const advice = await consultRepairStrategy({
           dependencies: input.dependencies,
           failureReport: steeredFailureReport,

@@ -4,7 +4,9 @@ import { join } from "node:path";
 import {
   createFileStrategistMemoryStore,
   readFailedStage,
+  readLastPassingLifecycle,
   readStrategistAdviceNotes,
+  toStrategistMemoryLifecycle,
 } from "./strategist-memory";
 
 async function memoryDirectory(): Promise<string> {
@@ -81,6 +83,120 @@ describe("createFileStrategistMemoryStore", () => {
     await expect(
       store.readRecent({ limit: 2, repoUrl: "https://github.com/acme/app" }),
     ).resolves.toEqual([entry("run-3", "failed"), entry("run-4", "failed")]);
+  });
+});
+
+describe("readLastPassingLifecycle", () => {
+  it("round-trips a passing run's resolved lifecycle through the store", async () => {
+    // N178 (midday, wave-21): the digest carried only the outcome line, so
+    // five repair rounds stayed blind to the fact that the last pass
+    // installed unfiltered — a fact one JSONL line away.
+    const store = createFileStrategistMemoryStore({
+      directory: await memoryDirectory(),
+    });
+    const lifecycle = {
+      appDir: "apps/dashboard",
+      installCommandUsed: "bun install --frozen-lockfile",
+      startCommandUsed: "bun run dev",
+    };
+    await store.append({
+      entry: { ...entry("run-1", "passed"), lifecycle },
+      repoUrl: "https://github.com/midday-ai/midday",
+    });
+
+    const read = await store.readRecent({
+      limit: 3,
+      repoUrl: "https://github.com/midday-ai/midday",
+    });
+    expect(readLastPassingLifecycle(read)).toEqual(lifecycle);
+  });
+
+  it("reads the newest passing lifecycle and skips failed or lifecycle-less entries", () => {
+    const older = {
+      appDir: ".",
+      installCommandUsed: "bun install",
+      startCommandUsed: "bun run dev",
+    };
+    const newer = {
+      appDir: ".",
+      buildCommandUsed: "bun run build",
+      installCommandUsed: "bun install --frozen-lockfile",
+      startCommandUsed: "bun run preview",
+    };
+
+    expect(
+      readLastPassingLifecycle([
+        { ...entry("run-1", "passed"), lifecycle: older },
+        { ...entry("run-2", "passed"), lifecycle: newer },
+        // A digest recorded before the lifecycle field existed.
+        entry("run-3", "passed"),
+        { ...entry("run-4", "failed"), lifecycle: older },
+      ]),
+    ).toEqual(newer);
+    expect(
+      readLastPassingLifecycle([entry("run-1", "failed")]),
+    ).toBeUndefined();
+    expect(readLastPassingLifecycle([])).toBeUndefined();
+  });
+
+  it("ignores a malformed persisted lifecycle instead of surfacing it", () => {
+    // The JSONL reader is deliberately tolerant, so a hand-edited or torn
+    // lifecycle can reach this seam; evidence must present nothing rather
+    // than a reconstructed form.
+    expect(
+      readLastPassingLifecycle([
+        {
+          ...entry("run-1", "passed"),
+          lifecycle: { appDir: 7 } as never,
+        },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("reduces a preparation manifest to the digest's lifecycle fields", () => {
+    expect(
+      toStrategistMemoryLifecycle({
+        appDir: "apps/dashboard",
+        buildCommandUsed: "pnpm run build",
+        dataStrategy: [
+          {
+            detail: "postgres backs calendars",
+            migrationCommand: "pnpm db:migrate",
+            rung: "provisioned-service",
+            seedCommand: "pnpm db:seed",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "pnpm install --frozen-lockfile",
+        startCommandUsed: "pnpm run dev",
+      }),
+    ).toEqual({
+      appDir: "apps/dashboard",
+      buildCommandUsed: "pnpm run build",
+      dataStrategy: [
+        {
+          migrationCommand: "pnpm db:migrate",
+          rung: "provisioned-service",
+          seedCommand: "pnpm db:seed",
+          service: "postgres",
+        },
+      ],
+      installCommandUsed: "pnpm install --frozen-lockfile",
+      startCommandUsed: "pnpm run dev",
+    });
+
+    const minimal = toStrategistMemoryLifecycle({
+      appDir: ".",
+      installCommandUsed: "bun install",
+      startCommandUsed: "bun run dev",
+    });
+    expect(minimal).toEqual({
+      appDir: ".",
+      installCommandUsed: "bun install",
+      startCommandUsed: "bun run dev",
+    });
+    expect(minimal).not.toHaveProperty("buildCommandUsed");
+    expect(minimal).not.toHaveProperty("dataStrategy");
   });
 });
 

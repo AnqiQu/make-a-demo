@@ -3798,7 +3798,17 @@ describe("runAgentHarnessPipeline", () => {
     };
 
     const result = await runAgentHarnessPipeline(
-      pipelineInput({ runId: "run_lifecycle_mutation_evidence" }),
+      pipelineInput({
+        // Present but outranked: the within-run mutation delta names the
+        // exact round to revert to, so the cross-run comparison must not
+        // stack a second, conflicting headline on the same failure (N178).
+        lastPassingLifecycle: {
+          appDir: ".",
+          installCommandUsed: "bun install",
+          startCommandUsed: "bun run dev",
+        },
+        runId: "run_lifecycle_mutation_evidence",
+      }),
       stubPipelineDependencies({
         async adviseRepairStrategy(input) {
           consultations.push(input);
@@ -3885,6 +3895,7 @@ describe("runAgentHarnessPipeline", () => {
     expect(repairSummaries[2]).toContain(
       "Install command failed: npm error code ERESOLVE",
     );
+    expect(repairSummaries[2]).not.toContain("Cross-run lifecycle divergence");
     expect(consultations).toHaveLength(1);
     expect(consultations[0]?.failureReport.logsSummary).toContain(
       "Lifecycle command mutation suspected",
@@ -3894,6 +3905,111 @@ describe("runAgentHarnessPipeline", () => {
     expect(consultations[0]?.roundLedger.rounds[2]?.causalHeadline).toBe(
       "Install command failed: npm error code ERESOLVE",
     );
+  });
+
+  it("leads round-one repair evidence with the last passing run's diverging lifecycle", async () => {
+    // N178 (midday, wave-21): the filtered install was declared from round
+    // one, so the within-run mutation scan had no green baseline to diff
+    // against; five rounds stayed blind to the unfiltered form the last
+    // passing run had demonstrated — a fact one digest line away.
+    let preflightAttempts = 0;
+    const repairSummaries: string[] = [];
+    let manifestCaptures = 0;
+    // Install-failure repairs pass the fidelity gate only when their delta
+    // is package-manifest changes; that gate is not the seam under test.
+    const packageManifestOnlyDiffCapture = async () => {
+      manifestCaptures += 1;
+      const digit = String(manifestCaptures % 10);
+      return {
+        changedFileSha256: {
+          "package.json": `sha256:${digit.repeat(64)}` as const,
+        },
+        changedPaths: ["/workspace/repo/package.json"],
+        patch: `diff --git a/package.json b/package.json\n+// capture ${manifestCaptures}`,
+        patchSha256: `sha256:${digit.repeat(64)}` as const,
+        sourceCommitSha: "abc123def456",
+      };
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({
+        lastPassingLifecycle: {
+          appDir: ".",
+          installCommandUsed: "bun install --frozen-lockfile",
+          startCommandUsed: "bun run dev",
+        },
+        runId: "run_cross_run_divergence",
+      }),
+      stubPipelineDependencies({
+        capturePreparationWorkspaceDiff: packageManifestOnlyDiffCapture,
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return {
+            manifest: {
+              ...preparationManifest(),
+              installCommandUsed:
+                "bun install --frozen-lockfile --filter=@midday/dashboard...",
+            },
+          };
+        },
+        async repairPreparation({ failureReport, preparationManifest }) {
+          repairSummaries.push(failureReport.logsSummary);
+          return {
+            manifest: { ...preparationManifest, id: "prep_repair_1" },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand:
+                "bun install --frozen-lockfile --filter=@midday/dashboard...",
+              failureClassification: "install failure",
+              logsSummary:
+                "Install command failed: workspace filter matched no packages",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 3 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairSummaries).toHaveLength(1);
+    expect(repairSummaries[0]).toMatch(
+      /^Cross-run lifecycle divergence: the failing install command `bun install --frozen-lockfile --filter=@midday\/dashboard\.\.\.` differs from `bun install --frozen-lockfile`, which this repository's last passing run used\./,
+    );
+    expect(repairSummaries[0]).toContain(
+      "Install command failed: workspace filter matched no packages",
+    );
+    // The enriched copy is prompt-facing only; persisted validation
+    // reports must keep the raw failure.
+    expect(
+      result.validationReports.some((candidate) =>
+        candidate.logsSummary.includes("Cross-run lifecycle divergence"),
+      ),
+    ).toBe(false);
   });
 
   it("adds strategist hints to the existing repair-hint channel", async () => {

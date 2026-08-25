@@ -156,3 +156,49 @@ export function appendLifecycleCommandMutationEvidence<
     ].join("\n"),
   };
 }
+
+/**
+ * Leads a lifecycle-command failure's evidence with the form this
+ * repository's last passing run demonstrated (N178): when the failing
+ * command differs from the recorded passing lifecycle, the delta is
+ * prepended to `logsSummary` with a try-or-justify instruction, so a
+ * regression declared from round one — where the within-run mutation scan
+ * has no green baseline — still confronts a proven prior form (midday,
+ * wave-21: five rounds of a filtered install while the last pass's
+ * unfiltered form sat unread in the digest). Returns the failure unchanged
+ * when its classification blames no lifecycle command, no passing
+ * lifecycle is recorded, or the forms already agree. Both sides are
+ * resolved lifecycles, so the comparison is like against like. The same
+ * caller contract as the within-run scan applies: fingerprint and ledger
+ * the raw report, never the enriched copy.
+ */
+export function appendPassingLifecycleDivergenceEvidence<
+  T extends { failureClassification?: string; logsSummary: string },
+>(input: {
+  failure: T;
+  lastPassingLifecycle: LifecycleCommandCarrier | undefined;
+  preparationManifest: LifecycleCommandCarrier;
+}): T {
+  if (input.lastPassingLifecycle === undefined) {
+    return input.failure;
+  }
+  const field =
+    lifecycleFieldByClassification[input.failure.failureClassification ?? ""];
+  if (field === undefined) {
+    return input.failure;
+  }
+  const currentForm = readLifecycleForm(input.preparationManifest, field);
+  const passingForm = readLifecycleForm(input.lastPassingLifecycle, field);
+  if (passingForm === currentForm) {
+    return input.failure;
+  }
+  const label = lifecycleFieldLabels[field];
+  return {
+    ...input.failure,
+    logsSummary: [
+      `Cross-run lifecycle divergence: the failing ${label} ${currentForm} differs from ${passingForm}, which this repository's last passing run used. First try the last passing form, or justify why the divergent form must stay.`,
+      "",
+      input.failure.logsSummary,
+    ].join("\n"),
+  };
+}
