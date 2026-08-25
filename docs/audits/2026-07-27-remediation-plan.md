@@ -10636,3 +10636,197 @@ BETWEEN runs and INTO round one.
   should say the lifecycle ENDED rather than
   quote a connection refusal, if the process
   exit is already in hand.
+
+## Addendum (2026-08-25, wave-22 — 5/11 with a clean infra wave; the N178 substrate works and twenty's groundhog round-5 revert names what is still missing: N179–N181)
+
+Batch matrix-2026-08-25T05-16-13-609Z, report
+matrix-report-2026-08-25T06-35-51-090Z. Five of
+eleven passed: homer (6.1m), conduit (33.3m),
+midday (78.1m — zero repair rounds, its first
+clean-run pass ever), excalidraw (39.7m),
+cyberchef (76.9m — recovered exactly as the
+wave-21 watchlist predicted; the wedge was the
+batch, not the repo). Failures: calcom (74.3m),
+directus (45.1m), ghost (72.8m), ghostfolio
+(19.8m, REGRESSED), outline (69.5m), twenty
+(70.4m). The N177/N178 commits and the 08-24
+refactor sweep were all live hours before
+launch — no photo-finish caveats this wave.
+
+### Infra and substrate verified
+
+- N177 held: every run's pre-harness setup was
+  under 1.1 minutes and no queue waits occurred;
+  wave-21's 46-minute starvation shape is gone
+  from a batch that completed without a single
+  upload wedge.
+- N178's recording half works: all five passing
+  runs' digests carry the resolved lifecycle
+  (midday's records the unfiltered install and
+  apps/dashboard appDir — the exact facts whose
+  absence killed wave-21). The citation half saw
+  no live exercise: midday needed no rounds, and
+  every other failure belongs to a repo whose
+  last pass predates the lifecycle field —
+  coverage accrues only as repos pass, which is
+  the gap N179 closes.
+- The 08-24 refactor sweep (fifteen refactors,
+  seven bugfixes) shows no regression signature
+  anywhere: no new failure class, no stage
+  moving backward that the diagnosis below does
+  not attribute to agent variance.
+
+### Diagnoses
+
+- twenty (70.4m): the groundhog arc, third wave
+  running, now with the sharpest possible
+  record: rounds failed "unbuilt workspace
+  dependency" under yarn run build, the round-4
+  repair declared the nx run-many graph build,
+  the round-5 repair REVERTED it while fixing
+  something else, and N171 fired its
+  word-for-word wave-20 message on the final
+  round's failure. The catch is correct and the
+  timing is structurally too late: the evidence
+  arrives with the failure after the revert,
+  and the run has no round left. The fix is
+  transport, not detection — twenty has never
+  passed, so N178's passing-lifecycle citation
+  has nothing to cite, but the round-4 form
+  that moved the failure is in the ledger and
+  the memo every wave. N179.
+- calcom (74.3m, rounds exhausted): genuine new
+  frontier. The runtime preflight now PASSES —
+  the startup grind that consumed waves 18–21
+  is solved — and the feature probe fails on
+  seeded content: "60min" absent from
+  /event-types, "30min" absent from /pro/30min,
+  "Working Hours" absent from /availability.
+  Calcom has become outline: a
+  seed-versus-proof grounding problem, which is
+  repair-agent territory with correct evidence.
+- ghostfolio (19.8m, REGRESSED): preparation
+  variance, not code. Attempt 1 never wrote the
+  manifest; attempts 2–3 declared a runtime
+  script "build:demo" that does not exist —
+  wave-18's "build:makeademo" trap with a new
+  invented name. The rejection is precise but
+  bare: it says the script is undefined and
+  does not say what IS defined. N181. (Its
+  wave-19–21 passes predate the lifecycle
+  field, so round-one citation had nothing to
+  cite; N179's backfill covers this too.)
+- directus (45.1m): the extensions arc with
+  N173's evidence improvement visible — the
+  failure now reads "Failed to resolve entry
+  for package @directus/extensions ... may have
+  incorrect main/module/exports", the actual
+  error instead of a stack frame. The dist
+  exists but its exports map does not match —
+  the wave-19 CJS-only build story sharpened.
+  The memo names the graph build; what it
+  cannot yet name is the entry-map mismatch;
+  this wave's digest note now records it.
+- outline (69.5m): a NEW failure mode, its
+  fourth different arc in four waves —
+  yarn demo:seed was OOM-killed against the
+  provisioned postgres after compiling the
+  server first ("Clean previous build…
+  Compiling…"), N169's Killed-evidence firing
+  as designed. Outline's problem is not any
+  one failure; it is preparation variance
+  re-rolling the strategy dice every wave.
+  N179's backfilled passing lifecycle gives
+  round one its wave-19 shape to hold onto.
+- ghost (72.8m): the demo-gate bootstrap again
+  exits 1 (pnpm --filter ghost-admin run
+  build), nothing listens on 2368 — and for the
+  third wave the readiness evidence leads with
+  "curl: (7) Failed to connect" while "The
+  managed app command exited with code 1" sits
+  mid-paragraph. The probe result is a symptom;
+  the process exit in hand is the fact. N180,
+  promoted from two waves on the watchlist.
+
+### N179 (High, bugfix) — known-good lifecycle fragments must survive runs that never passed
+
+Two extensions to the N178 substrate: (1) when
+a run ends without passing, its digest records
+the last lifecycle whose declaration MOVED the
+failure (the adherence ledger already marks
+failure-moved rounds) as a known-good fragment,
+distinct from a passing lifecycle; round-one
+evidence and the triage reconciliation cite it
+the same way ("the closest this repository has
+come used X — declare it or justify departing")
+— twenty's round-4 nx build would then be
+round-1 material in every future run instead of
+a round-4 rediscovery and a round-5 loss. (2) a
+one-time backfill: reconstruct passing
+lifecycles for repos whose passes predate the
+lifecycle field (ghostfolio, outline, conduit's
+earlier passes) from the archived run
+directories' preparation manifests, so coverage
+does not wait on re-passes.
+
+### N180 (Medium, bugfix) — a dead process outranks a refused connection
+
+When the managed app command has already exited
+at readiness-probe time, the failure evidence
+must lead with that exit — code, and the
+command tail — and demote the probe's
+connection refusal to a consequence. Ghost has
+paid three waves of curl-first evidence for a
+process whose exit code and output were in
+hand. Same evidence-ordering philosophy as
+N167, applied at the runtime-readiness seam.
+
+### N181 (Medium, bugfix) — an undefined-script rejection must name the defined scripts
+
+When manifest validation rejects a runtime
+script as undefined for the declared appDir,
+the rejection must enumerate the scripts that
+ARE defined there (the package.json is already
+parsed to make the judgment). Ghostfolio has
+now invented two script names two waves apart
+and been told only "not defined" both times;
+the N166/N172 pattern — reject WITH the legal
+list — applies verbatim.
+
+### Meta-orchestrator audit (eighth live wave)
+
+A quiet, healthy wave for the meta layer:
+memory feeds logged everywhere (N176), five new
+lifecycle-bearing digests recorded (N178), no
+consultation misfires, and midday's zero-round
+pass suggests the preparation layer itself has
+absorbed what three waves of failure taught —
+though whether that is transport or luck only
+wave-23 can say. The structural finding stands
+from wave-21 and sharpens here: detection
+(N171) and memory (M5) both work; what loses
+runs now is that hard-won knowledge enters each
+run at the strategist layer instead of at round
+one. N179 is the third and most targeted
+attempt at that seam.
+
+### Watchlist (updated)
+
+- twenty: N179's fragment citation is its item;
+  if a wave-23 run still rediscovers the nx
+  build mid-run, escalate to making N171
+  preemptive (require same-round justification
+  when a repair mutates a lifecycle command
+  while fixing an unrelated class).
+- calcom: watch the seed-grounding loop; its
+  startup era is over.
+- ghostfolio: N181's script list plus N179's
+  backfill; expect recovery.
+- outline: four arcs in four waves — after
+  N179's backfill, judge whether round one
+  holds the wave-19 shape.
+- directus: the entry-map mismatch is the
+  frontier; the digest note now carries it.
+- ghost: N180 will finally show the repair
+  agent the build failure instead of the curl
+  symptom.
