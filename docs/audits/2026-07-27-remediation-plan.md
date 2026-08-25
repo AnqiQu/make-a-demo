@@ -10844,3 +10844,245 @@ attempt at that seam.
 - ghost: N180 will finally show the repair
   agent the build failure instead of the curl
   symptom.
+
+## Addendum (2026-08-25, wave-23 — 3/11 but the fronts moved deeper everywhere; N180 fires true, and N179's recording half is poisoned and must not reach wave-24 as-is: N182–N184)
+
+Batch matrix-2026-08-25T17-30-26-735Z, report
+matrix-report-2026-08-25T19-03-06-728Z. Three of
+eleven passed: homer (7.2m), conduit (19.3m),
+cyberchef (89.3m — 12.4 minutes slower than
+wave-22 and back inside photo-finish territory;
+watch). Failures: midday (41.8m, REGRESSED),
+excalidraw (53.3m, REGRESSED — in footage
+capture, its deepest run ever), calcom (73.6m),
+directus (82.4m), ghost (75.8m), ghostfolio
+(81.5m), outline (48.1m), twenty (66.6m).
+Provenance: this batch ran the wave-22 N-item
+implementations (N179/N180/N181) from the
+UNCOMMITTED working tree — 17 files, +2526
+lines in flight.
+
+### The critical finding: N179 records poison
+
+The recording half of N179 is live and writes
+lifecycleFragment into failed runs' digests —
+and both fragments it wrote this wave are
+wrong, in ways the citation half would amplify
+into round-one anchors next wave:
+
+- twenty's fragment is `yarn run build` — the
+  command that failed four consecutive rounds.
+  It earned fragment status because round 4's
+  failure CLASSIFICATION shifted (unbuilt
+  workspace dependency → build failure) while
+  the lifecycle stayed byte-identical, and the
+  eligibility gate is only "outcome was not
+  failure-unchanged". A lifecycle identical to
+  the previous round's cannot claim credit for
+  movement — the movement came from other
+  edits.
+- ghostfolio's fragment is the five-command nx
+  chain that N171 flagged the same run as a
+  suspected unjustified mutation. The round the
+  mutation detector told the agent to revert is
+  the round the memory layer enshrined as "the
+  closest this repository has come".
+
+Both repos have no passing lifecycle on file,
+which is exactly the condition under which the
+citation half speaks. Unfixed, wave-24's round
+one would be steered TOWARD the broken build on
+twenty and TOWARD the suspect mutation on
+ghostfolio — knowledge transport working
+perfectly in the wrong direction. N182, and it
+must land before the next wave.
+
+### Substrate verified otherwise
+
+- N180 fired true on ghost: the failure now
+  leads with "The managed app command exited
+  with code 1 before readiness: `pnpm run...`"
+  — the process exit first, the probe demoted.
+  Three waves of curl-first evidence are over;
+  the repair agent finally reads the build
+  failure as the failure.
+- N178/N179 recording is otherwise sound: this
+  wave's digests carry lifecycle for passes and
+  lifecycleFragment plus finalFailureStage for
+  failures; N177 stayed quiet (no queue waits,
+  pre-harness setup healthy); N181 saw no
+  exercise (no undefined-script rejection
+  occurred this wave).
+- No regression traces to the in-flight
+  implementations beyond N182 itself: midday
+  and excalidraw died in seams the wave-22
+  sweep did not touch.
+
+### Diagnoses
+
+- excalidraw (53.3m, REGRESSED, footage
+  capture): its deepest run ever — preflight,
+  exploration, scripting, and capture-path
+  validation all passed; the continuous take
+  ran; and collection failed on "Expected one
+  Playwright video in .../continuous-take/
+  playwright-videos, found 4". Playwright
+  records one video PER PAGE, and the collector
+  asserts exactly one file in the directory —
+  an assumption any app that spawns pages
+  (export previews, popups, target=_blank)
+  breaks legitimately. The take itself likely
+  succeeded; the harness refused its own
+  footage. N183. This was probably a pass
+  otherwise.
+- midday (41.8m, REGRESSED): the wave-21
+  question "transport or luck" is answered —
+  luck. Preparation re-rolled back to the
+  broken fixture state: invoicing's "INV-1042"
+  and the transactions anchor absent again.
+  The N178 lifecycle citation cannot help; the
+  lifecycle (install, build, start, appDir) was
+  fine — what varied is fixture CONTENT, which
+  no memory surface records. N184.
+- outline (48.1m): fifth different arc in five
+  waves, same lesson as midday: four routes
+  served their document shell but rendered no
+  visible content — fixtures or demo gating
+  blocking render. Content-layer variance.
+  N184.
+- calcom (73.6m): auth-degraded again —
+  event-types and availability reached
+  authentication instead of the seeded demo
+  session. The directive is on file; the
+  seeded-session work remains the frontier.
+- directus (82.4m): past the extensions build
+  for the first time since its wave-17 pass —
+  the run reached the feature probe and failed
+  on ungrounded features (collection creation,
+  content studio, permissions). The
+  entry-map/build arc is behind it this run;
+  the frontier is now content grounding like
+  the others.
+- twenty (66.6m): the groundhog loop did not
+  recur in its old form; rounds 1–4 all kept
+  `yarn run build` (the nx form was never
+  declared this wave — wave-22's digest
+  predates fragment recording, so round one had
+  nothing to cite; expected). The error is
+  sharper than ever: vite.config.ts cannot
+  resolve twenty-shared/dist/vite.mjs — the
+  workspace-graph build requirement stated as
+  a module-resolution fact.
+- ghost (75.8m): same admin-build frontier,
+  now with N180-ordered evidence. Whether the
+  repair agent converges on the build failure
+  it can finally see is wave-24's question.
+- cyberchef (89.3m): passed, but 12.4 minutes
+  slower than wave-22 and 42 seconds from the
+  ceiling — the directus wave-18 signature.
+  Nothing to fix; noted for the stall watch.
+
+### N182 (High, bugfix) — fragment eligibility must require attributable movement
+
+A round may record its resolved lifecycle as
+the failure-moved fragment only when (a) that
+lifecycle DIFFERS from the previous round's
+declared lifecycle — movement with an identical
+lifecycle is attributable to other edits, never
+to the lifecycle; (b) the round is not flagged
+by the mutation detector (N171) — a suspected
+unjustified mutation cannot simultaneously be
+citation-grade; and (c) the failure moved
+forward (new classification or stage), which is
+the existing gate. Both wave-23 poisonings are
+regression fixtures: twenty's identical-build
+class shift and ghostfolio's mutation-flagged
+chain must both leave no fragment. The
+citation half needs no change — it is correct
+to cite what recording certifies; recording
+must certify honestly.
+
+### N183 (High, bugfix) — collect the take's video by page handle, not directory census
+
+Footage collection must identify the
+continuous take's video through the recording
+page's own handle (Playwright's page.video()
+names the exact file) instead of asserting the
+videos directory holds exactly one file. Apps
+legitimately spawn extra pages — export
+previews, download targets, popups — and each
+one records its own video; those are not
+errors. Keep a diagnostic note when extra
+videos exist (they reveal unplanned page
+spawns worth seeing in the audit), but the
+take's video is the one the take's page
+recorded. Excalidraw's deepest-ever run died
+refusing its own successful footage.
+
+### N184 (Medium, bugfix) — passing runs must remember their proof anchors, not just their lifecycle
+
+Extend the N178 digest with the passing run's
+grounded proof anchors: for each verified
+feature, the declared proof target and route
+that grounded it (midday: "INV-1042 on
+/invoices"; the fixture names, not the fixture
+files). Round-one evidence cites them exactly
+like the lifecycle: "the last passing run
+grounded these proofs — reproduce them or
+justify departing." Records only what the
+run's own verification artifacts already
+contain, accrues organically through the same
+digest write as N178, and starts cold for
+unseen repositories — no operator seeding, per
+the N179 refinement. midday, outline, and
+directus all now die re-rolling content their
+own passes had right.
+
+### Meta-orchestrator audit (ninth live wave)
+
+The transport layers behaved as designed —
+including the broken design: fragments were
+recorded exactly per the too-weak spec (N182 is
+a spec bug, not an implementation accident),
+the citation half correctly stayed silent
+(nothing eligible to cite yet), and N180's
+reordered evidence reached ghost's repair agent
+on every round. The dominant failure class has
+visibly consolidated: five of eight failures
+now die at the feature-verification/content
+layer — install, build, startup, and runtime
+are increasingly solved layers. The meta-layer
+lesson of the wave is that memory quality is
+now load-bearing: what recording certifies,
+citation amplifies, so eligibility gates are
+where correctness lives (N182), and content —
+not lifecycle — is what memory does not yet
+carry (N184).
+
+### Watchlist (updated)
+
+- N182 must land before the next wave runs, or
+  twenty and ghostfolio start their runs
+  anchored to poison. The two wave-23 digests
+  already written will age out of the
+  three-entry read window as new digests
+  accrue; no rewriting of history.
+- excalidraw: N183 is likely its pass.
+- midday, outline, directus: N184's proof
+  anchors are their item; all three know how to
+  build and start themselves now.
+- calcom: seeded demo session, unchanged.
+- ghost: first wave where the repair agent sees
+  the build failure first; judge convergence,
+  not evidence, next.
+- twenty: with N182-clean fragments, the nx
+  form must first be REACHED again before it
+  can be recorded; if rounds 1–4 stay on `yarn
+  run build` again, consider seeding the
+  unbuilt-workspace-dependency evidence with
+  the module-resolution fact it already
+  contains (vite.mjs missing from
+  twenty-shared/dist names the exact package to
+  build).
+- cyberchef: 42 seconds of margin; the stall
+  tax (N170, still open) is its risk.
