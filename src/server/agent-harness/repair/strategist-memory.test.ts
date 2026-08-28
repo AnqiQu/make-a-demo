@@ -7,8 +7,10 @@ import {
   readFailureMovedLifecycle,
   readLastLifecycleFragment,
   readLastPassingLifecycle,
+  readLastPassingProofAnchors,
   readStrategistAdviceNotes,
   toStrategistMemoryLifecycle,
+  toStrategistMemoryProofAnchors,
 } from "./strategist-memory";
 
 async function memoryDirectory(): Promise<string> {
@@ -361,3 +363,161 @@ describe("readFailedStage", () => {
   });
 });
 
+describe("toStrategistMemoryProofAnchors", () => {
+  it("reduces grounded verdicts to declared proof targets and grounding routes", () => {
+    // N184 (midday): the last pass grounded "INV-1042" on /invoices, then
+    // preparation re-rolled the fixtures and no memory surface knew what
+    // "right" content looked like.
+    const anchors = toStrategistMemoryProofAnchors({
+      actionCatalogActions: [
+        { id: "open-transactions", route: "/transactions/list" },
+      ],
+      featureInventory: [
+        {
+          entryPaths: ["/invoices"],
+          expectedProof: { kind: "visible-text", text: "INV-1042" },
+          id: "invoicing",
+        },
+        {
+          entryPaths: ["/transactions"],
+          expectedProof: {
+            kind: "element-appears",
+            name: "Transactions table",
+          },
+          id: "transactions",
+        },
+        // No declared proof: nothing to anchor.
+        { entryPaths: ["/"], id: "dashboard" },
+        {
+          entryPaths: ["/settings"],
+          expectedProof: { kind: "visible-text", text: "Team members" },
+          id: "settings",
+        },
+      ],
+      featureVerdicts: [
+        {
+          evidence: ["declared-proof-invoicing"],
+          featureId: "invoicing",
+          verdict: "grounded",
+        },
+        {
+          evidence: ["open-transactions"],
+          featureId: "transactions",
+          verdict: "grounded",
+        },
+        { featureId: "dashboard", verdict: "grounded" },
+        { featureId: "settings", verdict: "failed" },
+      ],
+    });
+
+    expect(anchors).toEqual([
+      {
+        featureId: "invoicing",
+        proof: 'visible text "INV-1042"',
+        route: "/invoices",
+      },
+      {
+        featureId: "transactions",
+        proof: 'element "Transactions table" appears',
+        route: "/transactions/list",
+      },
+    ]);
+  });
+
+  it("renders each declared proof kind in the maker's vocabulary", () => {
+    const anchors = toStrategistMemoryProofAnchors({
+      featureInventory: [
+        {
+          entryPaths: ["/state"],
+          expectedProof: {
+            contains: "dark",
+            key: "theme",
+            kind: "app-state",
+            source: "localStorage",
+          },
+          id: "app-state-feature",
+        },
+        {
+          entryPaths: ["/canvas"],
+          expectedProof: { kind: "canvas-delta", locator: "#canvas" },
+          id: "canvas-feature",
+        },
+        {
+          entryPaths: ["/status"],
+          expectedProof: {
+            from: "draft",
+            kind: "state-transition",
+            locator: "[data-status]",
+            to: "sent",
+          },
+          id: "transition-feature",
+        },
+      ],
+      featureVerdicts: [
+        { featureId: "app-state-feature", verdict: "grounded" },
+        { featureId: "canvas-feature", verdict: "grounded" },
+        { featureId: "transition-feature", verdict: "grounded" },
+      ],
+    });
+
+    expect(anchors.map((anchor) => anchor.proof)).toEqual([
+      'app state localStorage.theme contains "dark"',
+      'canvas at "#canvas" changes',
+      '"[data-status]" transitions from "draft" to "sent"',
+    ]);
+  });
+
+  it("skips a grounded feature that supplies no route and a verdict without a feature", () => {
+    const anchors = toStrategistMemoryProofAnchors({
+      featureInventory: [
+        {
+          entryPaths: [],
+          expectedProof: { kind: "visible-text", text: "Routeless" },
+          id: "routeless",
+        },
+      ],
+      featureVerdicts: [
+        { featureId: "routeless", verdict: "grounded" },
+        { featureId: "unknown-feature", verdict: "grounded" },
+      ],
+    });
+
+    expect(anchors).toEqual([]);
+  });
+});
+
+describe("readLastPassingProofAnchors", () => {
+  it("reads the newest passing run's anchors and skips anchor-less passes", () => {
+    const anchors = [
+      {
+        featureId: "invoicing",
+        proof: 'visible text "INV-1042"',
+        route: "/invoices",
+      },
+    ];
+    expect(
+      readLastPassingProofAnchors([
+        { ...entry("run-oldest", "passed"), proofAnchors: anchors },
+        { ...entry("run-middle", "passed") },
+        {
+          ...entry("run-newest", "failed"),
+          proofAnchors: [
+            { featureId: "never", proof: "never", route: "/never" },
+          ],
+        },
+      ]),
+    ).toEqual(anchors);
+  });
+
+  it("ignores malformed persisted anchors instead of surfacing them", () => {
+    expect(
+      readLastPassingProofAnchors([
+        {
+          ...entry("run-malformed", "passed"),
+          proofAnchors: [{ featureId: 7, proof: "x", route: "/x" } as never],
+        },
+      ]),
+    ).toBeUndefined();
+    expect(readLastPassingProofAnchors([])).toBeUndefined();
+  });
+});

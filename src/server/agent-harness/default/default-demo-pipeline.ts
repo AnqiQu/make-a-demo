@@ -24,6 +24,7 @@ import {
   runAgentHarnessPipeline,
 } from "../orchestration/agent-harness";
 import {
+  type StrategistMemoryProofAnchor,
   type StrategistMemoryStore,
   type StrategistRunMemoryEntry,
   createFileStrategistMemoryStore,
@@ -31,8 +32,10 @@ import {
   readFailureMovedLifecycle,
   readLastLifecycleFragment,
   readLastPassingLifecycle,
+  readLastPassingProofAnchors,
   readStrategistAdviceNotes,
   toStrategistMemoryLifecycle,
+  toStrategistMemoryProofAnchors,
 } from "../repair/strategist-memory";
 import {
   type ValidationReport,
@@ -215,6 +218,7 @@ export async function runDefaultDemoPipeline(
     // Unreadable memory means no memory; the run proceeds without history.
   }
   const lastPassingLifecycle = readLastPassingLifecycle(strategistMemory);
+  const lastPassingProofAnchors = readLastPassingProofAnchors(strategistMemory);
   // N179: while no pass is recorded, the closest-known fragment — the
   // lifecycle a prior run's repair declared when it moved that run's
   // failure — is the best baseline round one can cite. A proven pass
@@ -226,6 +230,10 @@ export async function runDefaultDemoPipeline(
   // N178: the digest of a passing run remembers its resolved lifecycle, so
   // later runs can compare a failing command against a proven form.
   let passingPreparationManifest: AgentHarnessPipelineResult["preparationManifest"];
+  // N184: it also remembers the proofs the pass grounded — declared proof
+  // targets and the routes verification observed them on — so later runs
+  // can cite what "right" prepared content looked like.
+  let passingProofAnchors: StrategistMemoryProofAnchor[] | undefined;
   // The durable record of this run for the strategist's future
   // consultations: deterministically assembled from the run's own mirrored
   // artifacts, appended for every outcome including failures before the
@@ -268,6 +276,11 @@ export async function runDefaultDemoPipeline(
               }
             : {}),
           ...(lifecycleFragment === undefined ? {} : { lifecycleFragment }),
+          ...(outcome === "passed" &&
+          passingProofAnchors !== undefined &&
+          passingProofAnchors.length > 0
+            ? { proofAnchors: passingProofAnchors }
+            : {}),
           outcome,
           recordedAt: new Date().toISOString(),
           runId,
@@ -334,6 +347,9 @@ export async function runDefaultDemoPipeline(
           ? {}
           : { lastLifecycleFragment }),
         ...(lastPassingLifecycle === undefined ? {} : { lastPassingLifecycle }),
+        ...(lastPassingProofAnchors === undefined
+          ? {}
+          : { lastPassingProofAnchors }),
         ...(input.normalizedSupportingDocuments === undefined
           ? {}
           : {
@@ -382,6 +398,24 @@ export async function runDefaultDemoPipeline(
     );
     assertHarnessPassed(pipelineResult, logPath);
     passingPreparationManifest = pipelineResult.preparationManifest;
+    // The exploration loop can validate more than once; the last passed
+    // report holds the verdicts the pass actually stood on (N184).
+    const groundedExplorationReport = [...pipelineResult.validationReports]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.stage === "app-exploration" &&
+          candidate.status === "passed",
+      );
+    passingProofAnchors = toStrategistMemoryProofAnchors({
+      ...(pipelineResult.actionCatalog === undefined
+        ? {}
+        : { actionCatalogActions: pipelineResult.actionCatalog.actions }),
+      featureInventory:
+        pipelineResult.preparationManifest?.productContext.featureInventory ??
+        [],
+      featureVerdicts: groundedExplorationReport?.featureVerdicts ?? [],
+    });
 
     const scriptPackage = pipelineResult.scriptCandidate?.scriptJsonContent;
     if (scriptPackage === undefined) {

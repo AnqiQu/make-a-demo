@@ -23,6 +23,7 @@ import {
   appendLifecycleFragmentDivergenceEvidence,
   appendPassingLifecycleDivergenceEvidence,
 } from "../repair/lifecycle-mutation-evidence";
+import { appendProofAnchorEvidence } from "../repair/proof-anchor-evidence";
 import {
   type RepairBudgetSnapshot,
   type RepairRoundLedger,
@@ -37,6 +38,7 @@ import {
 } from "../repair/repair-router";
 import {
   type StrategistMemoryLifecycle,
+  type StrategistMemoryProofAnchor,
   toStrategistMemoryLifecycle,
 } from "../repair/strategist-memory";
 import {
@@ -124,6 +126,14 @@ export type AgentHarnessPipelineInput = {
    * from the proven form (N178); it steers nothing else.
    */
   lastPassingLifecycle?: StrategistMemoryLifecycle;
+  /**
+   * The proof anchors this repository's last passing run grounded — per
+   * verified feature, the declared proof target and the route verification
+   * observed it on — read from the strategist run digest. Deterministic
+   * round-one evidence cites them when a content/grounding failure needs
+   * the last pass's prepared content named (N184); they steer nothing else.
+   */
+  lastPassingProofAnchors?: StrategistMemoryProofAnchor[];
   normalizedSupportingDocuments?: Array<Record<string, unknown>>;
   repoUrl: string;
   rootDir?: string;
@@ -1780,7 +1790,7 @@ async function ensureValidPreparation(input: {
                 lastPassingLifecycle: input.input.lastPassingLifecycle,
                 preparationManifest,
               });
-        const steeredFailureReport =
+        const fragmentSteeredReport =
           passingSteeredReport !== repairFailure ||
           input.input.lastPassingLifecycle !== undefined
             ? passingSteeredReport
@@ -1788,6 +1798,17 @@ async function ensureValidPreparation(input: {
                 failure: repairFailure,
                 lastLifecycleFragment: input.input.lastLifecycleFragment,
                 preparationManifest,
+              });
+        // Content failures blame no lifecycle command, so the citations
+        // above stay silent for them; the last passing run's grounded
+        // proofs are the baseline they can cite instead (N184: midday
+        // re-rolled fixture content its own last pass had right).
+        const steeredFailureReport =
+          fragmentSteeredReport !== repairFailure
+            ? fragmentSteeredReport
+            : appendProofAnchorEvidence({
+                failure: repairFailure,
+                lastPassingProofAnchors: input.input.lastPassingProofAnchors,
               });
         const advice = await consultRepairStrategy({
           dependencies: input.dependencies,

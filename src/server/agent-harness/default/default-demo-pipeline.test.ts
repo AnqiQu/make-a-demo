@@ -535,6 +535,15 @@ describe("runDefaultDemoPipeline", () => {
       installCommandUsed: "bun install",
       startCommandUsed: "bun run start",
     };
+    // N184: the last passing digest's proof anchors thread the same way,
+    // and the passing run's own grounded proofs land in its digest.
+    const priorProofAnchors = [
+      {
+        featureId: "billing",
+        proof: 'visible text "Latest invoice"',
+        route: "/billing",
+      },
+    ];
     const workspaceHandle = {
       async destroy() {
         calls.push("workspace.destroy");
@@ -714,6 +723,7 @@ describe("runDefaultDemoPipeline", () => {
                 adviceNotes: [],
                 lifecycle: priorPassingLifecycle,
                 outcome: "passed" as const,
+                proofAnchors: priorProofAnchors,
                 recordedAt: "2026-08-23T00:00:00.000Z",
                 runId: "matrix-prior",
               },
@@ -736,6 +746,7 @@ describe("runDefaultDemoPipeline", () => {
         async runHarnessPipeline(input, dependencies, harnessOptions) {
           calls.push(`harness:${input.repoUrl}:${input.runId}`);
           expect(input.lastPassingLifecycle).toEqual(priorPassingLifecycle);
+          expect(input.lastPassingProofAnchors).toEqual(priorProofAnchors);
           expect(input.lastLifecycleFragment).toBeUndefined();
           expect(harnessOptions).toEqual({
             captureAcceptedScript: expect.any(Function),
@@ -790,7 +801,21 @@ describe("runDefaultDemoPipeline", () => {
               ports: [3000],
               productContext: {
                 evidencePaths: ["package.json"],
-                featureInventory: [],
+                featureInventory: [
+                  {
+                    authStrategy: "none" as const,
+                    description: "Show the calendar.",
+                    entryPaths: ["/calendar"],
+                    expectedProof: {
+                      kind: "visible-text" as const,
+                      text: "Team standup",
+                    },
+                    fixtureNotes: [],
+                    id: "calendar-view",
+                    label: "Calendar view",
+                    sourcePaths: ["src/calendar.tsx"],
+                  },
+                ],
                 name: "Demo App",
                 summary: "A demo application.",
               },
@@ -851,6 +876,30 @@ describe("runDefaultDemoPipeline", () => {
             },
             status: "passed",
             validationReports: [
+              {
+                artifactReferences: [],
+                blockedNetworkAttempts: [],
+                browserObservations: [],
+                consoleErrors: [],
+                featureVerdicts: [
+                  {
+                    evidence: ["declared-proof-calendar-view"],
+                    featureId: "calendar-view",
+                    groundedBy: "declared-proof" as const,
+                    verdict: "grounded" as const,
+                  },
+                ],
+                logsSummary: "Grounded every prepared feature",
+                networkAttempts: [],
+                pageErrors: [],
+                retryCount: 0,
+                screenshots: [],
+                stage: "app-exploration",
+                status: "passed",
+                stderrExcerpts: [],
+                stdoutExcerpts: [],
+                suggestedRepairHints: [],
+              },
               {
                 artifactReferences: [],
                 blockedNetworkAttempts: [],
@@ -943,6 +992,13 @@ describe("runDefaultDemoPipeline", () => {
             startCommandUsed: "bun run dev",
           },
           outcome: "passed",
+          proofAnchors: [
+            {
+              featureId: "calendar-view",
+              proof: 'visible text "Team standup"',
+              route: "/calendar",
+            },
+          ],
         }),
         repoUrl: "https://github.com/acme/calendar",
       },

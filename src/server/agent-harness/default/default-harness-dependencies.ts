@@ -7311,7 +7311,7 @@ function createRunTriagePrompt(
       "Advise how Repo Preparation should shape a demo runtime that fits this envelope. Prefer lighter lifecycles: a development server over a production build, the narrowest workspace closure that serves the demo, and fixtures or seeds over service migrations.",
       ...(memoryEntryCount > 0
         ? [
-            "Before writing your hints, reconcile each one against the memory file's recorded failures, memos, and any recorded lifecycle — a passing run's lifecycle, or a failed run's lifecycleFragment, the closest form a repair declared when it moved that run's failure: when a hint would steer preparation into a form memory shows failing, or away from a form memory shows passing or coming closest, carry that lesson into the hint explicitly instead of dropping it. Round-one preparation hears only your hints, so a memo whose lesson is not in a hint is lost.",
+            "Before writing your hints, reconcile each one against the memory file's recorded failures, memos, and any recorded lifecycle or proofAnchors — a passing run's lifecycle, a failed run's lifecycleFragment (the closest form a repair declared when it moved that run's failure), or a passing run's proofAnchors (the declared proofs the pass grounded, and where): when a hint would steer preparation into a form memory shows failing, or away from a form or content memory shows passing or coming closest, carry that lesson into the hint explicitly instead of dropping it. Round-one preparation hears only your hints, so a memo whose lesson is not in a hint is lost.",
           ]
         : []),
       "You may not edit the repository, run lifecycle commands, change the run plan, or fail the run; your advice is purely additive steering.",

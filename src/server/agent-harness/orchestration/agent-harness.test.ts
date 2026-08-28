@@ -4135,6 +4135,111 @@ describe("runAgentHarnessPipeline", () => {
     ).toBe(false);
   });
 
+  it("leads round-one repair evidence with the last passing run's proof anchors for a content failure", async () => {
+    // N184 (midday, wave-23): preparation re-rolled the fixture content the
+    // last pass had right — "INV-1042" absent again — and the lifecycle
+    // citation could not help because install, build, and start were fine.
+    let preflightAttempts = 0;
+    const repairSummaries: string[] = [];
+    let manifestCaptures = 0;
+    const packageManifestOnlyDiffCapture = async () => {
+      manifestCaptures += 1;
+      const digit = String(manifestCaptures % 10);
+      return {
+        changedFileSha256: {
+          "package.json": `sha256:${digit.repeat(64)}` as const,
+        },
+        changedPaths: ["/workspace/repo/package.json"],
+        patch: `diff --git a/package.json b/package.json\n+// capture ${manifestCaptures}`,
+        patchSha256: `sha256:${digit.repeat(64)}` as const,
+        sourceCommitSha: "abc123def456",
+      };
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({
+        // The lifecycle machinery is inert for content classifications;
+        // the anchors speak instead.
+        lastPassingLifecycle: {
+          appDir: ".",
+          installCommandUsed: "bun install --frozen-lockfile",
+          startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
+        },
+        lastPassingProofAnchors: [
+          {
+            featureId: "invoicing",
+            proof: 'visible text "INV-1042"',
+            route: "/invoices",
+          },
+        ],
+        runId: "run_proof_anchor_citation",
+      }),
+      stubPipelineDependencies({
+        capturePreparationWorkspaceDiff: packageManifestOnlyDiffCapture,
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport, preparationManifest }) {
+          repairSummaries.push(failureReport.logsSummary);
+          return {
+            manifest: { ...preparationManifest, id: "prep_repair_1" },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "requested feature not observable",
+              logsSummary:
+                "App Exploration found no browser evidence for requested features: Invoicing.",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 3 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairSummaries).toHaveLength(1);
+    expect(repairSummaries[0]).toMatch(
+      /^Cross-run proof anchors: this repository's last passing run grounded these declared proofs — reproduce them, or justify why the prepared content must depart from them:\n- invoicing: visible text "INV-1042" on \/invoices/,
+    );
+    expect(repairSummaries[0]).toContain(
+      "App Exploration found no browser evidence for requested features: Invoicing.",
+    );
+    // The lifecycle citations stay silent: nothing blames a command.
+    expect(repairSummaries[0]).not.toContain("Cross-run lifecycle divergence");
+    // The enriched copy is prompt-facing only; persisted validation
+    // reports must keep the raw failure.
+    expect(
+      result.validationReports.some((candidate) =>
+        candidate.logsSummary.includes("Cross-run proof anchors"),
+      ),
+    ).toBe(false);
+  });
+
   it("mirrors the failure-moved lifecycle artifact as repair rounds move the failure", async () => {
     // N179 (twenty): the round-4 graph build moved the failure and the
     // round-5 repair reverted it; nothing durable remembered the form. A

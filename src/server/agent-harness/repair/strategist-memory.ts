@@ -34,14 +34,29 @@ export type StrategistMemoryLifecycle = {
 };
 
 /**
+ * One proof a passing run grounded: the feature, the declared proof target
+ * in the maker's vocabulary ("INV-1042", never a fixture file), and the
+ * route where verification observed it (N184: midday re-rolled the fixture
+ * content its own last pass had right, and no memory surface recorded what
+ * "right" looked like).
+ */
+export type StrategistMemoryProofAnchor = {
+  featureId: string;
+  proof: string;
+  route: string;
+};
+
+/**
  * The durable record of one completed run of a repository. Deterministic
  * code assembles it from the run's own artifacts at run end; the strategist
  * reads it on later runs as advisory history. The deterministic consumers
  * are the passing `lifecycle`, which round-one evidence may cite verbatim
- * as a proven prior form (N178), and the failed run's `lifecycleFragment`
- * — the last lifecycle whose repair declaration moved this run's failure —
- * which evidence cites only while no pass is recorded (N179). Neither
- * grants authority.
+ * as a proven prior form (N178); the failed run's `lifecycleFragment` —
+ * the last lifecycle whose repair declaration moved this run's failure —
+ * which evidence cites only while no pass is recorded (N179); and the
+ * passing `proofAnchors`, which round-one evidence cites when a content
+ * failure needs the last pass's grounded proofs named (N184). None grants
+ * authority.
  */
 export type StrategistRunMemoryEntry = {
   adviceNotes: StrategistMemoryAdviceNote[];
@@ -49,6 +64,7 @@ export type StrategistRunMemoryEntry = {
   lifecycle?: StrategistMemoryLifecycle;
   lifecycleFragment?: StrategistMemoryLifecycle;
   outcome: "passed" | "failed";
+  proofAnchors?: StrategistMemoryProofAnchor[];
   recordedAt: string;
   runId: string;
 };
@@ -175,6 +191,91 @@ export function toStrategistMemoryLifecycle(manifest: {
 }
 
 /**
+ * The declared-proof vocabulary a feature can anchor on. Structural on
+ * purpose: the schema's ExpectedProof union satisfies it, and a kind added
+ * there surfaces here as a compile error at the reducer's call site rather
+ * than a silently dropped anchor.
+ */
+type DeclaredProofTarget =
+  | { contains: string; key: string; kind: "app-state"; source: string }
+  | { kind: "canvas-delta"; locator: string }
+  | { kind: "element-appears"; name: string }
+  | { from: string; kind: "state-transition"; locator: string; to: string }
+  | { kind: "visible-text"; text: string };
+
+/**
+ * Reduces a passing run's verification artifacts to the digest's proof
+ * anchors: for each feature the run grounded, the declared proof target
+ * rendered in the maker's vocabulary and the route the verdict's evidence
+ * grounded it on (catalog action routes first, the feature's first entry
+ * path as fallback — the same derivation exploration prose uses). Features
+ * without a declared proof are skipped: an anchor names what a later
+ * preparation must reproduce, and only declared proofs carry that
+ * vocabulary (N184). Structural on purpose so this module keeps no schema
+ * imports.
+ */
+export function toStrategistMemoryProofAnchors(input: {
+  actionCatalogActions?: readonly { id: string; route: string }[];
+  featureInventory: readonly {
+    entryPaths: readonly string[];
+    expectedProof?: DeclaredProofTarget;
+    id: string;
+  }[];
+  featureVerdicts: readonly {
+    evidence?: readonly string[];
+    featureId: string;
+    verdict: string;
+  }[];
+}): StrategistMemoryProofAnchor[] {
+  const routeByActionId = new Map(
+    (input.actionCatalogActions ?? []).map((action) => [
+      action.id,
+      action.route,
+    ]),
+  );
+  const anchors: StrategistMemoryProofAnchor[] = [];
+  for (const verdict of input.featureVerdicts) {
+    if (verdict.verdict !== "grounded") {
+      continue;
+    }
+    const feature = input.featureInventory.find(
+      (candidate) => candidate.id === verdict.featureId,
+    );
+    if (feature?.expectedProof === undefined) {
+      continue;
+    }
+    const route =
+      (verdict.evidence ?? [])
+        .map((actionId) => routeByActionId.get(actionId))
+        .find((candidate) => candidate !== undefined) ?? feature.entryPaths[0];
+    if (route === undefined) {
+      continue;
+    }
+    anchors.push({
+      featureId: feature.id,
+      proof: describeDeclaredProof(feature.expectedProof),
+      route,
+    });
+  }
+  return anchors;
+}
+
+function describeDeclaredProof(proof: DeclaredProofTarget): string {
+  switch (proof.kind) {
+    case "app-state":
+      return `app state ${proof.source}.${proof.key} contains ${JSON.stringify(proof.contains)}`;
+    case "canvas-delta":
+      return `canvas at ${JSON.stringify(proof.locator)} changes`;
+    case "element-appears":
+      return `element ${JSON.stringify(proof.name)} appears`;
+    case "state-transition":
+      return `${JSON.stringify(proof.locator)} transitions from ${JSON.stringify(proof.from)} to ${JSON.stringify(proof.to)}`;
+    case "visible-text":
+      return `visible text ${JSON.stringify(proof.text)}`;
+  }
+}
+
+/**
  * Reads the most recent passing run's recorded lifecycle from memory
  * entries (oldest first, as `readRecent` returns them). Failed runs,
  * digests that predate the lifecycle field, and malformed persisted
@@ -194,6 +295,40 @@ export function readLastPassingLifecycle(
     }
   }
   return undefined;
+}
+
+/**
+ * Reads the most recent passing run's recorded proof anchors from memory
+ * entries (oldest first, as `readRecent` returns them). Failed runs,
+ * anchor-less passes, and malformed persisted anchors are all skipped —
+ * undefined means "no grounded prior content to cite", and callers must
+ * present nothing rather than something reconstructed (N184).
+ */
+export function readLastPassingProofAnchors(
+  entries: readonly StrategistRunMemoryEntry[],
+): StrategistMemoryProofAnchor[] | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.outcome !== "passed") {
+      continue;
+    }
+    const anchors = (entry.proofAnchors ?? []).filter(isProofAnchorRecord);
+    if (anchors.length > 0) {
+      return anchors;
+    }
+  }
+  return undefined;
+}
+
+function isProofAnchorRecord(
+  value: unknown,
+): value is StrategistMemoryProofAnchor {
+  const anchor = value as StrategistMemoryProofAnchor | undefined;
+  return (
+    typeof anchor?.featureId === "string" &&
+    typeof anchor.proof === "string" &&
+    typeof anchor.route === "string"
+  );
 }
 
 /**
