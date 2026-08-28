@@ -11252,6 +11252,57 @@ describe("createDefaultAgentHarnessDependencies", () => {
       },
       status: "failed",
     });
+    // N180: the exit is the fact and leads; the refused connection is
+    // framed as its consequence instead of opening the evidence.
+    expect(report.logsSummary).toMatch(
+      /^The managed app command exited with code 0 before readiness: `bun run dev --host 127\.0\.0\.1 --port 3000`\./,
+    );
+    expect(report.logsSummary).toContain(
+      "is a consequence of the exited process",
+    );
+    expect(report.logsSummary.indexOf("Failed to connect")).toBeGreaterThan(
+      report.logsSummary.indexOf("exited with code 0"),
+    );
+  });
+
+  it("leads readiness evidence with the terminating signal when the app died without an exit code", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        return command.includes("curl -")
+          ? {
+              exitCode: 7,
+              stderr: "curl: (7) Failed to connect to 127.0.0.1",
+              stdout: "",
+            }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          running: false,
+          signal: "SIGKILL",
+          stderr: "",
+          stdout: "",
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.failureClassification).toBe("runtime crash");
+    expect(report.logsSummary).toMatch(
+      /^The managed app command exited on signal SIGKILL before readiness: `bun run dev --host 127\.0\.0\.1 --port 3000`\./,
+    );
   });
 
   it("classifies a production start missing undeclared build output as a runtime-configuration error", async () => {

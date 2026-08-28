@@ -3707,15 +3707,35 @@ async function validateResolvedSubmittedCodeRuntime(
           runtimeTarget,
         })
       : undefined;
-  const failedLogs = [
+  // N180 (ghost): a probe that cannot connect to a process that has
+  // already exited reports a consequence — the exit in hand is the fact.
+  // Three waves of repair rounds chased curl's refusal while the exit code
+  // and command sat mid-paragraph. A classifier headline still outranks
+  // this lead: it names a deeper cause than the exit itself.
+  const appExitHeadline =
+    appStatus !== undefined && !appStatus.running
+      ? `The managed app command exited${
+          appStatus.exitCode === undefined
+            ? appStatus.signal === undefined
+              ? ""
+              : ` on signal ${appStatus.signal}`
+            : ` with code ${appStatus.exitCode}`
+        } before readiness: \`${manifest.startCommandUsed}\`. The readiness probe's failure (${preflightResult.stderr || preflightResult.stdout || "no probe output"}) is a consequence of the exited process, not a separate fault.`
+      : undefined;
+  const failureHeadline =
     runtimeFailure.headline ??
-      serveFailureHeadline ??
-      `Prepared submitted-code runtime readiness failed: ${preflightResult.stderr || preflightResult.stdout}`,
+    serveFailureHeadline ??
+    appExitHeadline ??
+    `Prepared submitted-code runtime readiness failed: ${preflightResult.stderr || preflightResult.stdout}`;
+  const failedLogs = [
+    failureHeadline,
     appStatus === undefined
       ? undefined
       : appStatus.running
         ? "The managed app command was still running."
-        : `The managed app command exited with code ${appStatus.exitCode}.`,
+        : failureHeadline === appExitHeadline
+          ? undefined
+          : `The managed app command exited with code ${appStatus.exitCode}.`,
     appOutput.length === 0 ? undefined : `Managed app output:\n${appOutput}`,
     appStatusError === undefined
       ? undefined
