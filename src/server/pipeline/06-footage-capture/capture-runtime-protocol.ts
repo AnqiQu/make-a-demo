@@ -5,6 +5,7 @@ const markerPrefixes = {
   scene: "[makeademo:scene] ",
   step: "[makeademo:step] ",
   validation: "[makeademo:validation] script ",
+  video: "[makeademo:video] ",
 } as const;
 
 const visibleAssertionLabels = new Set([
@@ -64,6 +65,12 @@ export type CaptureRuntimeProtocol = {
     | ({ kind: "step" } & CaptureStepMarker)
   >;
   validation: CaptureValidationMarker[];
+  /**
+   * Recorded video files the capture wrapper named through its own page
+   * handles, so collection can identify the continuous take when extra pages
+   * (popups, previews) recorded their own videos.
+   */
+  videos: Array<{ path: string }>;
 };
 
 type OrderedRuntimeMarker =
@@ -122,6 +129,7 @@ export function readCaptureRuntimeProtocol(
     [];
   const navigations: CaptureRuntimeProtocol["navigations"] = [];
   const validation: CaptureValidationMarker[] = [];
+  const videos: CaptureRuntimeProtocol["videos"] = [];
   let sequence = 0;
 
   for (const stream of [output.stdout, output.stderr]) {
@@ -158,6 +166,10 @@ export function readCaptureRuntimeProtocol(
       }
       if (line.startsWith(markerPrefixes.network)) {
         blockedNetworkAttempts.push(readNetworkMarker(line));
+        continue;
+      }
+      if (line.startsWith(markerPrefixes.video)) {
+        videos.push(readVideoMarker(line));
         continue;
       }
       if (line.startsWith(markerPrefixes.validation)) {
@@ -200,6 +212,7 @@ export function readCaptureRuntimeProtocol(
       )
       .map(withoutOrderingMetadata),
     validation,
+    videos,
   };
 }
 
@@ -469,6 +482,9 @@ export function formatCaptureRuntimeProtocolLog(
     ...protocol.validation.map((event) =>
       JSON.stringify({ ...event, kind: "validation" }),
     ),
+    ...protocol.videos.map((video) =>
+      JSON.stringify({ ...video, kind: "video" }),
+    ),
   ]
     .map((line) => `${line}\n`)
     .join("");
@@ -633,6 +649,16 @@ function readNetworkMarker(
       : {}),
     ...(typeof value.url === "string" ? { url: value.url } : {}),
   };
+}
+
+function readVideoMarker(
+  line: string,
+): CaptureRuntimeProtocol["videos"][number] {
+  const value = readObjectPayload(line, markerPrefixes.video, "video");
+  if (typeof value.path !== "string" || value.path.length === 0) {
+    throw malformed("Malformed video marker emitted by capture script.");
+  }
+  return { path: value.path };
 }
 
 function readValidationMarker(line: string): CaptureValidationMarker {

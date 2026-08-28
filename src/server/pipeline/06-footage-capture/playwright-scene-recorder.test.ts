@@ -619,6 +619,162 @@ describe("PreparedWorkspacePlaywrightSceneRecorder", () => {
     }
   }, 20_000);
 
+  it("collects the take named by the capture script when extra pages also recorded videos", async () => {
+    // N183 (excalidraw, 2026-08-25): export previews opened extra pages, each
+    // recording its own video, and the one-file census killed the deepest run
+    // of the wave. The take is identified by the script's own page handle.
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-recorder-test-"),
+    );
+    const videoDirectory =
+      "/workspace/.makeademo/footage-capture-runs/run/work/continuous-take/playwright-videos";
+    const takeVideo = `${videoDirectory}/take.webm`;
+    const extraVideos = [
+      `${videoDirectory}/export-preview-one.webm`,
+      `${videoDirectory}/export-preview-two.webm`,
+      `${videoDirectory}/share-popup.webm`,
+    ];
+    const submittedCommands: string[] = [];
+    const recorder = new PreparedWorkspacePlaywrightSceneRecorder({
+      clipTrimmer: async (input) => {
+        await writeFile(input.outputVideoPath, "trimmed");
+        return { durationSeconds: input.durationMs / 1000 };
+      },
+      preparationWorkspace: fakeCaptureWorkspace({
+        bunResult: {
+          stdout: [
+            sceneMarker({
+              elapsedMs: 100,
+              event: "started",
+              sceneId: "scene-one",
+            }),
+            sceneMarker({
+              elapsedMs: 200,
+              event: "succeeded",
+              sceneId: "scene-one",
+            }),
+            `[makeademo:video] ${JSON.stringify({ path: takeVideo })}`,
+          ].join("\n"),
+        },
+        foundVideos: [...extraVideos, takeVideo],
+        submittedCommands,
+      }),
+    });
+
+    try {
+      await recorder.recordScenes({
+        baseUrl: "data:text/html,<main>MakeADemo</main>",
+        demoPlaywrightScript: validDemoScript("scene-one"),
+        runDirectory,
+        scenes: [sceneDescription("scene-one")],
+        sectionId: "demo-script",
+      });
+
+      const moveCommand = submittedCommands.find((command) =>
+        command.includes(" mv "),
+      );
+      expect(moveCommand).toContain("take.webm");
+      expect(moveCommand).not.toContain("export-preview");
+      const note = await readFile(
+        join(runDirectory, "extra-playwright-videos.log"),
+        "utf8",
+      );
+      for (const extraVideo of extraVideos) {
+        expect(note).toContain(extraVideo);
+      }
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("still fails an ambiguous multi-video census when the script named no take", async () => {
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-recorder-test-"),
+    );
+    const videoDirectory =
+      "/workspace/.makeademo/footage-capture-runs/run/work/continuous-take/playwright-videos";
+    const recorder = new PreparedWorkspacePlaywrightSceneRecorder({
+      preparationWorkspace: fakeCaptureWorkspace({
+        bunResult: {
+          stdout: [
+            sceneMarker({
+              elapsedMs: 100,
+              event: "started",
+              sceneId: "scene-one",
+            }),
+            sceneMarker({
+              elapsedMs: 200,
+              event: "succeeded",
+              sceneId: "scene-one",
+            }),
+          ].join("\n"),
+        },
+        foundVideos: [
+          `${videoDirectory}/first.webm`,
+          `${videoDirectory}/second.webm`,
+        ],
+      }),
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-one"),
+          runDirectory,
+          scenes: [sceneDescription("scene-one")],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow(
+        "found 2, and the capture script did not report which one is the continuous take",
+      );
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("fails when the take named by the capture script is missing from the census", async () => {
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-recorder-test-"),
+    );
+    const videoDirectory =
+      "/workspace/.makeademo/footage-capture-runs/run/work/continuous-take/playwright-videos";
+    const recorder = new PreparedWorkspacePlaywrightSceneRecorder({
+      preparationWorkspace: fakeCaptureWorkspace({
+        bunResult: {
+          stdout: [
+            sceneMarker({
+              elapsedMs: 100,
+              event: "started",
+              sceneId: "scene-one",
+            }),
+            sceneMarker({
+              elapsedMs: 200,
+              event: "succeeded",
+              sceneId: "scene-one",
+            }),
+            `[makeademo:video] ${JSON.stringify({ path: `${videoDirectory}/take.webm` })}`,
+          ].join("\n"),
+        },
+        foundVideos: [`${videoDirectory}/other.webm`],
+      }),
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-one"),
+          runDirectory,
+          scenes: [sceneDescription("scene-one")],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow("is not among the videos");
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it("reports ffmpeg trim failures with the Scene ID", async () => {
     const runDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-recorder-test-"),
@@ -661,12 +817,14 @@ describe("PreparedWorkspacePlaywrightSceneRecorder", () => {
 
 /**
  * Fakes the submitted-code sandbox seam the prepared-workspace recorder drives:
- * the remote `bun` run returns the given marker output, `find` reports one
- * recorded video, and the raw-take download materializes a local tar whose
- * continuous-take bytes are configurable so trim behavior can be exercised.
+ * the remote `bun` run returns the given marker output, `find` reports the
+ * given recorded videos (one by default), and the raw-take download
+ * materializes a local tar whose continuous-take bytes are configurable so
+ * trim behavior can be exercised.
  */
 function fakeCaptureWorkspace(input: {
   bunResult?: { exitCode?: number; stderr?: string; stdout?: string };
+  foundVideos?: string[];
   rawTakeBytes?: string;
   submittedCommands?: string[];
 }): AgentHarnessWorkspaceHandle {
@@ -701,8 +859,13 @@ function fakeCaptureWorkspace(input: {
           return {
             exitCode: 0,
             stderr: "",
-            stdout:
-              "/workspace/.makeademo/footage-capture-runs/run/work/continuous-take/playwright-videos/raw.webm\n",
+            stdout: (
+              input.foundVideos ?? [
+                "/workspace/.makeademo/footage-capture-runs/run/work/continuous-take/playwright-videos/raw.webm",
+              ]
+            )
+              .map((video) => `${video}\n`)
+              .join(""),
           };
         }
         if (command.includes("bun ")) {

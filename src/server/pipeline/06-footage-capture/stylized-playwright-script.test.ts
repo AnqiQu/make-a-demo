@@ -1,9 +1,16 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { writeGeneratedCaptureSdkHarness } from "./capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
@@ -112,6 +119,85 @@ describe("prepareStylizedPlaywrightScript", () => {
       );
     }
   });
+
+  it("names the take page's recording so capture can identify it among extra videos", () => {
+    const recording = prepareStylizedPlaywrightScript(
+      "await page.goto(baseUrl);",
+      {
+        baseUrl: "http://127.0.0.1:3000",
+        headed: false,
+        mode: "recording",
+        videoDirectory: ".demo-capture-runs/run/playwright-videos",
+      },
+    );
+    const validation = prepareStylizedPlaywrightScript(
+      "await page.goto(baseUrl);",
+      {
+        baseUrl: "http://127.0.0.1:3000",
+        headed: false,
+        mode: "validation",
+      },
+    );
+
+    expect(recording).toContain("page.video()");
+    expect(recording).toContain("[makeademo:video] ");
+    expect(validation).not.toContain("[makeademo:video]");
+  });
+
+  it("reports the take page's video among extra page recordings in the real recording runtime", async () => {
+    // N183 (excalidraw, 2026-08-25): every page in the recording context gets
+    // its own video, so the take must be named by the take page's own handle.
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-video-marker-test-"),
+    );
+    await symlink(
+      join(process.cwd(), "node_modules"),
+      join(runDirectory, "node_modules"),
+    );
+    const videoDirectory = join(runDirectory, "playwright-videos");
+    const scriptPath = join(runDirectory, "demo-script.ts");
+    await writeGeneratedCaptureSdkHarness(runDirectory);
+    await writeFile(
+      scriptPath,
+      prepareStylizedPlaywrightScript(
+        [
+          'await page.goto("data:text/html,<main>MakeADemo</main>");',
+          "const extraPage = await context.newPage();",
+          'await extraPage.goto("data:text/html,<p>export preview</p>");',
+          "await extraPage.close();",
+        ].join("\n"),
+        {
+          baseUrl: "http://127.0.0.1:3000",
+          headed: false,
+          mode: "recording",
+          videoDirectory,
+        },
+      ),
+    );
+
+    try {
+      const result = await runPreparedScript(scriptPath);
+
+      expect(result, result.stderr).toMatchObject({ exitCode: 0 });
+      const reportedPaths = result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("[makeademo:video] "))
+        .map(
+          (line) =>
+            (
+              JSON.parse(line.slice("[makeademo:video] ".length)) as {
+                path: string;
+              }
+            ).path,
+        );
+      expect(reportedPaths).toHaveLength(1);
+      const recordedVideos = await readdir(videoDirectory);
+      expect(recordedVideos.length).toBeGreaterThanOrEqual(2);
+      expect(recordedVideos).toContain(basename(reportedPaths[0] ?? ""));
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 30_000);
 
   it("reports a browser teardown failure without replacing the script's own error", () => {
     for (const mode of ["validation", "recording"] as const) {

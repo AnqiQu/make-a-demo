@@ -210,10 +210,23 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       );
     }
 
-    const remoteRecordedVideoPath = await findSingleRemoteVideo({
-      directory: remoteVideoScratchDirectory,
-      workspace,
-    });
+    const { extraVideos, video: remoteRecordedVideoPath } =
+      await resolveRecordedTakeVideo({
+        directory: remoteVideoScratchDirectory,
+        recordedVideoPath: protocol.videos.at(-1)?.path,
+        workspace,
+      });
+    if (extraVideos.length > 0) {
+      // Extra videos reveal pages the demo script never planned — export
+      // previews, popups, target="_blank" navigations — worth an audit note.
+      await writeFile(
+        join(input.runDirectory, "extra-playwright-videos.log"),
+        `${[
+          `Kept the continuous take ${remoteRecordedVideoPath}. ${extraVideos.length} extra video(s) were recorded by pages the demo script did not open on camera:`,
+          ...extraVideos,
+        ].join("\n")}\n`,
+      );
+    }
     await workspace.executeSubmittedCode(
       `rm -f ${shellQuote(remoteRawTakePath)} && mv ${shellQuote(remoteRecordedVideoPath)} ${shellQuote(remoteRawTakePath)}`,
     );
@@ -482,10 +495,20 @@ function formatSceneFailure(
   );
 }
 
-async function findSingleRemoteVideo(input: {
+/**
+ * Identifies the continuous take among the videos Playwright recorded. Every
+ * page in the recording context gets its own video, and apps legitimately
+ * open extra pages (export previews, popups, target="_blank" links), so the
+ * take is the path the capture wrapper reported from its own page handle
+ * (N183, excalidraw). The file census still guards the seam: no videos is
+ * always fatal, and when no reported path arrived — the wrapper failed before
+ * its teardown marker — only a single-file census remains unambiguous.
+ */
+async function resolveRecordedTakeVideo(input: {
   directory: string;
+  recordedVideoPath: string | undefined;
   workspace: AgentHarnessWorkspace;
-}) {
+}): Promise<{ extraVideos: string[]; video: string }> {
   const result = await input.workspace.executeSubmittedCode(
     `find ${shellQuote(input.directory)} -type f -name '*.webm' | sort`,
   );
@@ -502,16 +525,24 @@ async function findSingleRemoteVideo(input: {
   if (videos.length === 0) {
     throw new Error(`No Playwright video was created in ${input.directory}`);
   }
-  if (videos.length > 1) {
-    throw new Error(
-      `Expected one Playwright video in ${input.directory}, found ${videos.length}`,
-    );
+  if (input.recordedVideoPath !== undefined) {
+    if (!videos.includes(input.recordedVideoPath)) {
+      throw new Error(
+        `The capture script reported its continuous take at ${input.recordedVideoPath}, which is not among the videos in ${input.directory}: ${videos.join(", ")}`,
+      );
+    }
+    return {
+      extraVideos: videos.filter((video) => video !== input.recordedVideoPath),
+      video: input.recordedVideoPath,
+    };
   }
 
   const video = videos[0];
-  if (video === undefined) {
-    throw new Error(`No Playwright video was created in ${input.directory}`);
+  if (videos.length > 1 || video === undefined) {
+    throw new Error(
+      `Expected one Playwright video in ${input.directory}, found ${videos.length}, and the capture script did not report which one is the continuous take`,
+    );
   }
 
-  return video;
+  return { extraVideos: [], video };
 }

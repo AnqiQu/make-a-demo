@@ -51,6 +51,30 @@ describe("Capture Runtime Protocol", () => {
     ).toEqual({ endedAtMs: 20, startedAtMs: 10 });
   });
 
+  it("collects the recorded take video named by the capture script", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr: "",
+      stdout: [
+        sceneMarker(10, "started", "scene-one"),
+        sceneMarker(20, "succeeded", "scene-one"),
+        '[makeademo:video] {"path":"/workspace/playwright-videos/take.webm"}',
+      ].join("\n"),
+    });
+
+    expect(protocol.videos).toEqual([
+      { path: "/workspace/playwright-videos/take.webm" },
+    ]);
+  });
+
+  it("rejects a video marker without a recorded path", () => {
+    expect(() =>
+      readCaptureRuntimeProtocol({
+        stderr: "",
+        stdout: '[makeademo:video] {"path":""}',
+      }),
+    ).toThrow("Malformed video marker");
+  });
+
   it("rejects browser Scenes executed in a different order than declared", () => {
     const protocol = readCaptureRuntimeProtocol({
       stderr: "",

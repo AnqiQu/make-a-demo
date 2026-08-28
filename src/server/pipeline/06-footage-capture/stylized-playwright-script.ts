@@ -60,7 +60,7 @@ globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, sceneHold
 try {
 ${indentScriptBody(script)}
 } finally {
-${browserTeardownSource()}
+${recordedVideoTeardownSource()}
 }
 void expect;
 void setup;
@@ -129,6 +129,31 @@ void setup;
 void scene;
 void step;
 `;
+}
+
+/**
+ * The take page's own recording handle is the only authoritative link between
+ * the continuous take and a file on disk: every page in the recording context
+ * gets its own video, and apps legitimately open extra pages (export
+ * previews, popups, target="_blank" links). The marker is emitted after the
+ * context closes, once Playwright has finalized the file. Failing to resolve
+ * the path is evidence, not a verdict: capture falls back to its file census.
+ */
+function recordedVideoTeardownSource() {
+  return `  let makeADemoRecordedVideo = null;
+  try {
+    makeADemoRecordedVideo = page.video();
+  } catch {}
+${browserTeardownSource()}
+  try {
+    if (makeADemoRecordedVideo !== null) {
+      // Generated protocol: parent capture parses this marker to pick the
+      // continuous take among the videos every page in the context recorded.
+      console.log("[makeademo:video] " + JSON.stringify({ path: await makeADemoRecordedVideo.path() }));
+    }
+  } catch (makeADemoVideoError) {
+    console.error("[makeademo:video-path-failed]", makeADemoVideoError instanceof Error ? makeADemoVideoError.message : String(makeADemoVideoError));
+  }`;
 }
 
 /**
