@@ -95,7 +95,16 @@ export function findRuntimeConfigurationIssue(input: {
       scriptName !== undefined &&
       runtimeScripts?.[scriptName] === undefined
     ) {
-      return `Runtime script "${scriptName}" is not defined for ${input.preparationManifest.appDir}.`;
+      // A rejection that names only the invented script invites the next
+      // invention: ghostfolio declared build:makeademo one wave and
+      // build:demo two waves later, told only "not defined" both times
+      // (N181). Enumerating what the package defines makes the retry a
+      // copy, not a guess.
+      return `Runtime script "${scriptName}" is not defined for ${input.preparationManifest.appDir}. ${
+        runtimeScripts === undefined
+          ? "No package manifest was profiled for that directory, so no run-script can execute there."
+          : `The manifest may declare only these defined scripts, exactly as spelled: ${definedScriptSummary(runtimeScripts)}.`
+      }`;
     }
     // The command may name a workspace directly, or run a script whose body
     // fans out through the task runner; scan both surfaces for a selector
@@ -117,6 +126,13 @@ export function findRuntimeConfigurationIssue(input: {
 
 function readScriptName(command: string): string | undefined {
   return /^(?:bun|pnpm|yarn|npm)\s+run\s+([^\s]+)/.exec(command.trim())?.[1];
+}
+
+function definedScriptSummary(scripts: Record<string, string>): string {
+  const names = Object.keys(scripts);
+  const shown = names.slice(0, 24).join(", ") || "(none)";
+  const hidden = names.length - 24;
+  return hidden > 0 ? `${shown} (and ${hidden} more)` : shown;
 }
 
 function readRuntimeScripts(

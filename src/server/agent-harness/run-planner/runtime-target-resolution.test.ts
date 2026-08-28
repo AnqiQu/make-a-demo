@@ -1482,16 +1482,55 @@ describe("resolveRuntimeTarget", () => {
     }
   });
 
-  it("rejects package scripts absent from the selected package", () => {
+  it("rejects an absent package script with the scripts the package defines", () => {
     const preparationManifest = manifest("src/page.tsx");
     preparationManifest.startCommandUsed = "bun run missing";
 
     expect(
       findRuntimeConfigurationIssue({
         preparationManifest,
-        repoProfile: profile({ packageScripts: { dev: "vite" } }),
+        repoProfile: profile({
+          packageScripts: { build: "vite build", dev: "vite" },
+        }),
       }),
-    ).toContain('script "missing"');
+    ).toBe(
+      'Runtime script "missing" is not defined for .. The manifest may declare only these defined scripts, exactly as spelled: build, dev.',
+    );
+  });
+
+  it("caps the enumerated script list when the package defines many scripts", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed = "bun run missing";
+    const packageScripts = Object.fromEntries(
+      Array.from({ length: 30 }, (_, index) => [
+        `script-${String(index).padStart(2, "0")}`,
+        "run",
+      ]),
+    );
+
+    const issue = findRuntimeConfigurationIssue({
+      preparationManifest,
+      repoProfile: profile({ packageScripts }),
+    });
+
+    expect(issue).toContain("exactly as spelled: script-00,");
+    expect(issue).toContain("script-23 (and 6 more)");
+    expect(issue).not.toContain("script-24");
+  });
+
+  it("distinguishes an appDir with no profiled package from a missing script", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.appDir = "apps/api";
+    preparationManifest.startCommandUsed = "bun run dev";
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile(),
+      }),
+    ).toBe(
+      'Runtime script "dev" is not defined for apps/api. No package manifest was profiled for that directory, so no run-script can execute there.',
+    );
   });
 
   it("rejects a run-script start whose resolved entry requires an undeclared build", () => {
