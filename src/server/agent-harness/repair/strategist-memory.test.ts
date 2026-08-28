@@ -4,6 +4,8 @@ import { join } from "node:path";
 import {
   createFileStrategistMemoryStore,
   readFailedStage,
+  readFailureMovedLifecycle,
+  readLastLifecycleFragment,
   readLastPassingLifecycle,
   readStrategistAdviceNotes,
   toStrategistMemoryLifecycle,
@@ -200,6 +202,94 @@ describe("readLastPassingLifecycle", () => {
   });
 });
 
+describe("readLastLifecycleFragment", () => {
+  it("reads the newest recorded fragment and skips fragment-less entries", () => {
+    // N179 (twenty): the round-4 nx graph build moved the failure every
+    // wave and was lost every wave; the fragment is how a run that never
+    // passed still leaves its closest form behind.
+    const older = {
+      appDir: ".",
+      installCommandUsed: "yarn install",
+      startCommandUsed: "yarn run start",
+    };
+    const newer = {
+      appDir: ".",
+      buildCommandUsed: "yarn nx run-many -t build",
+      installCommandUsed: "yarn install --immutable",
+      startCommandUsed: "yarn run start",
+    };
+
+    expect(
+      readLastLifecycleFragment([
+        { ...entry("run-1", "failed"), lifecycleFragment: older },
+        { ...entry("run-2", "failed"), lifecycleFragment: newer },
+        entry("run-3", "failed"),
+      ]),
+    ).toEqual(newer);
+    expect(
+      readLastLifecycleFragment([entry("run-1", "failed")]),
+    ).toBeUndefined();
+    expect(readLastLifecycleFragment([])).toBeUndefined();
+  });
+
+  it("ignores passing lifecycles and malformed fragments when reading fragments", () => {
+    const lifecycle = {
+      appDir: ".",
+      installCommandUsed: "bun install",
+      startCommandUsed: "bun run dev",
+    };
+    expect(
+      readLastLifecycleFragment([{ ...entry("run-1", "passed"), lifecycle }]),
+    ).toBeUndefined();
+    expect(
+      readLastLifecycleFragment([
+        {
+          ...entry("run-2", "failed"),
+          lifecycleFragment: { appDir: 7 } as never,
+        },
+      ]),
+    ).toBeUndefined();
+  });
+});
+
+describe("readFailureMovedLifecycle", () => {
+  it("reads the run's mirrored failure-moved lifecycle artifact", async () => {
+    const directory = await memoryDirectory();
+    const artifactPath = join(directory, "failure-moved-lifecycle.json");
+    const lifecycle = {
+      appDir: ".",
+      buildCommandUsed: "yarn nx run-many -t build",
+      installCommandUsed: "yarn install --immutable",
+      startCommandUsed: "yarn run start",
+    };
+    await writeFile(artifactPath, JSON.stringify({ lifecycle, round: 4 }));
+
+    await expect(readFailureMovedLifecycle(artifactPath)).resolves.toEqual(
+      lifecycle,
+    );
+  });
+
+  it("returns undefined for a missing or malformed artifact", async () => {
+    const directory = await memoryDirectory();
+    await expect(
+      readFailureMovedLifecycle(join(directory, "absent.json")),
+    ).resolves.toBeUndefined();
+
+    const tornPath = join(directory, "torn.json");
+    await writeFile(tornPath, '{"lifecycle": {"appDir"');
+    await expect(readFailureMovedLifecycle(tornPath)).resolves.toBeUndefined();
+
+    const malformedPath = join(directory, "malformed.json");
+    await writeFile(
+      malformedPath,
+      JSON.stringify({ lifecycle: { appDir: 7 }, round: 1 }),
+    );
+    await expect(
+      readFailureMovedLifecycle(malformedPath),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe("readStrategistAdviceNotes", () => {
   it("collects kinds, prose, and memos from the run's passed consultation artifacts", async () => {
     const artifactsDirectory = await memoryDirectory();
@@ -270,3 +360,4 @@ describe("readFailedStage", () => {
     ).resolves.toBeUndefined();
   });
 });
+

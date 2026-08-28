@@ -20,6 +20,7 @@ import {
 } from "../daytona/workspace.interface";
 import {
   appendLifecycleCommandMutationEvidence,
+  appendLifecycleFragmentDivergenceEvidence,
   appendPassingLifecycleDivergenceEvidence,
 } from "../repair/lifecycle-mutation-evidence";
 import {
@@ -34,7 +35,10 @@ import {
   readRepairBudgetDecision,
   repairBudgetExhaustedMessage,
 } from "../repair/repair-router";
-import type { StrategistMemoryLifecycle } from "../repair/strategist-memory";
+import {
+  type StrategistMemoryLifecycle,
+  toStrategistMemoryLifecycle,
+} from "../repair/strategist-memory";
 import {
   type FidelityCandidate,
   createPreparationFidelityReport,
@@ -105,6 +109,14 @@ export type AgentHarnessPipelineInput = {
     targetUsers?: string;
   };
   files: Array<{ path: string; symlinkTarget?: string; text?: string }>;
+  /**
+   * The closest-known lifecycle for a repository that has never passed:
+   * the resolved form a prior run's repair declared when it moved that
+   * run's failure, read from the failed-run digests. Deterministic
+   * round-one evidence cites it only while `lastPassingLifecycle` is
+   * absent (N179); it steers nothing else.
+   */
+  lastLifecycleFragment?: StrategistMemoryLifecycle;
   /**
    * The resolved lifecycle this repository's last passing run
    * demonstrated, read from the strategist run digest. Deterministic
@@ -1753,16 +1765,27 @@ async function ensureValidPreparation(input: {
           repairRounds: input.repairRoundSources,
         });
         // The within-run mutation delta names the exact round to revert to,
-        // so it outranks the cross-run comparison; the last passing run's
+        // so it outranks the cross-run comparisons; the last passing run's
         // form speaks only while this run's own history is silent (N178:
         // midday's regression was declared from round one, where no green
-        // baseline exists inside the run).
-        const steeredFailureReport =
+        // baseline exists inside the run), and the closest-known fragment
+        // speaks only for repositories with no pass to cite (N179: twenty's
+        // failure-moved graph build, rediscovered every wave).
+        const passingSteeredReport =
           mutationSteeredReport !== repairFailure
             ? mutationSteeredReport
             : appendPassingLifecycleDivergenceEvidence({
                 failure: repairFailure,
                 lastPassingLifecycle: input.input.lastPassingLifecycle,
+                preparationManifest,
+              });
+        const steeredFailureReport =
+          passingSteeredReport !== repairFailure ||
+          input.input.lastPassingLifecycle !== undefined
+            ? passingSteeredReport
+            : appendLifecycleFragmentDivergenceEvidence({
+                failure: repairFailure,
+                lastLifecycleFragment: input.input.lastLifecycleFragment,
                 preparationManifest,
               });
         const advice = await consultRepairStrategy({
@@ -1911,7 +1934,8 @@ async function ensureValidPreparation(input: {
           dependencyRepair,
         );
         if (chargedNoopRepair && pendingLedgerRound !== undefined) {
-          recordCompletedRepairRound({
+          await recordCompletedRepairRound({
+            dependencies: input.dependencies,
             nextReport: noopFailure,
             preparationRepairBudget: input.preparationRepairBudget,
             repairRoundSources: input.repairRoundSources,
@@ -2075,7 +2099,8 @@ async function ensureValidPreparation(input: {
     manifestBaseline = undefined;
     if (fidelityValidation.status === "failed") {
       if (chargedLedgerRound !== undefined) {
-        recordCompletedRepairRound({
+        await recordCompletedRepairRound({
+          dependencies: input.dependencies,
           nextReport: fidelityValidation,
           preparationRepairBudget: input.preparationRepairBudget,
           repairRoundSources: input.repairRoundSources,
@@ -2182,7 +2207,8 @@ async function ensureValidPreparation(input: {
       }
     }
     if (chargedLedgerRound !== undefined) {
-      recordCompletedRepairRound({
+      await recordCompletedRepairRound({
+        dependencies: input.dependencies,
         nextReport: preparationValidation,
         preparationRepairBudget: input.preparationRepairBudget,
         repairRoundSources: input.repairRoundSources,
@@ -2470,7 +2496,8 @@ async function consultRunTriage(input: {
   }
 }
 
-function recordCompletedRepairRound(input: {
+async function recordCompletedRepairRound(input: {
+  dependencies: AgentHarnessPipelineDependencies;
   nextReport: ValidationReport;
   preparationRepairBudget: PreparationRepairBudget;
   repairRoundSources: RepairRoundSource[];
@@ -2484,7 +2511,15 @@ function recordCompletedRepairRound(input: {
     resolvedManifest: PreparationManifest;
     workspaceDiff: PreparationWorkspaceDiff;
   };
-}): void {
+}): Promise<void> {
+  const round = input.repairRoundSources.length + 1;
+  const outcomeOfAdvice =
+    input.nextReport.status === "passed"
+      ? "resolved"
+      : preparationFailureFingerprint(input.nextReport) ===
+          input.round.fingerprint
+        ? "failure-unchanged"
+        : "failure-moved";
   input.repairRoundSources.push({
     advice: readRepairAdviceLedgerRecord(
       input.round.advice,
@@ -2501,17 +2536,31 @@ function recordCompletedRepairRound(input: {
     candidateFingerprint: input.round.candidateFingerprint,
     candidateManifest: input.round.candidateManifest,
     failureReport: input.round.failureReport,
-    outcomeOfAdvice:
-      input.nextReport.status === "passed"
-        ? "resolved"
-        : preparationFailureFingerprint(input.nextReport) ===
-            input.round.fingerprint
-          ? "failure-unchanged"
-          : "failure-moved",
+    outcomeOfAdvice,
     resolvedManifest: input.round.resolvedManifest,
-    round: input.repairRoundSources.length + 1,
+    round,
     workspaceDiff: input.round.workspaceDiff,
   });
+  if (outcomeOfAdvice === "failure-unchanged") {
+    return;
+  }
+  // N179: a round that moved its failure — or resolved it while the run
+  // may still fail later — is the closest this repository has come, and
+  // twenty lost that form to a round-5 revert three waves running. Mirror
+  // the resolved lifecycle as it happens so a run that dies at any later
+  // point still leaves the fragment behind for its digest.
+  try {
+    await writeArtifact(
+      input.dependencies,
+      artifactPaths.failureMovedLifecycle,
+      {
+        lifecycle: toStrategistMemoryLifecycle(input.round.resolvedManifest),
+        round,
+      },
+    );
+  } catch {
+    // The fragment is advisory memory; a failed mirror never fails a round.
+  }
 }
 
 function readRepairAdviceLedgerRecord(

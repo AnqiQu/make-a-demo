@@ -3800,8 +3800,14 @@ describe("runAgentHarnessPipeline", () => {
     const result = await runAgentHarnessPipeline(
       pipelineInput({
         // Present but outranked: the within-run mutation delta names the
-        // exact round to revert to, so the cross-run comparison must not
-        // stack a second, conflicting headline on the same failure (N178).
+        // exact round to revert to, so neither cross-run comparison may
+        // stack a second, conflicting headline on the same failure
+        // (N178/N179).
+        lastLifecycleFragment: {
+          appDir: ".",
+          installCommandUsed: "yarn install",
+          startCommandUsed: "yarn run start",
+        },
         lastPassingLifecycle: {
           appDir: ".",
           installCommandUsed: "bun install",
@@ -3896,6 +3902,9 @@ describe("runAgentHarnessPipeline", () => {
       "Install command failed: npm error code ERESOLVE",
     );
     expect(repairSummaries[2]).not.toContain("Cross-run lifecycle divergence");
+    expect(repairSummaries[2]).not.toContain(
+      "Closest-known lifecycle divergence",
+    );
     expect(consultations).toHaveLength(1);
     expect(consultations[0]?.failureReport.logsSummary).toContain(
       "Lifecycle command mutation suspected",
@@ -3933,6 +3942,13 @@ describe("runAgentHarnessPipeline", () => {
 
     const result = await runAgentHarnessPipeline(
       pipelineInput({
+        // Present but outranked: a proven pass silences the closest-known
+        // fragment (N179).
+        lastLifecycleFragment: {
+          appDir: ".",
+          installCommandUsed: "yarn install",
+          startCommandUsed: "yarn run start",
+        },
         lastPassingLifecycle: {
           appDir: ".",
           installCommandUsed: "bun install --frozen-lockfile",
@@ -4008,6 +4024,113 @@ describe("runAgentHarnessPipeline", () => {
     expect(
       result.validationReports.some((candidate) =>
         candidate.logsSummary.includes("Cross-run lifecycle divergence"),
+      ),
+    ).toBe(false);
+    // A proven pass silences the closest-known fragment.
+    expect(repairSummaries[0]).not.toContain(
+      "Closest-known lifecycle divergence",
+    );
+  });
+
+  it("leads round-one repair evidence with the closest-known fragment when no run has passed", async () => {
+    // N179 (twenty): the repository has never passed, so the N178 citation
+    // has nothing to cite — but a prior run's repair declaration moved its
+    // failure and was recorded as a fragment. Round one now confronts that
+    // form instead of rediscovering it in round 4 and losing it in round 5.
+    let preflightAttempts = 0;
+    const repairSummaries: string[] = [];
+    let manifestCaptures = 0;
+    const packageManifestOnlyDiffCapture = async () => {
+      manifestCaptures += 1;
+      const digit = String(manifestCaptures % 10);
+      return {
+        changedFileSha256: {
+          "package.json": `sha256:${digit.repeat(64)}` as const,
+        },
+        changedPaths: ["/workspace/repo/package.json"],
+        patch: `diff --git a/package.json b/package.json\n+// capture ${manifestCaptures}`,
+        patchSha256: `sha256:${digit.repeat(64)}` as const,
+        sourceCommitSha: "abc123def456",
+      };
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({
+        lastLifecycleFragment: {
+          appDir: ".",
+          installCommandUsed: "bun install --frozen-lockfile",
+          startCommandUsed: "bun run dev",
+        },
+        runId: "run_fragment_divergence",
+      }),
+      stubPipelineDependencies({
+        capturePreparationWorkspaceDiff: packageManifestOnlyDiffCapture,
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return {
+            manifest: {
+              ...preparationManifest(),
+              installCommandUsed:
+                "bun install --frozen-lockfile --filter=@twenty/front...",
+            },
+          };
+        },
+        async repairPreparation({ failureReport, preparationManifest }) {
+          repairSummaries.push(failureReport.logsSummary);
+          return {
+            manifest: { ...preparationManifest, id: "prep_repair_1" },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand:
+                "bun install --frozen-lockfile --filter=@twenty/front...",
+              failureClassification: "install failure",
+              logsSummary:
+                "Install command failed: workspace filter matched no packages",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 3 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairSummaries).toHaveLength(1);
+    expect(repairSummaries[0]).toMatch(
+      /^Closest-known lifecycle divergence: the failing install command `bun install --frozen-lockfile --filter=@twenty\/front\.\.\.` differs from `bun install --frozen-lockfile` — the closest this repository has come to passing used `bun install --frozen-lockfile`, declared by a repair that moved the failure in a prior run\./,
+    );
+    expect(repairSummaries[0]).toContain(
+      "Install command failed: workspace filter matched no packages",
+    );
+    // The enriched copy is prompt-facing only; persisted validation
+    // reports must keep the raw failure.
+    expect(
+      result.validationReports.some((candidate) =>
+        candidate.logsSummary.includes("Closest-known lifecycle divergence"),
       ),
     ).toBe(false);
   });

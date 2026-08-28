@@ -36,14 +36,18 @@ export type StrategistMemoryLifecycle = {
 /**
  * The durable record of one completed run of a repository. Deterministic
  * code assembles it from the run's own artifacts at run end; the strategist
- * reads it on later runs as advisory history. The one deterministic
- * consumer is the passing `lifecycle`, which round-one evidence may cite
- * verbatim as a proven prior form (N178) — it still grants no authority.
+ * reads it on later runs as advisory history. The deterministic consumers
+ * are the passing `lifecycle`, which round-one evidence may cite verbatim
+ * as a proven prior form (N178), and the failed run's `lifecycleFragment`
+ * — the last lifecycle whose repair declaration moved this run's failure —
+ * which evidence cites only while no pass is recorded (N179). Neither
+ * grants authority.
  */
 export type StrategistRunMemoryEntry = {
   adviceNotes: StrategistMemoryAdviceNote[];
   finalFailureStage?: string;
   lifecycle?: StrategistMemoryLifecycle;
+  lifecycleFragment?: StrategistMemoryLifecycle;
   outcome: "passed" | "failed";
   recordedAt: string;
   runId: string;
@@ -185,16 +189,60 @@ export function readLastPassingLifecycle(
     if (entry?.outcome !== "passed") {
       continue;
     }
-    const lifecycle = entry.lifecycle;
-    if (
-      typeof lifecycle?.appDir === "string" &&
-      typeof lifecycle.installCommandUsed === "string" &&
-      typeof lifecycle.startCommandUsed === "string"
-    ) {
-      return lifecycle;
+    if (isLifecycleRecord(entry.lifecycle)) {
+      return entry.lifecycle;
     }
   }
   return undefined;
+}
+
+/**
+ * Reads the most recent known-good lifecycle fragment from memory entries:
+ * the closest a never-passing repository has come, recorded by failed runs
+ * whose repair declaration moved the failure (N179: twenty rediscovered
+ * its nx graph build in round 4 three waves running and reverted it in
+ * round 5). Passing runs' lifecycles are deliberately not read here —
+ * callers cite fragments only while no pass is recorded — and malformed
+ * fragments read as absent, never as reconstructed forms.
+ */
+export function readLastLifecycleFragment(
+  entries: readonly StrategistRunMemoryEntry[],
+): StrategistMemoryLifecycle | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (isLifecycleRecord(entry?.lifecycleFragment)) {
+      return entry.lifecycleFragment;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Best-effort read of the run's mirrored failure-moved lifecycle artifact:
+ * the last lifecycle whose repair declaration moved this run's preparation
+ * failure, written by the harness as rounds complete (N179). A missing or
+ * malformed artifact means "this run moved nothing" — never an error.
+ */
+export async function readFailureMovedLifecycle(
+  failureMovedLifecyclePath: string,
+): Promise<StrategistMemoryLifecycle | undefined> {
+  try {
+    const record = JSON.parse(
+      await readFile(failureMovedLifecyclePath, "utf8"),
+    ) as { lifecycle?: unknown };
+    return isLifecycleRecord(record.lifecycle) ? record.lifecycle : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isLifecycleRecord(value: unknown): value is StrategistMemoryLifecycle {
+  const lifecycle = value as StrategistMemoryLifecycle | undefined;
+  return (
+    typeof lifecycle?.appDir === "string" &&
+    typeof lifecycle.installCommandUsed === "string" &&
+    typeof lifecycle.startCommandUsed === "string"
+  );
 }
 
 /**

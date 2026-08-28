@@ -179,7 +179,55 @@ export function appendPassingLifecycleDivergenceEvidence<
   lastPassingLifecycle: LifecycleCommandCarrier | undefined;
   preparationManifest: LifecycleCommandCarrier;
 }): T {
-  if (input.lastPassingLifecycle === undefined) {
+  return appendBaselineDivergenceEvidence({
+    baseline: input.lastPassingLifecycle,
+    failure: input.failure,
+    headline: ({ baselineForm, currentForm, label }) =>
+      `Cross-run lifecycle divergence: the failing ${label} ${currentForm} differs from ${baselineForm}, which this repository's last passing run used. First try the last passing form, or justify why the divergent form must stay.`,
+    preparationManifest: input.preparationManifest,
+  });
+}
+
+/**
+ * Leads a lifecycle-command failure's evidence with the closest-known
+ * form from a repository that has never passed (N179): the lifecycle a
+ * prior run's repair declared when it moved the failure, read from the
+ * failed-run digest. Fires round one, exactly like the passing-lifecycle
+ * citation, but with weaker authority in its prose — the form moved a
+ * failure, it did not pass (twenty: the round-4 nx graph build was
+ * rediscovered in round 4 and reverted in round 5, three waves running).
+ * Callers cite a fragment only while no passing lifecycle is recorded;
+ * the same fingerprint-and-ledger-the-raw-report contract applies.
+ */
+export function appendLifecycleFragmentDivergenceEvidence<
+  T extends { failureClassification?: string; logsSummary: string },
+>(input: {
+  failure: T;
+  lastLifecycleFragment: LifecycleCommandCarrier | undefined;
+  preparationManifest: LifecycleCommandCarrier;
+}): T {
+  return appendBaselineDivergenceEvidence({
+    baseline: input.lastLifecycleFragment,
+    failure: input.failure,
+    headline: ({ baselineForm, currentForm, label }) =>
+      `Closest-known lifecycle divergence: the failing ${label} ${currentForm} differs from ${baselineForm} — the closest this repository has come to passing used ${baselineForm}, declared by a repair that moved the failure in a prior run. Declare it, or justify departing from it.`,
+    preparationManifest: input.preparationManifest,
+  });
+}
+
+function appendBaselineDivergenceEvidence<
+  T extends { failureClassification?: string; logsSummary: string },
+>(input: {
+  baseline: LifecycleCommandCarrier | undefined;
+  failure: T;
+  headline: (forms: {
+    baselineForm: string;
+    currentForm: string;
+    label: string;
+  }) => string;
+  preparationManifest: LifecycleCommandCarrier;
+}): T {
+  if (input.baseline === undefined) {
     return input.failure;
   }
   const field =
@@ -188,15 +236,18 @@ export function appendPassingLifecycleDivergenceEvidence<
     return input.failure;
   }
   const currentForm = readLifecycleForm(input.preparationManifest, field);
-  const passingForm = readLifecycleForm(input.lastPassingLifecycle, field);
-  if (passingForm === currentForm) {
+  const baselineForm = readLifecycleForm(input.baseline, field);
+  if (baselineForm === currentForm) {
     return input.failure;
   }
-  const label = lifecycleFieldLabels[field];
   return {
     ...input.failure,
     logsSummary: [
-      `Cross-run lifecycle divergence: the failing ${label} ${currentForm} differs from ${passingForm}, which this repository's last passing run used. First try the last passing form, or justify why the divergent form must stay.`,
+      input.headline({
+        baselineForm,
+        currentForm,
+        label: lifecycleFieldLabels[field],
+      }),
       "",
       input.failure.logsSummary,
     ].join("\n"),

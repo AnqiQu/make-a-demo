@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
 import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
@@ -321,6 +321,204 @@ describe("runDefaultDemoPipeline", () => {
     ]);
   });
 
+  it("threads the closest-known fragment and re-records it when a failing run moves nothing", async () => {
+    // N179 (twenty): a repository that has never passed still owns its
+    // closest form. The fragment reaches round-one evidence, and a run
+    // that fails without moving anything carries it forward instead of
+    // aging it out of the three-entry memory window.
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-fragment-"));
+    const fragment = {
+      appDir: ".",
+      buildCommandUsed: "yarn nx run-many -t build",
+      installCommandUsed: "yarn install --immutable",
+      startCommandUsed: "yarn run start",
+    };
+    const appended: unknown[] = [];
+    let threadedFragment: unknown;
+    let threadedPassing: unknown = "unset";
+    const workspaceHandle = {
+      async destroy() {},
+      id: "workspace-fragment",
+      workspace: createFakeAgentHarnessWorkspace(),
+    };
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: [],
+          repoUrl: "https://github.com/twentyhq/twenty",
+        },
+        {
+          async createHarnessDependencies() {
+            return {
+              dependencies: {} as never,
+              getWorkspaceHandle: () => workspaceHandle,
+            };
+          },
+          outputRoot,
+          async readRepoSnapshot() {
+            return {
+              commitSha: "abc123def456",
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 2 },
+              secretQuarantineManifest: {
+                entries: [],
+                version: "2026-07-15",
+              },
+              sourceArchive: {
+                commitSha: "abc123def456",
+                path: join(outputRoot, "screened-repo.tar.gz"),
+                sha256: "screened-repo-sha256",
+                sizeBytes: 2,
+              },
+            };
+          },
+          runId: "fragment-carry",
+          async runHarnessPipeline(input) {
+            threadedFragment = input.lastLifecycleFragment;
+            threadedPassing = input.lastPassingLifecycle;
+            throw new Error("harness failed");
+          },
+          strategistMemoryStore: {
+            async append(appendInput) {
+              appended.push(appendInput);
+            },
+            async readRecent() {
+              return [
+                {
+                  adviceNotes: [],
+                  lifecycleFragment: fragment,
+                  outcome: "failed" as const,
+                  recordedAt: "2026-08-25T05:16:13.000Z",
+                  runId: "matrix-prior",
+                },
+              ];
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("harness failed");
+
+    expect(threadedFragment).toEqual(fragment);
+    expect(threadedPassing).toBeUndefined();
+    expect(appended).toEqual([
+      {
+        entry: {
+          adviceNotes: [],
+          lifecycleFragment: fragment,
+          outcome: "failed",
+          recordedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+          runId: "fragment-carry",
+        },
+        repoUrl: "https://github.com/twentyhq/twenty",
+      },
+    ]);
+  });
+
+  it("prefers the run's own failure-moved lifecycle over the inherited fragment", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-fragment-own-"));
+    const inheritedFragment = {
+      appDir: ".",
+      installCommandUsed: "yarn install",
+      startCommandUsed: "yarn run start",
+    };
+    const ownFragment = {
+      appDir: ".",
+      buildCommandUsed: "yarn nx run-many -t build",
+      installCommandUsed: "yarn install --immutable",
+      startCommandUsed: "yarn run start",
+    };
+    const appended: unknown[] = [];
+    const workspaceHandle = {
+      async destroy() {},
+      id: "workspace-fragment-own",
+      workspace: createFakeAgentHarnessWorkspace(),
+    };
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: [],
+          repoUrl: "https://github.com/twentyhq/twenty",
+        },
+        {
+          async createHarnessDependencies() {
+            return {
+              dependencies: {} as never,
+              getWorkspaceHandle: () => workspaceHandle,
+            };
+          },
+          outputRoot,
+          async readRepoSnapshot() {
+            return {
+              commitSha: "abc123def456",
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 2 },
+              secretQuarantineManifest: {
+                entries: [],
+                version: "2026-07-15",
+              },
+              sourceArchive: {
+                commitSha: "abc123def456",
+                path: join(outputRoot, "screened-repo.tar.gz"),
+                sha256: "screened-repo-sha256",
+                sizeBytes: 2,
+              },
+            };
+          },
+          runId: "fragment-own-run",
+          async runHarnessPipeline() {
+            // The harness mirrors the artifact as the round completes; a
+            // later hard failure must not erase it.
+            const mirroredPath = join(
+              outputRoot,
+              "fragment-own-run",
+              "artifacts",
+              "workspace/.makeademo/failure-moved-lifecycle.json",
+            );
+            await mkdir(dirname(mirroredPath), { recursive: true });
+            await writeFile(
+              mirroredPath,
+              JSON.stringify({ lifecycle: ownFragment, round: 4 }),
+            );
+            throw new Error("rounds exhausted");
+          },
+          strategistMemoryStore: {
+            async append(appendInput) {
+              appended.push(appendInput);
+            },
+            async readRecent() {
+              return [
+                {
+                  adviceNotes: [],
+                  lifecycleFragment: inheritedFragment,
+                  outcome: "failed" as const,
+                  recordedAt: "2026-08-25T05:16:13.000Z",
+                  runId: "matrix-prior",
+                },
+              ];
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("rounds exhausted");
+
+    expect(appended).toEqual([
+      {
+        entry: {
+          adviceNotes: [],
+          lifecycleFragment: ownFragment,
+          outcome: "failed",
+          recordedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+          runId: "fragment-own-run",
+        },
+        repoUrl: "https://github.com/twentyhq/twenty",
+      },
+    ]);
+  });
+
   it("runs the default harness, Footage Capture, and Compositing rails", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-default-"));
     const calls: string[] = [];
@@ -519,12 +717,26 @@ describe("runDefaultDemoPipeline", () => {
                 recordedAt: "2026-08-23T00:00:00.000Z",
                 runId: "matrix-prior",
               },
+              // A newer failed run's fragment: silenced by the proven
+              // pass above (N179).
+              {
+                adviceNotes: [],
+                lifecycleFragment: {
+                  appDir: ".",
+                  installCommandUsed: "yarn install",
+                  startCommandUsed: "yarn run start",
+                },
+                outcome: "failed" as const,
+                recordedAt: "2026-08-24T00:00:00.000Z",
+                runId: "matrix-prior-2",
+              },
             ];
           },
         },
         async runHarnessPipeline(input, dependencies, harnessOptions) {
           calls.push(`harness:${input.repoUrl}:${input.runId}`);
           expect(input.lastPassingLifecycle).toEqual(priorPassingLifecycle);
+          expect(input.lastLifecycleFragment).toBeUndefined();
           expect(harnessOptions).toEqual({
             captureAcceptedScript: expect.any(Function),
             destroyWorkspaceOnCompletion: false,

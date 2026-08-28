@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appendLifecycleCommandMutationEvidence,
+  appendLifecycleFragmentDivergenceEvidence,
   appendPassingLifecycleDivergenceEvidence,
 } from "./lifecycle-mutation-evidence";
 
@@ -417,5 +418,74 @@ describe("appendPassingLifecycleDivergenceEvidence", () => {
     const [headline] = enriched.logsSummary.split("\n");
     expect(headline).toContain("build command no declared build command");
     expect(headline).toContain("`yarn run build`");
+  });
+});
+
+describe("appendLifecycleFragmentDivergenceEvidence", () => {
+  it("leads with the closest-known form when the failing command diverges from it", () => {
+    // N179 (twenty): rounds failed under yarn run build while the round-4
+    // nx graph build — the only declaration that ever moved the failure —
+    // sat in a prior run's digest with no pass to cite.
+    const failure = installFailure({
+      failureClassification: "build failure",
+      logsSummary: "Build failed: cannot find module twenty-shared/dist.",
+    });
+
+    const enriched = appendLifecycleFragmentDivergenceEvidence({
+      failure,
+      lastLifecycleFragment: lifecycle({
+        buildCommandUsed: "yarn nx run-many -t build",
+      }),
+      preparationManifest: lifecycle({ buildCommandUsed: "yarn run build" }),
+    });
+
+    const [headline] = enriched.logsSummary.split("\n");
+    expect(headline).toContain("Closest-known lifecycle divergence");
+    expect(headline).toContain("build command `yarn run build`");
+    expect(headline).toContain("`yarn nx run-many -t build`");
+    expect(headline).toContain("closest this repository has come");
+    expect(headline).toMatch(/declare|justify/i);
+    expect(enriched.logsSummary).toContain(failure.logsSummary);
+    expect(enriched.suggestedRepairHints).toEqual(["existing hint"]);
+  });
+
+  it("returns the failure unchanged when it matches the closest-known form", () => {
+    const failure = installFailure();
+
+    expect(
+      appendLifecycleFragmentDivergenceEvidence({
+        failure,
+        lastLifecycleFragment: lifecycle(),
+        preparationManifest: lifecycle(),
+      }),
+    ).toBe(failure);
+  });
+
+  it("returns the failure unchanged when no fragment is recorded", () => {
+    const failure = installFailure();
+
+    expect(
+      appendLifecycleFragmentDivergenceEvidence({
+        failure,
+        lastLifecycleFragment: undefined,
+        preparationManifest: lifecycle(),
+      }),
+    ).toBe(failure);
+  });
+
+  it("returns the failure unchanged when the classification blames no lifecycle command", () => {
+    const failure = installFailure({
+      failureClassification: "unbuilt workspace dependency",
+    });
+
+    expect(
+      appendLifecycleFragmentDivergenceEvidence({
+        failure,
+        lastLifecycleFragment: lifecycle({
+          installCommandUsed: "yarn install --immutable",
+        }),
+        preparationManifest: lifecycle(),
+      }),
+    ).toBe(failure);
   });
 });

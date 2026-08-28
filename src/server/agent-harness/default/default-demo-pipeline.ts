@@ -28,6 +28,8 @@ import {
   type StrategistRunMemoryEntry,
   createFileStrategistMemoryStore,
   readFailedStage,
+  readFailureMovedLifecycle,
+  readLastLifecycleFragment,
   readLastPassingLifecycle,
   readStrategistAdviceNotes,
   toStrategistMemoryLifecycle,
@@ -213,6 +215,14 @@ export async function runDefaultDemoPipeline(
     // Unreadable memory means no memory; the run proceeds without history.
   }
   const lastPassingLifecycle = readLastPassingLifecycle(strategistMemory);
+  // N179: while no pass is recorded, the closest-known fragment — the
+  // lifecycle a prior run's repair declared when it moved that run's
+  // failure — is the best baseline round one can cite. A proven pass
+  // silences it.
+  const lastLifecycleFragment =
+    lastPassingLifecycle === undefined
+      ? readLastLifecycleFragment(strategistMemory)
+      : undefined;
   // N178: the digest of a passing run remembers its resolved lifecycle, so
   // later runs can compare a failing command against a proven form.
   let passingPreparationManifest: AgentHarnessPipelineResult["preparationManifest"];
@@ -227,6 +237,19 @@ export async function runDefaultDemoPipeline(
           "/workspace/.makeademo/pipeline-run-manifest.json",
         ),
       );
+      // N179: a failed run records the last lifecycle whose repair
+      // declaration moved this run's failure, and carries the inherited
+      // fragment forward when it moved nothing itself — otherwise the
+      // three-entry memory window ages the closest form out while the
+      // repository keeps failing.
+      const lifecycleFragment =
+        outcome === "failed"
+          ? ((await readFailureMovedLifecycle(
+              artifactStore.resolveArtifactPath(
+                "/workspace/.makeademo/failure-moved-lifecycle.json",
+              ),
+            )) ?? lastLifecycleFragment)
+          : undefined;
       await strategistMemoryStore.append({
         entry: {
           adviceNotes: await readStrategistAdviceNotes(
@@ -244,6 +267,7 @@ export async function runDefaultDemoPipeline(
                 ),
               }
             : {}),
+          ...(lifecycleFragment === undefined ? {} : { lifecycleFragment }),
           outcome,
           recordedAt: new Date().toISOString(),
           runId,
@@ -306,6 +330,9 @@ export async function runDefaultDemoPipeline(
             : { targetUsers: input.targetUsers }),
         },
         files: repoSnapshot.files,
+        ...(lastLifecycleFragment === undefined
+          ? {}
+          : { lastLifecycleFragment }),
         ...(lastPassingLifecycle === undefined ? {} : { lastPassingLifecycle }),
         ...(input.normalizedSupportingDocuments === undefined
           ? {}
