@@ -1664,6 +1664,7 @@ async function ensureValidPreparation(input: {
         candidateManifest: PreparationManifest;
         failureReport: ValidationReport;
         fingerprint: string;
+        manifestBeforeRepair: PreparationManifest;
       }
     | undefined;
   let chargedLedgerRound:
@@ -1854,6 +1855,9 @@ async function ensureValidPreparation(input: {
           candidateManifest: repairedManifest,
           failureReport: repairFailure,
           fingerprint,
+          // The lifecycle in effect while this round's failure occurred:
+          // fragment eligibility compares against it (N182).
+          manifestBeforeRepair,
         };
         // A dependency repair's manifest is discarded below in favor of the
         // pre-repair manifest, so only a manifest the pipeline will adopt is
@@ -2508,6 +2512,7 @@ async function recordCompletedRepairRound(input: {
     candidateManifest: PreparationManifest;
     failureReport: ValidationReport;
     fingerprint: string;
+    manifestBeforeRepair: PreparationManifest;
     resolvedManifest: PreparationManifest;
     workspaceDiff: PreparationWorkspaceDiff;
   };
@@ -2549,12 +2554,48 @@ async function recordCompletedRepairRound(input: {
   // twenty lost that form to a round-5 revert three waves running. Mirror
   // the resolved lifecycle as it happens so a run that dies at any later
   // point still leaves the fragment behind for its digest.
+  //
+  // N182: what recording certifies, citation amplifies, so eligibility
+  // requires movement attributable to the lifecycle itself. A lifecycle
+  // identical to the one the failure occurred under claims credit for its
+  // round's other edits (twenty's four-times-failed `yarn run build` was
+  // recorded as "the closest this repository has come" when only the
+  // failure's classification shifted), and a declaration the mutation
+  // detector flags against the very next failure cannot simultaneously be
+  // citation-grade (ghostfolio's five-command chain was enshrined the same
+  // run N171 told the agent to revert it).
+  const recordedLifecycle = toStrategistMemoryLifecycle(
+    input.round.resolvedManifest,
+  );
+  if (
+    JSON.stringify(recordedLifecycle) ===
+    JSON.stringify(
+      toStrategistMemoryLifecycle(input.round.manifestBeforeRepair),
+    )
+  ) {
+    return;
+  }
+  const mutationProbe = {
+    ...(input.nextReport.failureClassification === undefined
+      ? {}
+      : { failureClassification: input.nextReport.failureClassification }),
+    logsSummary: input.nextReport.logsSummary,
+  };
+  if (
+    appendLifecycleCommandMutationEvidence({
+      failure: mutationProbe,
+      preparationManifest: input.round.resolvedManifest,
+      repairRounds: input.repairRoundSources,
+    }) !== mutationProbe
+  ) {
+    return;
+  }
   try {
     await writeArtifact(
       input.dependencies,
       artifactPaths.failureMovedLifecycle,
       {
-        lifecycle: toStrategistMemoryLifecycle(input.round.resolvedManifest),
+        lifecycle: recordedLifecycle,
         round,
       },
     );

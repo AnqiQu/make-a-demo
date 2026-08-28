@@ -4135,6 +4135,343 @@ describe("runAgentHarnessPipeline", () => {
     ).toBe(false);
   });
 
+  it("mirrors the failure-moved lifecycle artifact as repair rounds move the failure", async () => {
+    // N179 (twenty): the round-4 graph build moved the failure and the
+    // round-5 repair reverted it; nothing durable remembered the form. A
+    // round that moves (or resolves) its failure now mirrors its resolved
+    // lifecycle immediately, so a run that dies later still leaves the
+    // closest form behind for its digest.
+    const artifactWrites: { path: string; value: unknown }[] = [];
+    let preflightAttempts = 0;
+    let repairRounds = 0;
+    let manifestCaptures = 0;
+    const packageManifestOnlyDiffCapture = async () => {
+      manifestCaptures += 1;
+      const digit = String(manifestCaptures % 10);
+      return {
+        changedFileSha256: {
+          "package.json": `sha256:${digit.repeat(64)}` as const,
+        },
+        changedPaths: ["/workspace/repo/package.json"],
+        patch: `diff --git a/package.json b/package.json\n+// capture ${manifestCaptures}`,
+        patchSha256: `sha256:${digit.repeat(64)}` as const,
+        sourceCommitSha: "abc123def456",
+      };
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_failure_moved_fragment" }),
+      stubPipelineDependencies({
+        artifactStore: {
+          async writeJson(path, value) {
+            artifactWrites.push({ path, value });
+          },
+        },
+        capturePreparationWorkspaceDiff: packageManifestOnlyDiffCapture,
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return {
+            manifest: {
+              ...preparationManifest(),
+              buildCommandUsed: "yarn run build",
+            },
+          };
+        },
+        async repairPreparation({ preparationManifest: manifest }) {
+          repairRounds += 1;
+          return {
+            manifest: {
+              ...manifest,
+              buildCommandUsed:
+                repairRounds === 1
+                  ? "yarn run build --legacy"
+                  : "yarn nx run-many -t build",
+              id: `prep_repair_${repairRounds}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts <= 2) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "yarn run build",
+              failureClassification: "build failure",
+              logsSummary: "Build failed: twenty-shared/dist is missing",
+            };
+          }
+          if (preflightAttempts === 3) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "yarn run start",
+              failureClassification: "start failure",
+              logsSummary: "Start command exited before listening",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 3 },
+    );
+
+    expect(result.status).toBe("passed");
+    const fragmentLifecycle = {
+      appDir: ".",
+      buildCommandUsed: "yarn nx run-many -t build",
+      installCommandUsed: "bun install --frozen-lockfile",
+      startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
+    };
+    // Round 1 left the failure unchanged and mirrors nothing. Round 2
+    // moved it with a new build form and mirrors it. Round 3 resolved the
+    // failure but declared a lifecycle identical to round 2's, so the
+    // resolution is attributable to its other edits, not the lifecycle —
+    // no second mirror (N182).
+    expect(
+      artifactWrites
+        .filter(
+          (write) =>
+            write.path === "/workspace/.makeademo/failure-moved-lifecycle.json",
+        )
+        .map((write) => write.value),
+    ).toEqual([{ lifecycle: fragmentLifecycle, round: 2 }]);
+  });
+
+  it("records no fragment for a moved failure whose lifecycle never changed", async () => {
+    // N182 (twenty, wave-23): rounds 1-4 all kept `yarn run build`; round
+    // 4's failure classification shifted (unbuilt workspace dependency →
+    // build failure) and the too-weak gate recorded the four-times-failed
+    // command as "the closest this repository has come". Movement with an
+    // identical lifecycle is attributable to the round's other edits,
+    // never to the lifecycle.
+    const artifactWrites: { path: string; value: unknown }[] = [];
+    let preflightAttempts = 0;
+    let repairRounds = 0;
+    let manifestCaptures = 0;
+    const packageManifestOnlyDiffCapture = async () => {
+      manifestCaptures += 1;
+      const digit = String(manifestCaptures % 10);
+      return {
+        changedFileSha256: {
+          "package.json": `sha256:${digit.repeat(64)}` as const,
+        },
+        changedPaths: ["/workspace/repo/package.json"],
+        patch: `diff --git a/package.json b/package.json\n+// capture ${manifestCaptures}`,
+        patchSha256: `sha256:${digit.repeat(64)}` as const,
+        sourceCommitSha: "abc123def456",
+      };
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_identical_lifecycle_no_fragment" }),
+      stubPipelineDependencies({
+        artifactStore: {
+          async writeJson(path, value) {
+            artifactWrites.push({ path, value });
+          },
+        },
+        capturePreparationWorkspaceDiff: packageManifestOnlyDiffCapture,
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return {
+            manifest: {
+              ...preparationManifest(),
+              buildCommandUsed: "yarn run build",
+            },
+          };
+        },
+        async repairPreparation({ preparationManifest: manifest }) {
+          repairRounds += 1;
+          return {
+            manifest: {
+              ...manifest,
+              buildCommandUsed:
+                repairRounds === 1
+                  ? "yarn run build"
+                  : "yarn nx run-many -t build",
+              id: `prep_repair_${repairRounds}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "yarn run build",
+              failureClassification: "unbuilt workspace dependency",
+              logsSummary: "Failed to resolve entry for package twenty-shared",
+            };
+          }
+          if (preflightAttempts === 2) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "yarn run build",
+              failureClassification: "build failure",
+              logsSummary: "Cannot find module twenty-shared/dist/vite.mjs",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 3 },
+    );
+
+    expect(result.status).toBe("passed");
+    // Round 1 moved the failure but declared a byte-identical lifecycle:
+    // no fragment. Round 2 resolved it WITH a new build form: recorded.
+    expect(
+      artifactWrites
+        .filter(
+          (write) =>
+            write.path === "/workspace/.makeademo/failure-moved-lifecycle.json",
+        )
+        .map((write) => write.value),
+    ).toEqual([
+      {
+        lifecycle: {
+          appDir: ".",
+          buildCommandUsed: "yarn nx run-many -t build",
+          installCommandUsed: "bun install --frozen-lockfile",
+          startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
+        },
+        round: 2,
+      },
+    ]);
+  });
+
+  it("records no fragment for a round the mutation detector flags", async () => {
+    // N182 (ghostfolio, wave-23): the round that declared a five-command
+    // install chain while repairing an unrelated failure was flagged by
+    // N171 as a suspected unjustified mutation — and simultaneously
+    // enshrined by the memory layer as the closest known form. A round
+    // the detector tells the next repair to revert cannot be
+    // citation-grade.
+    const artifactWrites: { path: string; value: unknown }[] = [];
+    let preflightAttempts = 0;
+    let repairRounds = 0;
+    let manifestCaptures = 0;
+    const packageManifestOnlyDiffCapture = async () => {
+      manifestCaptures += 1;
+      const digit = String(manifestCaptures % 10);
+      return {
+        changedFileSha256: {
+          "package.json": `sha256:${digit.repeat(64)}` as const,
+        },
+        changedPaths: ["/workspace/repo/package.json"],
+        patch: `diff --git a/package.json b/package.json\n+// capture ${manifestCaptures}`,
+        patchSha256: `sha256:${digit.repeat(64)}` as const,
+        sourceCommitSha: "abc123def456",
+      };
+    };
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_mutation_flagged_no_fragment" }),
+        stubPipelineDependencies({
+          artifactStore: {
+            async writeJson(path, value) {
+              artifactWrites.push({ path, value });
+            },
+          },
+          capturePreparationWorkspaceDiff: packageManifestOnlyDiffCapture,
+          async prepareRepo() {
+            return {
+              manifest: {
+                ...preparationManifest(),
+                installCommandUsed: "bun install --frozen-lockfile",
+              },
+            };
+          },
+          async repairPreparation({ preparationManifest: manifest }) {
+            repairRounds += 1;
+            return {
+              manifest: {
+                ...manifest,
+                installCommandUsed:
+                  repairRounds === 1
+                    ? "bun install --frozen-lockfile"
+                    : "npm install --legacy-peer-deps",
+                id: `prep_repair_${repairRounds}`,
+              },
+            };
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            if (preflightAttempts === 1) {
+              return {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "render timeout",
+                logsSummary: "Route / stayed blank past the render budget",
+              };
+            }
+            if (preflightAttempts === 2) {
+              return {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "app route not discoverable",
+                logsSummary: "Entry route /portfolio returned HTTP 404",
+              };
+            }
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "npm install --legacy-peer-deps",
+              failureClassification: "install failure",
+              logsSummary: "Install command failed: npm error code ERESOLVE",
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 2 },
+      ),
+    ).rejects.toThrow();
+
+    // Round 1 moved the failure with an identical lifecycle (no fragment);
+    // round 2 moved it while declaring the install mutation the detector
+    // flags against the very next failure (no fragment either).
+    expect(
+      artifactWrites.filter(
+        (write) =>
+          write.path === "/workspace/.makeademo/failure-moved-lifecycle.json",
+      ),
+    ).toEqual([]);
+  });
+
   it("adds strategist hints to the existing repair-hint channel", async () => {
     let preflightAttempts = 0;
     const repairHints: string[][] = [];
