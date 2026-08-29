@@ -11086,3 +11086,142 @@ carry (N184).
   build).
 - cyberchef: 42 seconds of margin; the stall
   tax (N170, still open) is its risk.
+
+## Addendum (2026-08-29, wave-24 — a DNS outage voids nine runs; the two that ran validate N184 live and expose the last content-evidence gap: N185–N186)
+
+Batch matrix-2026-08-29T14-26-13-452Z, report
+matrix-report-2026-08-29T14-59-38-519Z. One of
+eleven passed — and the number means almost
+nothing: nine runs died in their first minutes
+at the LOCAL git clone with "fatal: unable to
+access 'https://github.com/...': Could not
+resolve host: github.com" (seven) or a
+300-second clone timeout (midday, excalidraw).
+The machine could not resolve DNS for roughly
+the batch's first ten minutes. homer (14.6m —
+two to three times its usual duration,
+consistent with running through the degraded
+window) and conduit (32.7m, a full real run)
+got their clones through before or around the
+outage. This wave votes on nothing
+content-related for the nine: N179/N182
+fragments, N183's capture fix, and the repos'
+content arcs all went unexercised. All six
+wave-22/23 items (N179–N184) were committed
+2026-08-28 and live; the tree was clean.
+
+### Batch verdict: local DNS outage, and the batch has no defense (N185)
+
+Not code, not agents, not Daytona: the runner's
+own host lost name resolution at launch. Two
+gaps made a ten-minute network blip cost nine
+full runs: clone retries give up within a few
+minutes (run deaths at 5.0–9.2m show retry
+attempts that all fell inside the outage
+window), and a clone failure lands in the
+report as a plain run failure — the same
+"failed" a repo earns by its own defects,
+indistinguishable at the report layer (the
+wave-21 cyberchef lesson, one step earlier in
+the pipeline). N185.
+
+### conduit (32.7m, rounds exhausted): N184 works, and one string held the run hostage
+
+The full validation of N184's citation half,
+one attempt apart: attempt 1 was a fresh
+preparation with new invented content
+("Small contracts, large confidence",
+ada-lovelace) — one feature grounded, two
+failed (N166's "Legal moves:" text visible in
+the multi-match failure, working as designed).
+The repair then ADOPTED the cited anchors:
+attempt 2's content is the last passing run's
+exact proven set ("Make space for deep work",
+mayachen, "Notes from a quiet morning") and
+two of three features grounded immediately.
+Cross-run content transport measurably works.
+
+The residual killed the run: article-comments'
+proof text ("Thoughtful comment: protecting
+attention is a practice, not a switch.") was
+"not found on /article/make-space-for-deep-work"
+in attempts 2, 3, and 4 — three identical
+failures, zero movement, budget exhausted. The
+evidence gave the agent a binary absent: the
+browserObservations record the page's title
+and author but nothing about what the comments
+region rendered — seeded-but-hidden,
+empty-list, auth-gated, and SSR-omitted all
+look identical in it. The page rendered, the
+console was clean (N167 silent, correctly),
+and the agent repaired blind. N186.
+
+### N185 (High, infra) — the batch must survive a transient local-network outage
+
+Three parts, all at the batch runner's clone
+seam: (1) a connectivity precheck — resolve
+the forge host before launching runs, and hold
+the batch (bounded, logged) while resolution
+fails, so a dead network delays a batch
+instead of consuming it; (2) patient clone
+retry — DNS outages last minutes, so retries
+must back off across minutes (the N161
+recreate-not-retry lesson does not apply here:
+the clone target is local disk and idempotent);
+(3) classification — a clone that never
+reached repository content is an
+infrastructure failure and must be reported as
+such, never as the repo's own "failed" (the
+run-report equivalent of N156's named
+timeout). No per-forge or per-repo logic
+anywhere.
+
+### N186 (Medium, bugfix) — a failed text proof must show what rendered instead
+
+When a visible-text proof fails on a route
+that otherwise rendered (no page errors — the
+N167 path not taken), the failure evidence
+must quote what the route actually displayed
+in and around the probed region, from the
+accessibility snapshot the probe already
+captures. "Not found" alone cannot
+distinguish an unseeded fixture from an
+auth-gated section from a rendering omission
+— conduit's repair agent spent three identical
+rounds unable to see which wall it was
+hitting. Records only what the probe already
+holds; same evidence-completeness family as
+N166/N172/N181.
+
+### Meta-orchestrator audit (tenth live wave)
+
+Effectively no sample: nine runs never reached
+an agent; conduit's run consulted normally and
+its strategist activity was unremarkable. The
+one transport datapoint is strong — N184's
+anchors were adopted on the first repair after
+citation and immediately re-grounded two of
+three features. The content-layer thesis from
+wave-23 holds: what remains between conduit
+and a pass is one fixture string the evidence
+could not explain. Wave-24 contributes no
+verdict on N182's fragment hygiene or N183's
+collector — both wait on a wave where their
+repos actually run.
+
+### Watchlist (updated)
+
+- Rerun value: nine repos produced zero signal
+  this wave; the wave-23 watchlist stands
+  unchanged for all of them (excalidraw/N183,
+  twenty and ghostfolio/N182, midday, outline,
+  directus/N184, calcom's seeded session,
+  ghost's post-N180 convergence).
+- conduit: N186 is its item; with the comments
+  region visible in evidence, the one-string
+  wall should fall in one round.
+- homer: 14.6m was outage degradation, not a
+  trend.
+- N185 lands at the batch runner; until it
+  does, a network blip at launch will keep
+  voiding batches silently.
