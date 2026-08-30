@@ -11225,3 +11225,112 @@ repos actually run.
 - N185 lands at the batch runner; until it
   does, a network blip at launch will keep
   voiding batches silently.
+
+## Addendum (2026-08-30, wave-25 — a second network-voided batch, now by starvation instead of DNS; the hang-retry path overruns the hard ceiling: N187)
+
+Batch matrix-2026-08-30T14-08-18-026Z, report
+matrix-report-2026-08-30T16-03-01-654Z. Two of
+eleven passed: homer (16.7m — again nearly
+triple its baseline, degraded but through) and
+conduit (11.8m — its fastest pass ever,
+notable below). Seven runs died at the local
+clone and two in the harness at Daytona
+fs.sync. No code changed since wave-24's
+diagnosis (N185/N186 are defined, not landed);
+this is the second consecutive batch voided by
+the host's network, with a different
+signature.
+
+### The network signature: starvation, not resolution
+
+Wave-24 was DNS ("Could not resolve host");
+this wave every clone failure is a full
+300-second TIMEOUT — connections opened, data
+did not flow. The seven durations form a clean
+ladder (5.1, 9.3, 13.6, 17.9, 22.2, 26.6,
+35.3m — ~4.3m apart): the clone step is
+effectively serialized, and with each attempt
+burning its full timeout, the queue became
+visible in the report. Deep in the batch the
+same starvation hit the Daytona path:
+ghostfolio's log shows fs.sync attempts
+returning NO response for 600 seconds, four
+times consecutively (+68m, +78m, +88m, +98m),
+before the reset was declared transport loss
+at +108.8m; outline died identically at 93.0m.
+Degraded uplink early AND late — this was a
+bad-network batch throughout, not a blip.
+The N185 verdict sharpens: its precheck and
+patient-retry design must cover not just
+"host does not resolve" but "transfers do not
+progress" — a bandwidth-shaped outage defeats
+a resolution-shaped precheck. Same item, both
+signatures named.
+
+### N187 (Medium, bugfix) — infrastructure retry loops must respect the job deadline
+
+Ghostfolio's run died at 108.8 minutes — 18.8
+past the 90-minute hard ceiling. The overrun
+mechanism: the workspace-reset path ran two
+full fs.sync cycles back-to-back (each = one
+attempt + one retry, each attempt hanging the
+full 600s), and the second cycle started at
++88.8m — legally inside the deadline — then
+ran 20 unchecked minutes. assertJobWithinDeadline
+fires at stage boundaries and repair
+admissions, but blocking infrastructure calls
+and their retry cycles check nothing
+mid-flight. Fix at the retry seam: before each
+infrastructure retry cycle, check the
+remaining budget and refuse the cycle when it
+cannot fit (the N165 admission logic applied
+to infra retries — a 600s-timeout attempt must
+not be admitted with under ~2 minutes of
+ceiling left, let alone a full cycle). The
+deadline stays a promise the harness keeps to
+its operator: a run ends within its budget
+plus one bounded operation, never plus forty
+minutes of doomed hanging.
+
+### Conduit: fastest pass ever, worth recording
+
+11.8 minutes against a prior best of 19.3.
+Its wave-24 run ended one string short with
+the N184 anchors adopted; this wave the
+prepared content grounded cleanly without that
+detour. Whatever mix of anchor citation and
+variance this was, conduit has now passed 3 of
+4 waves with its only recent failure being the
+comment-fixture wall N186 addresses.
+
+### What this wave proves and does not
+
+- The N177 slot, N178/N179 digests, N180–N184:
+  no verdicts — nine runs never reached the
+  stages they live in, and conduit needed no
+  repairs.
+- The fs.sync hang-to-transport-loss
+  classification (the N153/N161 family) fired
+  correctly and produced honest
+  "not agent-repairable" reports; only its
+  budget behavior (N187) is wrong.
+- The watchlist for all nine voided repos
+  stands unchanged from wave-23/24.
+
+### Watchlist (updated)
+
+- N185 is now two waves overdue and its scope
+  is confirmed to need the bandwidth
+  signature: precheck resolution AND transfer
+  progress, patient backoff, infrastructure
+  classification in the report.
+- N187 rides the same landing: both are the
+  "the batch must fail fast and honestly under
+  a bad network" theme.
+- If the next batch also shows network
+  degradation, the pattern (three consecutive
+  runs: 08-29 DNS, 08-30 starvation) points at
+  the host machine or its uplink — worth
+  checking the router/VPN/DNS setup before
+  burning another batch. The matrix cannot
+  diagnose what it cannot reach.
